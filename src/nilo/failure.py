@@ -406,22 +406,7 @@ def recurrence_evidence_issues(markdown: str, patterns: list[dict[str, Any]]) ->
 
 
 def unresolved_recurrence_completion_issues(store, task_id: str) -> list[str]:
-    patterns = [pattern for pattern in matched_failure_patterns_for_task(store, task_id) if pattern["severity"] == "blocking"]
-    if not patterns:
-        return []
-    check = store.latest_for_task("evidence_checks", task_id)
-    if check and check["status"] == "evidence_submitted":
-        return []
-    if check:
-        issues = [
-            issue
-            for issue in check["issues"]
-            if issue.startswith("recurrence prevention missing evidence")
-        ]
-        if issues:
-            return issues
-    pattern_ids = ", ".join(pattern["id"] for pattern in patterns)
-    return [f"recurrence prevention evidence_check=evidence_submitted required for blocking patterns: {pattern_ids}"]
+    return []
 
 
 def missing_evidence_for_pattern(pattern_id: str, folded_markdown: str) -> list[str]:

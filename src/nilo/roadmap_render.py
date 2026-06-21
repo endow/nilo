@@ -50,7 +50,7 @@ def render_roadmap_assess_markdown(project: dict, assessments: list[dict]) -> st
             for task in assessment["related_tasks"]:
                 lines.append(f"- {task['task_id']} [{task['status']}] {task['task_type']} {task['title']}")
                 lines.append(f"  - latest_report: {task['latest_report_id'] or 'none'}")
-                lines.append(f"  - latest_evidence_check: {task['latest_evidence_check_id'] or 'none'} ({task['latest_evidence_status']})")
+                lines.append(f"  - latest_evidence_status: {task['latest_evidence_status']}")
                 lines.append(
                     f"  - latest_verification: {task['latest_verification_run_id'] or 'none'} "
                     f"({task['latest_verification_status']})"

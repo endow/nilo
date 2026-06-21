@@ -15,11 +15,12 @@ from ..cli import (
 )
 from ..agent_report_import import import_agent_report
 from ..cli_support import make_id, read_text_or_exit
-from ..failure import derived_rule_from_failure, refresh_task_failure_pattern_matches, select_rules
+from ..failure import refresh_task_failure_pattern_matches, select_rules
 from ..gitmeta import head_commit
 from ..guard import evaluate_evidence
 from ..instruction import build_instruction, build_understanding_prompt
 from ..project_model import default_project_row
+from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
 from ..success_logic import record_success_pattern_usage, select_success_patterns
 from ..task_logic import outcome_status
@@ -148,22 +149,6 @@ def record_failure_and_rule(store: Store, project_id: str, task_id: str, report_
         "created_at": now_iso(),
     }
     store.insert("failure_logs", failure)
-    rule = derived_rule_from_failure(project_id, failure)
-    existing = store.get("derived_rules", rule["id"])
-    if existing:
-        source_ids = sorted(set(existing["source_failure_ids"] + [failure["id"]]))
-        store.update(
-            "derived_rules",
-            existing["id"],
-            {
-                "source_failure_ids": source_ids,
-                "recurrence_count": existing["recurrence_count"] + 1,
-                "last_seen_at": failure["created_at"],
-                "state": "active",
-            },
-        )
-    else:
-        store.insert("derived_rules", rule)
 
 
 def cmd_report_import(args: argparse.Namespace) -> None:
@@ -180,9 +165,9 @@ def cmd_report_import(args: argparse.Namespace) -> None:
             raise SystemExit("report body is empty")
 
         result = import_agent_report(store, task, markdown, args.agent, Path.cwd(), evaluate_evidence)
-        check = result["evidence_check"]
+        check = result["evidence_status"]
 
-        print(f"status: {check['status']}")
+        print(f"report_form_status: {check['status']}")
         if check["issues"]:
             print("issues:")
             for issue in check["issues"]:
@@ -268,21 +253,42 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
         if not task:
             raise SystemExit(f"task not found: {args.task}")
         latest_report = store.latest_for_task("agent_reports", args.task)
-        latest_check = store.latest_for_task("evidence_checks", args.task)
+        latest_verification = store.latest_for_task("verification_runs", args.task)
+        latest_review = store.latest_for_task("review_results", args.task)
         concerns = args.concern or []
         decision = args.decision
+        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
+        accepted = decision in ("accepted", "accepted_with_concerns")
         row = {
-            "id": make_id("outcome"),
+            "id": make_id("completion" if accepted else "outcome"),
             "task_id": args.task,
-            "agent_report_id": latest_report["id"] if latest_report else None,
-            "evidence_check_id": latest_check["id"] if latest_check else None,
-            "decision": decision,
+            "actor": "human",
+            "completed_by": "human",
+            "completed_snapshot": snapshot,
+            "completion_note": args.reason,
+            "accepted_verification_run_ids": [latest_verification["id"]] if accepted and latest_verification else [],
+            "accepted_review_result_ids": [latest_review["id"]] if accepted and latest_review else [],
+            "human_decision_note": "\n".join([args.reason, *concerns]).strip(),
+            "completed_with_reservations": decision == "accepted_with_concerns",
             "reason": args.reason,
-            "concerns": concerns,
-            "rework_required": decision in ("rejected", "rework_required"),
+            "completed_at": now_iso(),
             "created_at": now_iso(),
         }
-        store.insert("outcome_reviews", row)
+        if accepted:
+            store.insert("task_completions", row)
+        else:
+            outcome = {
+                "id": row["id"],
+                "task_id": args.task,
+                "agent_report_id": latest_report["id"] if latest_report else None,
+                "evidence_check_id": None,
+                "decision": decision,
+                "reason": args.reason,
+                "concerns": concerns,
+                "rework_required": decision in ("rejected", "rework_required"),
+                "created_at": row["created_at"],
+            }
+            store.insert("outcome_reviews", outcome)
         if decision in ("rejected", "rework_required"):
             severity = "high" if decision == "rejected" else "medium"
             record_failure_and_rule(
@@ -295,7 +301,7 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
                 severity,
             )
         print(f"status: {outcome_status(decision)}")
-        print(f"outcome_review: {row['id']}")
+        print(f"{'task_completion' if accepted else 'outcome_review'}: {row['id']}")
     finally:
         store.close()
 
@@ -306,12 +312,11 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        latest_check = store.latest_for_task("evidence_checks", args.task)
         result = run_local_verification(args.command, Path.cwd(), args.timeout)
         row = {
             "id": make_id("verification"),
             "task_id": args.task,
-            "evidence_check_id": latest_check["id"] if latest_check else None,
+            "evidence_check_id": None,
             **result,
         }
         store.insert("verification_runs", row)
@@ -320,7 +325,7 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
                 store,
                 task["project_id"],
                 task["id"],
-                latest_check["report_id"] if latest_check else "",
+                "",
                 "secret_detected",
                 issue,
                 "high",

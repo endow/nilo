@@ -97,7 +97,7 @@ class FailurePatternTests(unittest.TestCase):
             issues,
         )
 
-    def test_blocking_pattern_missing_required_evidence_is_not_completion_ready(self) -> None:
+    def test_missing_pattern_evidence_does_not_create_evidence_check_or_completion_readiness(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -128,11 +128,11 @@ class FailurePatternTests(unittest.TestCase):
                 with redirect_stdout(output):
                     main(["--db", str(db), "report", "import", "--task", "task_review", "--file", str(report)])
 
-            self.assertIn("status: evidence_missing", output.getvalue())
-            with self.assertRaises(SystemExit):
+            self.assertIn("report_form_status: present", output.getvalue())
+            with self.assertRaisesRegex(SystemExit, "current verification run"):
                 main(["--db", str(db), "task", "complete", "--task", "task_review", "--actor", "ai", "--reason", "done"])
 
-    def test_blocking_pattern_missing_required_evidence_blocks_completion_even_with_passing_verification(self) -> None:
+    def test_pattern_missing_required_evidence_does_not_block_current_verification_completion(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -186,8 +186,16 @@ class FailurePatternTests(unittest.TestCase):
             )
             store.close()
 
-            with self.assertRaisesRegex(SystemExit, "recurrence prevention rule"):
+            with patch(
+                "nilo.task_logic.current_git_snapshot",
+                return_value={"git_head": "", "git_diff_hash": "", "working_tree_dirty": False},
+            ):
                 main(["--db", str(db), "task", "complete", "--task", "task_review", "--actor", "ai", "--reason", "done"])
+
+            store = Store(db)
+            completion = store.latest_for_task("task_completions", "task_review")
+            store.close()
+            self.assertIsNotNone(completion)
 
     def test_connectivity_pattern_result_requires_result_near_connectivity_check(self) -> None:
         pattern = next(pattern for pattern in SEED_FAILURE_PATTERNS if pattern["id"] == "failure_integration_before_connectivity_check")

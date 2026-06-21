@@ -6,6 +6,7 @@ from pathlib import Path
 from .design_residue import parse_design_residue
 from .failure import matched_failure_patterns_for_task, recurrence_prevention_summary_lines
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
+from .snapshot import current_git_snapshot, evidence_status
 from .store import Store
 from .task_logic import is_task_completed_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
@@ -195,8 +196,8 @@ def diff_aware_verification_summary(report: dict | None, verification_run: dict 
 
 def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
     report = store.latest_for_task("agent_reports", task["id"])
-    evidence_check = store.latest_for_task("evidence_checks", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
+    current_snapshot = current_git_snapshot(Path.cwd())
     verification_status = "not_recorded"
     if verification_run:
         if verification_run["timed_out"]:
@@ -211,8 +212,8 @@ def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
         "status": status,
         "task_type": task["task_type"],
         "latest_report_id": report["id"] if report else "",
-        "latest_evidence_check_id": evidence_check["id"] if evidence_check else "",
-        "latest_evidence_status": evidence_check["status"] if evidence_check else "none",
+        "latest_evidence_check_id": "",
+        "latest_evidence_status": evidence_status(verification_run, current_snapshot),
         "latest_verification_run_id": verification_run["id"] if verification_run else "",
         "latest_verification_status": verification_status,
         "latest_verification_source": verification_run.get("source", "nilo_executed") if verification_run else "",
@@ -949,7 +950,6 @@ def recent_project_history(store: Store, tasks: list[dict], limit: int = 8) -> l
     event_tables = [
         ("instruction", "instructions"),
         ("agent_report", "agent_reports"),
-        ("evidence_check", "evidence_checks"),
         ("review_request", "review_requests"),
         ("review_result", "review_results"),
         ("verification_run", "verification_runs"),

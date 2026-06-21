@@ -138,10 +138,6 @@ def cmd_todo_triage(args: argparse.Namespace) -> None:
         if args.status not in TRIAGE_TODO_STATUSES:
             allowed = ", ".join(sorted(TRIAGE_TODO_STATUSES))
             raise SystemExit(f"todo status is not triage-settable: {args.status} (allowed: {allowed})")
-        if args.status == "ready" and not args.commitment:
-            raise SystemExit("ready todo requires --commitment")
-        if args.commitment:
-            _require_accepted_commitment(store, args.commitment, todo["project_id"])
         values = {
             "status": args.status,
             "triaged_at": now_iso(),
@@ -170,10 +166,6 @@ def cmd_todo_start(args: argparse.Namespace) -> None:
             allowed = ", ".join(sorted(STARTABLE_TODO_STATUSES))
             raise SystemExit(f"todo is not startable: {todo['status']} (allowed: {allowed})")
         commitment_id = todo["roadmap_commitment_id"]
-        if todo["status"] == "ready":
-            if not commitment_id:
-                raise SystemExit("ready todo is missing roadmap_commitment_id")
-            _require_accepted_commitment(store, commitment_id, todo["project_id"])
         task_id = make_id("task")
         title = args.title or todo["title"]
         description = todo["description"]

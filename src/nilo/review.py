@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .gitmeta import git_output
 from .report import parse_sections, section_value
+from .snapshot import current_git_snapshot, evidence_status
 
 
 VALID_FINDING_STATUSES = {"unresolved", "addressed", "accepted-risk"}
@@ -212,8 +213,7 @@ def build_review_context(
 ) -> str:
     acceptance = "\n".join(f"- {item}" for item in task.get("acceptance_criteria", [])) or "- 未設定"
     report_body = report["body_md"] if report else "未提出"
-    evidence_status = evidence_check["status"] if evidence_check else "未提出"
-    evidence_issues = "\n".join(f"- {issue}" for issue in evidence_check["issues"]) if evidence_check else "- なし"
+    computed_evidence_status = evidence_status(verification_run, current_git_snapshot(cwd))
     if verification_run:
         verification = (
             f"command: {verification_run['command']}\n"
@@ -250,10 +250,8 @@ def build_review_context(
 ## Implementation Report
 {report_body}
 
-## Evidence Check
-status: {evidence_status}
-issues:
-{evidence_issues}
+## EvidenceStatus
+status: {computed_evidence_status}
 
 ## Verification History
 {verification}

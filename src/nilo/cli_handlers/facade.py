@@ -151,13 +151,6 @@ def cmd_facade_start(args: argparse.Namespace) -> None:
         if not project:
             raise SystemExit(f"project not found: {project_id}")
         commitment_id = args.commitment
-        if not commitment_id:
-            commitments = store.list_where("roadmap_commitments", "project_id=? AND status='accepted'", (project_id,))
-            if len(commitments) == 1:
-                commitment_id = commitments[0]["id"]
-            elif len(commitments) > 1:
-                ids = ", ".join(commitment["id"] for commitment in commitments[:5])
-                raise SystemExit(f"multiple accepted commitments; pass --commitment explicitly: {ids}")
         task_id = deterministic_id("task", [project_id, args.title, now_iso()])
     finally:
         store.close()

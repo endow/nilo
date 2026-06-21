@@ -87,6 +87,10 @@ CREATE TABLE IF NOT EXISTS verification_runs (
   timed_out INTEGER NOT NULL,
   timeout_seconds REAL NOT NULL,
   git_head TEXT,
+  git_status_porcelain TEXT NOT NULL DEFAULT '',
+  git_diff_hash TEXT NOT NULL DEFAULT '',
+  working_tree_dirty INTEGER NOT NULL DEFAULT 0,
+  observed_paths TEXT NOT NULL DEFAULT '[]',
   metadata TEXT NOT NULL,
   started_at TEXT NOT NULL,
   finished_at TEXT NOT NULL,
@@ -198,6 +202,8 @@ CREATE TABLE IF NOT EXISTS review_requests (
   reviewer TEXT NOT NULL,
   status TEXT NOT NULL,
   reason TEXT NOT NULL,
+  based_on_event_id TEXT NOT NULL DEFAULT '',
+  based_on_snapshot TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -221,6 +227,8 @@ CREATE TABLE IF NOT EXISTS review_results (
   reviewer TEXT NOT NULL,
   verdict TEXT NOT NULL,
   summary TEXT NOT NULL,
+  based_on_event_id TEXT NOT NULL DEFAULT '',
+  based_on_snapshot TEXT NOT NULL DEFAULT '{}',
   body_md TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -306,6 +314,14 @@ CREATE TABLE IF NOT EXISTS task_completions (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
   actor TEXT NOT NULL DEFAULT 'human',
+  completed_by TEXT NOT NULL DEFAULT 'human',
+  completed_snapshot TEXT NOT NULL DEFAULT '{}',
+  completion_note TEXT NOT NULL DEFAULT '',
+  accepted_verification_run_ids TEXT NOT NULL DEFAULT '[]',
+  accepted_review_result_ids TEXT NOT NULL DEFAULT '[]',
+  human_decision_note TEXT NOT NULL DEFAULT '',
+  completed_with_reservations INTEGER NOT NULL DEFAULT 0,
+  completed_at TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -398,6 +414,11 @@ JSON_COLUMNS = {
     "changed_files",
     "issues",
     "metadata",
+    "observed_paths",
+    "based_on_snapshot",
+    "completed_snapshot",
+    "accepted_verification_run_ids",
+    "accepted_review_result_ids",
     "source_failure_ids",
     "tags",
     "selection_score",
@@ -499,8 +520,6 @@ class Store:
               UNION ALL
               SELECT id AS event_id, 'review_finding_update' AS source, 'review_changes_requested' AS status, created_at, rowid AS event_rowid, 66 AS priority FROM review_finding_updates WHERE task_id=?
               UNION ALL
-              SELECT id AS event_id, 'evidence_check' AS source, status AS status, created_at, rowid AS event_rowid, 50 AS priority FROM evidence_checks WHERE task_id=?
-              UNION ALL
               SELECT id AS event_id, 'verification_run' AS source, CASE WHEN timed_out=1 THEN 'verification_timed_out' WHEN exit_code=0 THEN 'verification_passed' ELSE 'verification_failed' END AS status, created_at, rowid AS event_rowid, 55 AS priority FROM verification_runs WHERE task_id=?
               UNION ALL
               SELECT id AS event_id, 'outcome' AS source, decision AS status, created_at, rowid AS event_rowid, 60 AS priority FROM outcome_reviews WHERE task_id=?
@@ -510,7 +529,7 @@ class Store:
             ORDER BY created_at DESC, priority DESC, event_rowid DESC
             LIMIT 1
             """,
-            (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),
+            (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),
         ).fetchone()
         return self._decode_row(row) if row else None
 
@@ -534,6 +553,22 @@ class Store:
         self._ensure_column("roadmap_revisions", "source_path", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("roadmap_revisions", "decided_by", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("verification_runs", "source", "TEXT NOT NULL DEFAULT 'nilo_executed'")
+        self._ensure_column("verification_runs", "git_status_porcelain", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("verification_runs", "git_diff_hash", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("verification_runs", "working_tree_dirty", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("verification_runs", "observed_paths", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("review_requests", "based_on_event_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("review_requests", "based_on_snapshot", "TEXT NOT NULL DEFAULT '{}'")
+        self._ensure_column("review_results", "based_on_event_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("review_results", "based_on_snapshot", "TEXT NOT NULL DEFAULT '{}'")
+        self._ensure_column("task_completions", "completed_by", "TEXT NOT NULL DEFAULT 'human'")
+        self._ensure_column("task_completions", "completed_snapshot", "TEXT NOT NULL DEFAULT '{}'")
+        self._ensure_column("task_completions", "completion_note", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("task_completions", "accepted_verification_run_ids", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("task_completions", "accepted_review_result_ids", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("task_completions", "human_decision_note", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("task_completions", "completed_with_reservations", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("task_completions", "completed_at", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("review_requests", "withdrawn_reason", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("review_requests", "withdrawn_actor", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("review_requests", "withdrawn_at", "TEXT NOT NULL DEFAULT ''")

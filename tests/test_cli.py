@@ -128,7 +128,7 @@ class CliTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
-    def test_facade_start_requires_commitment_when_multiple_are_accepted(self) -> None:
+    def test_facade_start_does_not_require_commitment_when_multiple_notes_exist(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -162,9 +162,10 @@ class CliTests(unittest.TestCase):
                 finally:
                     store.close()
 
-                with self.assertRaises(SystemExit) as raised:
-                    main(["--db", str(db), "start", "曖昧なタスク"])
-                self.assertIn("multiple accepted commitments", str(raised.exception))
+                start_without_commitment = io.StringIO()
+                with redirect_stdout(start_without_commitment):
+                    main(["--db", str(db), "start", "単発依頼タスク"])
+                self.assertIn("task: ", start_without_commitment.getvalue())
 
                 start_output = io.StringIO()
                 with redirect_stdout(start_output):
@@ -315,12 +316,12 @@ class CliTests(unittest.TestCase):
                 facade_output = io.StringIO()
                 with patch("sys.stdin", io.StringIO(report_body)), redirect_stdout(facade_output):
                     main(["--db", str(db), "report"])
-                self.assertIn("status:", facade_output.getvalue())
+                self.assertIn("report_form_status:", facade_output.getvalue())
 
                 import_output = io.StringIO()
                 with patch("sys.stdin", io.StringIO(report_body)), redirect_stdout(import_output):
                     main(["--db", str(db), "report", "import", "--task", task_id])
-                self.assertIn("status:", import_output.getvalue())
+                self.assertIn("report_form_status:", import_output.getvalue())
             finally:
                 os.chdir(previous_cwd)
 
@@ -409,28 +410,10 @@ class CliTests(unittest.TestCase):
                 self.assertIn("status: open", show_output.getvalue())
                 self.assertIn("acceptance_hint:", show_output.getvalue())
 
-                with self.assertRaises(SystemExit) as raised:
-                    main(["--db", str(db), "todo", "triage", "--item", todo_id, "--status", "ready", "--reason", "範囲内"])
-                self.assertIn("ready todo requires --commitment", str(raised.exception))
-
-                with self.assertRaises(SystemExit) as pending:
-                    main(
-                        [
-                            "--db",
-                            str(db),
-                            "todo",
-                            "triage",
-                            "--item",
-                            todo_id,
-                            "--status",
-                            "ready",
-                            "--commitment",
-                            "commitment_pending",
-                            "--reason",
-                            "未受理 commitment は不可",
-                        ]
-                    )
-                self.assertIn("accepted roadmap commitment not found: commitment_pending", str(pending.exception))
+                no_commitment_output = io.StringIO()
+                with redirect_stdout(no_commitment_output):
+                    main(["--db", str(db), "todo", "triage", "--item", todo_id, "--status", "ready", "--reason", "単発依頼として実行対象にする"])
+                self.assertIn("status: ready", no_commitment_output.getvalue())
 
                 with self.assertRaises(SystemExit) as terminal:
                     main(
@@ -464,7 +447,7 @@ class CliTests(unittest.TestCase):
                             "--commitment",
                             "commitment_test",
                             "--reason",
-                            "accepted commitment の範囲内",
+                            "参照メモとして紐づける",
                         ]
                     )
                 self.assertIn("status: ready", triage_output.getvalue())
@@ -595,9 +578,10 @@ class CliTests(unittest.TestCase):
                     main(["--db", str(db), "todo", "start", "--item", "todo_open"])
                 self.assertIn("todo is not startable: open", str(raised.exception))
 
-                with self.assertRaises(SystemExit) as pending_start:
+                pending_output = io.StringIO()
+                with redirect_stdout(pending_output):
                     main(["--db", str(db), "todo", "start", "--item", "todo_pending_commitment"])
-                self.assertIn("accepted roadmap commitment not found: commitment_pending", str(pending_start.exception))
+                self.assertIn("status: converted_to_task", pending_output.getvalue())
 
                 start_output = io.StringIO()
                 with redirect_stdout(start_output):
@@ -1176,7 +1160,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(gitignore.splitlines().count(".nilo"), 1)
             self.assertEqual(gitignore.splitlines().count(".nilo/"), 0)
 
-    def test_report_import_creates_evidence_check_and_rules(self) -> None:
+    def test_report_import_records_report_without_evidence_check_or_rules(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1205,10 +1189,14 @@ class CliTests(unittest.TestCase):
             store = Store(db)
             checks = store.list_where("evidence_checks", "task_id=?", ("task_test",))
             rules = store.list_where("derived_rules", "project_id=?", ("project_test",))
+            reports = store.list_where("agent_reports", "task_id=?", ("task_test",))
+            failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
             store.close()
 
-            self.assertEqual(checks[0]["status"], "needs_human_review")
-            self.assertTrue(rules)
+            self.assertEqual(checks, [])
+            self.assertEqual(rules, [])
+            self.assertEqual(len(reports), 1)
+            self.assertTrue(failures)
 
     def test_report_import_keeps_evidence_submitted_status(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1238,7 +1226,7 @@ class CliTests(unittest.TestCase):
                 with redirect_stdout(output):
                     main(["--db", str(db), "task", "status", "--task", "task_test"])
 
-            self.assertIn("status: evidence_submitted", output.getvalue())
+            self.assertIn("evidence_status: missing", output.getvalue())
 
     def test_task_list_shows_project_tasks_with_projected_status(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1285,7 +1273,7 @@ class CliTests(unittest.TestCase):
 
             lines = output.getvalue().splitlines()
             self.assertEqual(len(lines), 1)
-            self.assertIn("task_test\tevidence_submitted\timplementation\tmedium\tCLIフローを確認する\t", lines[0])
+            self.assertIn("task_test\tagent_reported\timplementation\tmedium\tCLIフローを確認する\t", lines[0])
             self.assertNotIn("task_other", output.getvalue())
 
     def test_project_status_shows_active_tasks_next_actions_and_verifications(self) -> None:
@@ -1336,8 +1324,8 @@ class CliTests(unittest.TestCase):
                 )
                 main(["--db", str(db), "instruct", "--task", "task_unverified"])
                 with patch(
-                    "nilo.verification.working_tree_state",
-                    return_value={"working_tree_dirty": False, "working_tree_files": [], "working_tree_available": True},
+                    "nilo.verification.current_git_snapshot",
+                    return_value={"git_head": "head", "git_diff_hash": "hash", "working_tree_dirty": False, "git_status_porcelain": "", "observed_paths": [], "git_available": True},
                 ):
                     main(["--db", str(db), "verification", "run", "--task", "task_verified", "--command", f'"{sys.executable}" "{script}"'])
                 output = io.StringIO()
@@ -1377,8 +1365,8 @@ class CliTests(unittest.TestCase):
                 "nilo.cli_handlers.workflow.evaluate_evidence",
                 return_value=("evidence_submitted", [], {"ok": True}),
             ), patch(
-                "nilo.verification.working_tree_state",
-                return_value={"working_tree_dirty": False, "working_tree_files": [], "working_tree_available": True},
+                "nilo.verification.current_git_snapshot",
+                return_value={"git_head": "head", "git_diff_hash": "hash", "working_tree_dirty": False, "git_status_porcelain": "", "observed_paths": [], "git_available": True},
             ):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(
@@ -1404,12 +1392,8 @@ class CliTests(unittest.TestCase):
                     main(["--db", str(db), "project", "status", "--project", "project_test", "--verbose"])
 
             body = output.getvalue()
-            self.assertIn("task_verify [evidence_submitted] verification medium 検証タスク", body)
-            self.assertIn(
-                'run nilo task complete --task task_verify --reason "verification evidence accepted" --actor ai',
-                body,
-            )
-            self.assertNotIn("if accepted, run nilo task complete --task task_verify", body)
+            self.assertIn("task_verify [agent_reported] verification medium 検証タスク", body)
+            self.assertIn("review the diff, reported changed files, verification output, and unresolved caveats", body)
 
     def test_project_status_guides_roadmap_setup_when_no_work_is_active(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3262,7 +3246,7 @@ close 済み commitment を表示できるようにした。
 
             commits = [{"hash": "abc123", "subject": "Implement mapping"}]
             with redirect_stdout(io.StringIO()), patch("nilo.cli_handlers.workflow.head_commit", return_value="base123"), patch(
-                "nilo.verification.head_commit", return_value="head456"
+                "nilo.snapshot.head_commit", return_value="head456"
             ), patch("nilo.project_logic.git_commit_log", return_value=commits):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(
@@ -3310,7 +3294,7 @@ close 済み commitment を表示できるようにした。
             ]
 
             with redirect_stdout(io.StringIO()), patch("nilo.cli_handlers.workflow.head_commit", return_value="base123"), patch(
-                "nilo.verification.head_commit", return_value="head456"
+                "nilo.snapshot.head_commit", return_value="head456"
             ), patch("nilo.project_logic.git_commit_log", return_value=commits):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(
@@ -3346,7 +3330,7 @@ close 済み commitment を表示できるようにした。
             commits = [{"hash": "abc123", "subject": "Shared commit"}]
 
             with redirect_stdout(io.StringIO()), patch("nilo.cli_handlers.workflow.head_commit", return_value="base123"), patch(
-                "nilo.verification.head_commit", return_value="head456"
+                "nilo.snapshot.head_commit", return_value="head456"
             ), patch("nilo.project_logic.git_commit_log", return_value=commits):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 for task_id in ("task_one", "task_two"):
@@ -3650,22 +3634,10 @@ close 済み commitment を表示できるようにした。
                     "created_at": created_at,
                 },
             )
-            store.insert(
-                "evidence_checks",
-                {
-                    "id": "evidence_test",
-                    "task_id": "task_test",
-                    "report_id": "report_test",
-                    "status": "evidence_submitted",
-                    "issues": [],
-                    "metadata": {},
-                    "created_at": created_at,
-                },
-            )
             latest = store.latest_task_status_event("task_test")
             store.close()
-            self.assertEqual(latest["source"], "evidence_check")
-            self.assertEqual(latest["status"], "evidence_submitted")
+            self.assertEqual(latest["source"], "agent_report")
+            self.assertEqual(latest["status"], "agent_reported")
 
     def test_latest_evidence_check_can_supersede_old_outcome(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3697,9 +3669,10 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(output):
                     main(["--db", str(db), "task", "status", "--task", "task_test"])
 
-            self.assertIn("status: evidence_submitted", output.getvalue())
+            self.assertIn("status: agent_reported", output.getvalue())
+            self.assertIn("evidence_status: missing", output.getvalue())
 
-    def test_rules_disable_marks_rule_disabled(self) -> None:
+    def test_report_import_does_not_auto_create_rules(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -3725,16 +3698,11 @@ close 済み commitment を表示できるようにした。
                 main(["--db", str(db), "report", "import", "--task", "task_test", "--file", str(report)])
 
             store = Store(db)
-            rule = store.list_where("derived_rules", "project_id=?", ("project_test",))[0]
+            rules = store.list_where("derived_rules", "project_id=?", ("project_test",))
+            failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
             store.close()
-
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "rules", "disable", "--rule", rule["id"]])
-
-            store = Store(db)
-            disabled = store.get("derived_rules", rule["id"])
-            store.close()
-            self.assertTrue(disabled["manually_disabled"])
+            self.assertEqual(rules, [])
+            self.assertTrue(failures)
 
     def test_rules_derive_prepare_outputs_agent_prompt(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3852,7 +3820,7 @@ close 済み commitment を表示できるようにした。
                     main(["--db", str(db), "rules", "derive", "import", "--project", "project_test", "--file", str(rules)])
             self.assertIn("unknown source failures: failure_missing", str(raised.exception))
 
-    def test_successful_reports_move_applied_rule_to_cooling_down(self) -> None:
+    def test_successful_reports_do_not_auto_update_derived_rules(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -3886,9 +3854,7 @@ close 済み commitment を表示できるようにした。
             store = Store(db)
             rules = store.list_where("derived_rules", "project_id=?", ("project_test",))
             store.close()
-            testing_rule = next(rule for rule in rules if "#testing" in rule["tags"])
-            self.assertEqual(testing_rule["success_count"], 5)
-            self.assertEqual(testing_rule["state"], "cooling_down")
+            self.assertEqual(rules, [])
 
     def test_task_create_records_type_and_risk(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3997,10 +3963,15 @@ close 済み commitment を表示できるようにした。
 
             store = Store(db)
             outcome = store.latest_for_task("outcome_reviews", "task_test")
+            completion = store.latest_for_task("task_completions", "task_test")
             store.close()
-            self.assertEqual(outcome["decision"], "accepted_with_concerns")
-            self.assertEqual(outcome["concerns"], ["エラーメッセージの統一感が弱い"])
-            self.assertIn("status: accepted_with_concerns", output.getvalue())
+            self.assertIsNone(outcome)
+            self.assertEqual(completion["completed_by"], "human")
+            self.assertTrue(completion["completed_with_reservations"])
+            self.assertIn("エラーメッセージの統一感が弱い", completion["human_decision_note"])
+            self.assertTrue(completion["completed_snapshot"]["git_diff_hash"])
+            self.assertIn("status: completed_by_user", output.getvalue())
+            self.assertIn("completed_with_reservations: True", output.getvalue())
 
     def test_outcome_reject_connects_to_failure_rule(self) -> None:
         with TemporaryDirectory() as directory:
@@ -4040,7 +4011,7 @@ close 済み commitment を表示できるようにした。
             rules = store.list_where("derived_rules", "project_id=?", ("project_test",))
             store.close()
             self.assertEqual(failures[0]["category"], "human_rejected")
-            self.assertTrue(rules)
+            self.assertEqual(rules, [])
 
     def test_quality_quick_records_human_summary(self) -> None:
         with TemporaryDirectory() as directory:
@@ -4844,7 +4815,7 @@ close 済み commitment を表示できるようにした。
             store.close()
             self.assertIsNone(completion)
 
-    def test_task_complete_can_record_ai_completion_after_evidence(self) -> None:
+    def test_task_complete_rejects_ai_completion_after_report_only(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -4867,8 +4838,7 @@ close 済み commitment を表示できるようにした。
                     ]
                 )
                 main(["--db", str(db), "report", "import", "--task", "task_test", "--file", str(report)])
-                output = io.StringIO()
-                with redirect_stdout(output):
+                with self.assertRaises(SystemExit) as raised:
                     main(
                         [
                             "--db",
@@ -4883,18 +4853,12 @@ close 済み commitment を表示できるようにした。
                             "ai",
                         ]
                     )
-                status_output = io.StringIO()
-                with redirect_stdout(status_output):
-                    main(["--db", str(db), "task", "status", "--task", "task_test"])
 
             store = Store(db)
             completion = store.latest_for_task("task_completions", "task_test")
             store.close()
-            self.assertEqual(completion["actor"], "ai")
-            self.assertEqual(completion["reason"], "AI が検証済み成果物を受け入れた")
-            self.assertIn("status: completed_by_ai", output.getvalue())
-            self.assertIn("completed_by: ai", output.getvalue())
-            self.assertIn("status: completed_by_ai", status_output.getvalue())
+            self.assertIsNone(completion)
+            self.assertIn("current verification run", str(raised.exception))
 
     def test_task_complete_can_record_ai_completion_after_successful_verification(self) -> None:
         with TemporaryDirectory() as directory:
@@ -7213,7 +7177,10 @@ close 済み commitment を表示できるようにした。
             self.assertIn("update_history:", status_body)
             self.assertIn("codex: unresolved -> addressed; テストを追加して修正済み", status_body)
 
-            with redirect_stdout(io.StringIO()):
+            with redirect_stdout(io.StringIO()), patch(
+                "nilo.task_logic.current_git_snapshot",
+                return_value={"git_head": "abc123", "git_diff_hash": "", "working_tree_dirty": False},
+            ):
                 main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "finding 対応済み", "--actor", "ai"])
 
             store = Store(db)
@@ -7475,7 +7442,7 @@ close 済み commitment を表示できるようにした。
             self.assertTrue(summary["active_tasks"][0]["verification_working_tree_dirty"])
             self.assertEqual(summary["active_tasks"][0]["verification_working_tree_files"], ["src/nilo/cli.py", "tests/test_cli.py"])
 
-    def test_verification_run_connects_latest_evidence_check(self) -> None:
+    def test_verification_run_records_snapshot_without_evidence_check_link(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -7518,7 +7485,11 @@ close 済み commitment を表示できるようにした。
             check = store.latest_for_task("evidence_checks", "task_test")
             run = store.latest_for_task("verification_runs", "task_test")
             store.close()
-            self.assertEqual(run["evidence_check_id"], check["id"])
+            self.assertIsNone(check)
+            self.assertIsNone(run["evidence_check_id"])
+            self.assertTrue(run["git_diff_hash"])
+            self.assertIn("git_status_porcelain", run)
+            self.assertIsInstance(run["observed_paths"], list)
 
     def test_verification_run_masks_secrets_before_save(self) -> None:
         with TemporaryDirectory() as directory:
@@ -7629,8 +7600,7 @@ close 済み commitment を表示できるようにした。
             failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
             stored_report = store.latest_for_task("agent_reports", "task_test")
             store.close()
-            self.assertEqual(check["status"], "needs_human_review")
-            self.assertTrue(any(issue.startswith("secret detected") for issue in check["issues"]))
+            self.assertIsNone(check)
             self.assertTrue(any(failure["category"] == "secret_detected" for failure in failures))
             self.assertNotIn("sk-thislookssecret1234567890", stored_report["body_md"])
             self.assertIn("[MASKED:openai_api_key]", stored_report["body_md"])

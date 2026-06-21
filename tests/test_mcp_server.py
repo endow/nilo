@@ -638,27 +638,13 @@ class McpServerTests(unittest.TestCase):
                     )
                 self.assertIn("todo status is not triage-settable: converted_to_task", str(terminal_status.exception))
 
-                with self.assertRaises(McpToolError) as pending_commitment:
-                    call_tool(
-                        "triage_todo",
-                        {
-                            "todo_id": todo_id,
-                            "status": "ready",
-                            "reason": "pending commitment must not pass",
-                            "commitment_id": "commitment_pending",
-                            "context_token": created["context_token"],
-                        },
-                        db,
-                    )
-                self.assertIn("accepted roadmap commitment not found: commitment_pending", str(pending_commitment.exception))
-
                 triaged = call_tool(
                     "triage_todo",
                     {
                         "todo_id": todo_id,
                         "status": "ready",
-                        "reason": "accepted commitment の範囲内",
-                        "commitment_id": "commitment_test",
+                        "reason": "単発依頼として実行対象にする",
+                        "commitment_id": "commitment_pending",
                         "context_token": created["context_token"],
                     },
                     db,
@@ -677,7 +663,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(started["todo"]["status"], "converted_to_task")
                 self.assertEqual(started["task"]["description"], "Create a task from this.")
                 self.assertEqual(started["task"]["acceptance_criteria"], ["Task is created."])
-                self.assertEqual(started["task"]["roadmap_commitment_id"], "commitment_test")
+                self.assertEqual(started["task"]["roadmap_commitment_id"], "commitment_pending")
 
                 pending_ready = call_tool(
                     "create_todo",
@@ -697,18 +683,18 @@ class McpServerTests(unittest.TestCase):
                     )
                 finally:
                     store.close()
-                with self.assertRaises(McpToolError) as pending_start:
-                    call_tool(
-                        "create_task_from_todo",
-                        {
-                            "todo_id": pending_ready["todo"]["id"],
-                            "type": "implementation",
-                            "risk": "medium",
-                            "context_token": f"todo:{pending_ready['todo']['id']}:ready",
-                        },
-                        db,
-                    )
-                self.assertIn("ready todo is missing an accepted roadmap_commitment_id", str(pending_start.exception))
+                pending_started = call_tool(
+                    "create_task_from_todo",
+                    {
+                        "todo_id": pending_ready["todo"]["id"],
+                        "type": "implementation",
+                        "risk": "medium",
+                        "context_token": f"todo:{pending_ready['todo']['id']}:ready",
+                    },
+                    db,
+                )
+                self.assertEqual(pending_started["todo"]["status"], "converted_to_task")
+                self.assertEqual(pending_started["task"]["roadmap_commitment_id"], "commitment_pending")
 
                 roadmap_todo = call_tool(
                     "create_todo",
@@ -755,7 +741,7 @@ class McpServerTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
-        self.assertEqual([todo["id"] for todo in listed["todos"]], [todo_id])
+        self.assertEqual({todo["id"] for todo in listed["todos"]}, {todo_id, pending_ready["todo"]["id"]})
 
     def test_get_task_status_and_instruction_are_read_only(self) -> None:
         with TemporaryDirectory() as directory:
@@ -857,11 +843,11 @@ class McpServerTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
         self.assertEqual(result["report"]["agent"], "codex")
-        self.assertEqual(result["evidence_check"]["report_id"], result["report"]["id"])
+        self.assertEqual(result["evidence_status"]["report_id"], result["report"]["id"])
         self.assertEqual(result["previous_event"]["event_id"], last_seen_event_id)
-        self.assertEqual(result["latest_event"]["event_id"], result["evidence_check"]["id"])
+        self.assertEqual(result["latest_event"]["event_id"], result["report"]["id"])
         self.assertEqual(len(reports), 1)
-        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks, [])
 
     def test_import_agent_report_accepts_context_token_and_rejects_stale_token(self) -> None:
         with TemporaryDirectory() as directory:
@@ -942,6 +928,11 @@ class McpServerTests(unittest.TestCase):
                         "stderr": "",
                         "exit_code": 0,
                         "timed_out": False,
+                        "git_head": "agent-head",
+                        "git_diff_hash": "agent-diff",
+                        "working_tree_dirty": False,
+                        "git_status_porcelain": "",
+                        "observed_paths": ["src/agent.py"],
                         "metadata": {"working_tree_available": False},
                     },
                     db,
@@ -973,8 +964,8 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(report_result["operation"], "submit_agent_report")
         self.assertEqual(report_result["result"]["report"]["agent"], "codex")
-        self.assertEqual(report_result["result"]["evidence_check"]["status"], "needs_human_review")
-        self.assertEqual(report_result["refreshed_context"]["task_context"]["status"], "needs_human_review")
+        self.assertEqual(report_result["result"]["evidence_status"]["status"], "failed")
+        self.assertEqual(report_result["refreshed_context"]["task_context"]["status"], "agent_reported")
         self.assertEqual(verification_result["operation"], "record_test_result")
         self.assertEqual(verification_result["result"]["verification_run"]["source"], "agent_reported")
         self.assertEqual(review_result["operation"], "request_task_review")
@@ -1533,7 +1524,7 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(reports, [])
         self.assertEqual(checks, [])
 
-    def test_create_task_requires_accepted_commitment(self) -> None:
+    def test_create_task_does_not_require_accepted_commitment(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1565,20 +1556,20 @@ class McpServerTests(unittest.TestCase):
                 finally:
                     store.close()
 
-                with self.assertRaises(McpToolError):
-                    call_tool(
-                        "create_task",
-                        {
-                            "project_id": "project_test",
-                            "title": "Blocked task",
-                            "type": "implementation",
-                            "risk": "medium",
-                            "commitment_id": "commitment_pending",
-                            "description": "pending commitment should not allow task creation",
-                            "acceptance": ["accepted commitment is required"],
-                        },
-                        db,
-                    )
+                result = call_tool(
+                    "create_task",
+                    {
+                        "project_id": "project_test",
+                        "title": "Reference note task",
+                        "type": "implementation",
+                        "risk": "medium",
+                        "commitment_id": "commitment_pending",
+                        "description": "pending commitment is only a reference note",
+                        "acceptance": ["task creation is driven by a concrete request"],
+                    },
+                    db,
+                )
+                self.assertEqual(result["task"]["roadmap_commitment_id"], "commitment_pending")
             finally:
                 os.chdir(previous_cwd)
 
@@ -1669,6 +1660,11 @@ class McpServerTests(unittest.TestCase):
                         "stderr": "",
                         "exit_code": 0,
                         "timed_out": False,
+                        "git_head": "agent-head",
+                        "git_diff_hash": "agent-diff",
+                        "working_tree_dirty": False,
+                        "git_status_porcelain": "",
+                        "observed_paths": ["src/agent.py"],
                         "metadata": {"working_tree_available": False},
                     },
                     db,
@@ -1682,6 +1678,10 @@ class McpServerTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
         self.assertEqual(run["source"], "agent_reported")
+        self.assertEqual(run["git_head"], "agent-head")
+        self.assertEqual(run["git_diff_hash"], "agent-diff")
+        self.assertFalse(run["working_tree_dirty"])
+        self.assertEqual(run["observed_paths"], ["src/agent.py"])
         self.assertEqual(result["verification_run"]["source"], "agent_reported")
         self.assertEqual(result["previous_event"]["event_id"], last_seen_event_id)
         self.assertEqual(result["latest_event"]["event_id"], run["id"])

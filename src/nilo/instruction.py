@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from .snapshot import current_git_snapshot, evidence_status as computed_evidence_status
+
 from .failure import render_recurrence_prevention
 
 
@@ -100,8 +104,7 @@ def build_autoscore_prompt(
     acceptance = "\n".join(f"- {item}" for item in task.get("acceptance_criteria", [])) or "未設定"
     scores = "\n".join(f"- {score}" for score in required_scores) or "- 任意の品質観点を必要最小限"
     report_body = report["body_md"] if report else "未提出"
-    evidence_status = evidence_check["status"] if evidence_check else "未提出"
-    evidence_issues = "\n".join(f"- {issue}" for issue in evidence_check["issues"]) if evidence_check else "- なし"
+    evidence_status = computed_evidence_status(verification_run, current_git_snapshot(Path.cwd()))
     if verification_run:
         verification = (
             f"command: {verification_run['command']}\n"
@@ -129,10 +132,8 @@ def build_autoscore_prompt(
 ## 完了報告
 {report_body}
 
-## EvidenceCheck
+## EvidenceStatus
 status: {evidence_status}
-issues:
-{evidence_issues}
 
 ## VerificationRun
 {verification}

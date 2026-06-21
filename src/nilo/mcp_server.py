@@ -28,6 +28,7 @@ from .reviewer_registry import (
     reviewer_is_registered_available,
 )
 from .secret import detect_secret_issues, mask_secrets
+from .snapshot import compact_snapshot, current_git_snapshot, snapshot_columns
 from .store import Store
 from .task_logic import projected_task_status
 from .timeutil import iso_age_seconds, now_iso
@@ -111,6 +112,10 @@ TOOLS = [
                 "timed_out": {"type": "boolean"},
                 "timeout_seconds": {"type": "number"},
                 "git_head": {"type": ["string", "null"]},
+                "git_diff_hash": {"type": "string"},
+                "working_tree_dirty": {"type": "boolean"},
+                "git_status_porcelain": {"type": "string"},
+                "observed_paths": {"type": "array", "items": {"type": "string"}},
                 "metadata": {"type": "object"},
                 "started_at": {"type": "string"},
                 "finished_at": {"type": "string"},
@@ -831,7 +836,6 @@ def latest_for_task_tables(store: Store, task_id: str) -> dict:
     tables = [
         "instructions",
         "agent_reports",
-        "evidence_checks",
         "verification_runs",
         "understanding_checks",
         "outcome_reviews",
@@ -911,6 +915,7 @@ def mcp_request_review(store: Store, arguments: dict) -> dict:
         next_action = reviewer_unavailable_next_action(store, to_actor)
         raise McpToolError(f"{exc}; next_action: {next_action}") from None
     created_at = now_iso()
+    snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
     row = {
         "id": make_id("review"),
         "task_id": task_id,
@@ -918,6 +923,8 @@ def mcp_request_review(store: Store, arguments: dict) -> dict:
         "reviewer": resolved.reviewer,
         "status": initial_review_request_status(store, resolved.reviewer),
         "reason": reason,
+        "based_on_event_id": previous_event["event_id"] if previous_event else "",
+        "based_on_snapshot": snapshot,
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -992,7 +999,6 @@ def claim_next_review(store: Store, arguments: dict) -> dict:
     request = store.get("review_requests", request["id"])
     task = store.get("tasks", request["task_id"])
     report = store.latest_for_task("agent_reports", task["id"])
-    evidence_check = store.latest_for_task("evidence_checks", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
     return {
         "reviewer": reviewer,
@@ -1000,7 +1006,7 @@ def claim_next_review(store: Store, arguments: dict) -> dict:
         "review_request": request,
         "task_id": task["id"],
         "review_id": request["id"],
-        "prompt_md": build_review_context(task, request, report, evidence_check, verification_run, Path.cwd()),
+        "prompt_md": build_review_context(task, request, report, None, verification_run, Path.cwd()),
         "template_md": build_review_result_template(request),
         "latest_event": store.latest_task_status_event(task["id"]),
     }
@@ -1034,12 +1040,11 @@ def get_review_prompt(store: Store, arguments: dict) -> dict:
     if not request or request["task_id"] != task_id:
         raise McpToolError(f"review request not found for task: {review_id}")
     report = store.latest_for_task("agent_reports", task_id)
-    evidence_check = store.latest_for_task("evidence_checks", task_id)
     verification_run = store.latest_for_task("verification_runs", task_id)
     return {
         "task_id": task_id,
         "review_id": review_id,
-        "body_md": build_review_context(task, request, report, evidence_check, verification_run, Path.cwd()),
+        "body_md": build_review_context(task, request, report, None, verification_run, Path.cwd()),
     }
 
 
@@ -1076,6 +1081,8 @@ def mcp_import_review_result(store: Store, arguments: dict) -> dict:
         "reviewer": reviewer or request["reviewer"],
         "verdict": verdict,
         "summary": mask_secrets(summary),
+        "based_on_event_id": request.get("based_on_event_id", ""),
+        "based_on_snapshot": request.get("based_on_snapshot", {}),
         "body_md": mask_secrets(body_md),
         "created_at": created_at,
     }
@@ -1161,7 +1168,7 @@ def mcp_create_task(store: Store, arguments: dict) -> dict:
     title = require_string(arguments, "title")
     task_type = require_string(arguments, "type")
     risk = require_string(arguments, "risk")
-    commitment_id = require_string(arguments, "commitment_id")
+    commitment_id = optional_string(arguments, "commitment_id")
     description = require_string(arguments, "description")
     acceptance = require_string_list(arguments, "acceptance")
     roadmap_item_id = optional_string(arguments, "roadmap_item_id")
@@ -1172,9 +1179,6 @@ def mcp_create_task(store: Store, arguments: dict) -> dict:
     project = store.get("projects", project_id)
     if not project:
         raise McpToolError(f"project not found: {project_id}")
-    commitment = store.get("roadmap_commitments", commitment_id)
-    if not commitment or commitment["project_id"] != project_id or commitment["status"] != "accepted":
-        raise McpToolError(f"accepted roadmap commitment not found: {commitment_id}")
     created_at = now_iso()
     row = {
         "id": make_id("task"),
@@ -1211,6 +1215,7 @@ def mcp_import_agent_report(store: Store, arguments: dict) -> dict:
     return {
         "task_id": task_id,
         "report": result["report"],
+        "evidence_status": result["evidence_status"],
         "evidence_check": result["evidence_check"],
         "previous_event": latest_event,
         "latest_event": store.latest_task_status_event(task_id),
@@ -1231,10 +1236,20 @@ def mcp_record_verification_run(store: Store, arguments: dict) -> dict:
     if not isinstance(metadata, dict):
         raise McpToolError("argument must be an object: metadata")
     finished_at = optional_string(arguments, "finished_at", now_iso()) or now_iso()
+    if any(key in arguments for key in ("git_head", "git_diff_hash", "working_tree_dirty")):
+        snapshot = {
+            "git_head": optional_string(arguments, "git_head", ""),
+            "git_diff_hash": optional_string(arguments, "git_diff_hash", ""),
+            "working_tree_dirty": optional_bool(arguments, "working_tree_dirty", False),
+            "git_status_porcelain": optional_string(arguments, "git_status_porcelain", ""),
+            "observed_paths": optional_string_list(arguments, "observed_paths"),
+        }
+    else:
+        snapshot = current_git_snapshot(Path.cwd())
     row = {
         "id": make_id("verification"),
         "task_id": task_id,
-        "evidence_check_id": (store.latest_for_task("evidence_checks", task_id) or {}).get("id"),
+        "evidence_check_id": None,
         "source": "agent_reported",
         "command": require_string(arguments, "command"),
         "cwd": require_string(arguments, "cwd"),
@@ -1243,7 +1258,7 @@ def mcp_record_verification_run(store: Store, arguments: dict) -> dict:
         "exit_code": optional_int_or_none(arguments, "exit_code"),
         "timed_out": require_bool(arguments, "timed_out"),
         "timeout_seconds": optional_number(arguments, "timeout_seconds", 0.0),
-        "git_head": optional_string(arguments, "git_head", ""),
+        **snapshot_columns(snapshot),
         "metadata": {
             **metadata,
             "secret_issue_count": len(secret_issues),
@@ -1368,13 +1383,8 @@ def mcp_triage_todo(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"todo not found: {todo_id}")
     require_fresh_todo_context(todo, arguments)
     commitment_id = optional_string(arguments, "commitment_id")
-    if status == "ready" and not commitment_id:
-        raise McpToolError("ready todo requires commitment_id")
     values = {"status": status, "triaged_at": now_iso(), "triage_reason": reason}
     if commitment_id:
-        commitment = store.get("roadmap_commitments", commitment_id)
-        if not commitment or commitment["project_id"] != todo["project_id"] or commitment["status"] != "accepted":
-            raise McpToolError(f"accepted roadmap commitment not found: {commitment_id}")
         values["roadmap_commitment_id"] = commitment_id
     store.update("todos", todo_id, values)
     updated = store.get("todos", todo_id)
@@ -1457,10 +1467,6 @@ def mcp_create_task_from_todo(store: Store, arguments: dict) -> dict:
         allowed = ", ".join(sorted(STARTABLE_TODO_STATUSES))
         raise McpToolError(f"todo is not startable: {todo['status']} (allowed: {allowed})")
     commitment_id = todo["roadmap_commitment_id"]
-    if todo["status"] == "ready":
-        commitment = store.get("roadmap_commitments", commitment_id)
-        if not commitment or commitment["project_id"] != todo["project_id"] or commitment["status"] != "accepted":
-            raise McpToolError("ready todo is missing an accepted roadmap_commitment_id")
     project = store.get("projects", todo["project_id"])
     if not project:
         raise McpToolError(f"project not found: {todo['project_id']}")

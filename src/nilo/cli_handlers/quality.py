@@ -23,6 +23,7 @@ from ..review_dispatcher import dispatch_review, doctor_reviewer_config, init_re
 from ..reviewer_registry import ReviewerResolutionError, resolve_reviewer, resolve_review_request_target, reviewer_is_registered_available
 from ..reviewer_registry import reviewer_prepare_status
 from ..secret import mask_secrets
+from ..snapshot import compact_snapshot, current_git_snapshot, review_result_status
 from ..store import Store
 from ..task_logic import is_task_completed_status, projected_task_status
 from ..timeutil import now_iso
@@ -110,9 +111,8 @@ def cmd_quality_autoscore_prepare(args: argparse.Namespace) -> None:
             raise SystemExit(f"task not found: {args.task}")
         required_scores = required_scores_for_task(store, task, args.required_score or [])
         report = store.latest_for_task("agent_reports", args.task)
-        evidence_check = store.latest_for_task("evidence_checks", args.task)
         verification_run = store.latest_for_task("verification_runs", args.task)
-        print(build_autoscore_prompt(task, report, evidence_check, verification_run, required_scores))
+        print(build_autoscore_prompt(task, report, None, verification_run, required_scores))
     finally:
         store.close()
 
@@ -230,9 +230,8 @@ def cmd_review_prepare(args: argparse.Namespace) -> None:
             if not request or request["task_id"] != args.task:
                 raise SystemExit(f"review request not found for task: {args.review}")
             report = store.latest_for_task("agent_reports", args.task)
-            evidence_check = store.latest_for_task("evidence_checks", args.task)
             verification_run = store.latest_for_task("verification_runs", args.task)
-            body = build_review_context(task, request, report, evidence_check, verification_run, Path.cwd())
+            body = build_review_context(task, request, report, None, verification_run, Path.cwd())
             output = review_prompt_output_path(args, request)
             if output:
                 write_review_file(output, body)
@@ -340,6 +339,8 @@ def cmd_review_request(args: argparse.Namespace) -> None:
         except ReviewerResolutionError as exc:
             raise SystemExit(f"{exc}\nnext_action: {exc.next_action}") from None
         created_at = now_iso()
+        latest_event = store.latest_task_status_event(args.task)
+        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
         row = {
             "id": make_id("review"),
             "task_id": args.task,
@@ -347,6 +348,8 @@ def cmd_review_request(args: argparse.Namespace) -> None:
             "reviewer": resolved.reviewer,
             "status": "requested" if reviewer_has_fresh_heartbeat(store, resolved.reviewer) else "reviewer_unavailable",
             "reason": args.reason,
+            "based_on_event_id": latest_event["event_id"] if latest_event else "",
+            "based_on_snapshot": snapshot,
             "created_at": created_at,
             "updated_at": created_at,
         }
@@ -537,6 +540,8 @@ def create_review_delegation(args: argparse.Namespace) -> tuple[dict, dict, bool
             raise SystemExit(f"{exc}\nnext_action: {exc.next_action}") from None
         task, dirty_tree_review = active_review_task(store, args.project, args.task, allow_dirty_tree_task=True)
         created_at = now_iso()
+        latest_event = store.latest_task_status_event(task["id"])
+        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
         row = {
             "id": make_id("review"),
             "task_id": task["id"],
@@ -544,17 +549,18 @@ def create_review_delegation(args: argparse.Namespace) -> tuple[dict, dict, bool
             "reviewer": resolved.reviewer,
             "status": "requested" if reviewer_has_fresh_heartbeat(store, resolved.reviewer) else "reviewer_unavailable",
             "reason": args.reason,
+            "based_on_event_id": latest_event["event_id"] if latest_event else "",
+            "based_on_snapshot": snapshot,
             "created_at": created_at,
             "updated_at": created_at,
         }
         store.insert("review_requests", row)
         if args.write_default:
             report = store.latest_for_task("agent_reports", task["id"])
-            evidence_check = store.latest_for_task("evidence_checks", task["id"])
             verification_run = store.latest_for_task("verification_runs", task["id"])
             prompt_path = Path(".nilo") / "reviews" / f"{row['id']}_prompt.md"
             template_path = Path(".nilo") / "reviews" / f"{row['id']}.md"
-            write_review_file(prompt_path, build_review_context(task, row, report, evidence_check, verification_run, Path.cwd()))
+            write_review_file(prompt_path, build_review_context(task, row, report, None, verification_run, Path.cwd()))
             write_review_file(template_path, build_review_result_template(row), label="review_template")
         return row, task, dirty_tree_review
     finally:
@@ -705,6 +711,8 @@ def cmd_review_result_import(args: argparse.Namespace) -> None:
             "reviewer": args.reviewer or request["reviewer"],
             "verdict": verdict,
             "summary": summary,
+            "based_on_event_id": request.get("based_on_event_id", ""),
+            "based_on_snapshot": request.get("based_on_snapshot", {}),
             "body_md": mask_secrets(body),
             "created_at": created_at,
         }
@@ -767,7 +775,7 @@ def cmd_review_status(args: argparse.Namespace) -> None:
         print("review_results:")
         if data["review_results"]:
             for result in data["review_results"]:
-                print(f"- {result['id']} [{result['verdict']}] {result['reviewer']}: {result['summary']}")
+                print(f"- {result['id']} [{result['verdict']}, {review_result_status(result, current_git_snapshot(Path.cwd()))}] {result['reviewer']}: {result['summary']}")
         else:
             print("- none")
         print("review_findings:")

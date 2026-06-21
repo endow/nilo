@@ -17,6 +17,7 @@ from .cli_support import make_id
 from .review import build_review_context, looks_like_review_result, parse_review_result
 from .reviewer_registry import canonical_reviewer_name, normalize_backend_kind, normalize_capabilities, reviewer_is_registered_available
 from .secret import detect_secret_issues, mask_secrets
+from .snapshot import compact_snapshot, current_git_snapshot
 from .store import Store
 from .timeutil import now_iso
 
@@ -467,6 +468,8 @@ def resolve_task_project(store: Store, task_id: str, project_id: str | None) -> 
 
 def create_review_request(store: Store, task_id: str, actor: str, reviewer: str, reason: str) -> dict:
     created_at = now_iso()
+    latest_event = store.latest_task_status_event(task_id)
+    snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
     row = {
         "id": make_id("review"),
         "task_id": task_id,
@@ -474,6 +477,8 @@ def create_review_request(store: Store, task_id: str, actor: str, reviewer: str,
         "reviewer": reviewer,
         "status": "requested" if reviewer_is_registered_available(store, reviewer) else "reviewer_unavailable",
         "reason": reason,
+        "based_on_event_id": latest_event["event_id"] if latest_event else "",
+        "based_on_snapshot": snapshot,
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -548,9 +553,8 @@ def claim_review(store: Store, review_request: dict) -> dict:
 def build_prompt_file(store: Store, request: dict, repo_root: Path) -> tuple[Path, str]:
     task = store.get("tasks", request["task_id"])
     report = store.latest_for_task("agent_reports", task["id"])
-    evidence_check = store.latest_for_task("evidence_checks", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
-    prompt_md = build_review_context(task, request, report, evidence_check, verification_run, repo_root)
+    prompt_md = build_review_context(task, request, report, None, verification_run, repo_root)
     prompt_path = repo_root / ".nilo" / "reviews" / f"{request['id']}_prompt.md"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(prompt_md, encoding="utf-8")
@@ -828,6 +832,8 @@ def import_dispatch_review_result(store: Store, request: dict, reviewer: str, bo
         "reviewer": reviewer,
         "verdict": verdict,
         "summary": mask_secrets(summary),
+        "based_on_event_id": request.get("based_on_event_id", ""),
+        "based_on_snapshot": request.get("based_on_snapshot", {}),
         "body_md": mask_secrets(body_md),
         "created_at": created_at,
     }
@@ -1223,6 +1229,8 @@ def dispatch_review(
 
 def create_quick_review_request(store: Store, task_id: str, actor: str, reviewer: str, reason: str) -> dict:
     created_at = now_iso()
+    latest_event = store.latest_task_status_event(task_id)
+    snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
     row = {
         "id": make_id("review"),
         "task_id": task_id,
@@ -1230,6 +1238,8 @@ def create_quick_review_request(store: Store, task_id: str, actor: str, reviewer
         "reviewer": reviewer,
         "status": "in_progress",
         "reason": reason,
+        "based_on_event_id": latest_event["event_id"] if latest_event else "",
+        "based_on_snapshot": snapshot,
         "created_at": created_at,
         "updated_at": created_at,
     }

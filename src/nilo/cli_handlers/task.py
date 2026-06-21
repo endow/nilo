@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ..cli_support import make_id
 from ..failure import deterministic_id, matched_failure_patterns_for_task, recurrence_prevention_summary_lines
+from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
 from ..task_logic import completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
@@ -71,8 +72,8 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        check = store.latest_for_task("evidence_checks", args.task)
         verification_run = store.latest_for_task("verification_runs", args.task)
+        current_snapshot = current_git_snapshot(Path.cwd())
         instruction = store.latest_for_task("instructions", args.task)
         report = store.latest_for_task("agent_reports", args.task)
         quality_review = store.latest_for_task("quality_reviews", args.task)
@@ -98,10 +99,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
             print(f"latest_instruction: {instruction['id']}")
         if report:
             print(f"latest_report: {report['id']} ({report['claimed_status']})")
-        if check:
-            print(f"latest_evidence_check: {check['id']} ({check['status']})")
-            for issue in check["issues"]:
-                print(f"- {issue}")
+        print(f"evidence_status: {evidence_status(verification_run, current_snapshot)}")
         if verification_run:
             result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
             print(f"latest_verification_run: {verification_run['id']} ({result})")
@@ -117,7 +115,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         if review_request:
             print(f"latest_review_request: {review_request['id']} ({review_request['status']}) {review_request['requester']} -> {review_request['reviewer']}")
         if review_result:
-            print(f"latest_review_result: {review_result['id']} ({review_result['verdict']})")
+            print(f"latest_review_result: {review_result['id']} ({review_result['verdict']}, {review_result_status(review_result, current_snapshot)})")
         if review_findings:
             print("review_findings:")
             for finding in review_findings:
@@ -134,6 +132,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         completion = store.latest_for_task("task_completions", args.task)
         if completion:
             print(f"completed_reason: {completion['reason']}")
+            print(f"completed_with_reservations: {bool(completion.get('completed_with_reservations'))}")
     finally:
         store.close()
 
@@ -208,12 +207,24 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             raise SystemExit(f"task not found: {args.task}")
         if args.actor == "ai":
             require_ai_completion_evidence(store, args.task)
+        now = now_iso()
+        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
+        latest_verification = store.latest_for_task("verification_runs", args.task)
+        latest_review = store.latest_for_task("review_results", args.task)
         row = {
             "id": make_id("completion"),
             "task_id": args.task,
             "actor": args.actor,
+            "completed_by": args.actor,
+            "completed_snapshot": snapshot,
+            "completion_note": args.reason,
+            "accepted_verification_run_ids": [latest_verification["id"]] if latest_verification else [],
+            "accepted_review_result_ids": [latest_review["id"]] if latest_review else [],
+            "human_decision_note": args.reason if args.actor == "human" else "",
+            "completed_with_reservations": False,
+            "completed_at": now,
             "reason": args.reason,
-            "created_at": now_iso(),
+            "created_at": now,
         }
         store.insert("task_completions", row)
         print(f"status: {completion_status(args.actor)}")

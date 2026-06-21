@@ -5,8 +5,8 @@ import subprocess
 from pathlib import Path
 from subprocess import TimeoutExpired
 
-from .gitmeta import head_commit, working_tree_state
 from .secret import detect_secret_issues, mask_secrets
+from .snapshot import current_git_snapshot, snapshot_columns
 from .timeutil import now_iso
 
 
@@ -69,7 +69,7 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> d
     finished_at = now_iso()
     raw_log = f"{stdout}\n{stderr}"
     secret_issues = detect_secret_issues(raw_log)
-    tree_state = working_tree_state(cwd)
+    snapshot = current_git_snapshot(cwd)
     return {
         "source": "nilo_executed",
         "command": command,
@@ -79,7 +79,7 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> d
         "exit_code": exit_code,
         "timed_out": timed_out,
         "timeout_seconds": timeout_seconds,
-        "git_head": head_commit(cwd),
+        **snapshot_columns(snapshot),
         "metadata": {
             "secret_issue_count": len(secret_issues),
             "secret_issues": secret_issues,
@@ -87,7 +87,9 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> d
             "execution_mode": "shell" if use_shell else "argv",
             "execution_reason": execution_reason,
             "sandbox": "none",
-            **tree_state,
+            "working_tree_available": snapshot.get("git_available", False),
+            "working_tree_dirty": snapshot.get("working_tree_dirty", False),
+            "working_tree_files": snapshot.get("observed_paths", []),
         },
         "started_at": started_at,
         "finished_at": finished_at,
