@@ -838,7 +838,6 @@ def latest_for_task_tables(store: Store, task_id: str) -> dict:
         "agent_reports",
         "verification_runs",
         "understanding_checks",
-        "outcome_reviews",
         "quality_reviews",
         "review_requests",
         "review_results",

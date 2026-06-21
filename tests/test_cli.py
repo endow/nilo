@@ -19,6 +19,7 @@ from nilo.cli_handlers.quality import parse_git_status_porcelain_z
 from nilo.roadmap_render import render_human_roadmap_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.store import Store
+from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
 
 
@@ -3704,121 +3705,57 @@ close 済み commitment を表示できるようにした。
             self.assertEqual(rules, [])
             self.assertTrue(failures)
 
-    def test_rules_derive_prepare_outputs_agent_prompt(self) -> None:
+    def test_rules_derive_command_is_removed(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = root / "nilo.db"
-            report = root / "report.md"
-            report.write_text(REPORT.replace("3 passed", "TODO"), encoding="utf-8")
-
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "task",
-                        "create",
-                        "--project",
-                        "project_test",
-                        "--id",
-                        "task_test",
-                        "--title",
-                        "CLIフローを確認する",
-                    ]
-                )
-                main(["--db", str(db), "report", "import", "--task", "task_test", "--file", str(report)])
-
-            output = io.StringIO()
-            with redirect_stdout(output):
-                main(["--db", str(db), "rules", "derive", "prepare", "--project", "project_test"])
-
-            self.assertIn("# DerivedRule 生成指示", output.getvalue())
-            self.assertIn("## FailureLog", output.getvalue())
-            self.assertIn("task_id: task_test", output.getvalue())
-            self.assertIn("## Rule", output.getvalue())
-
-    def test_rules_derive_import_records_agent_rule(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = root / "nilo.db"
-            report = root / "report.md"
-            rules = root / "rules.md"
-            report.write_text(REPORT.replace("3 passed", "TODO"), encoding="utf-8")
-
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "task",
-                        "create",
-                        "--project",
-                        "project_test",
-                        "--id",
-                        "task_test",
-                        "--title",
-                        "CLIフローを確認する",
-                    ]
-                )
-                main(["--db", str(db), "report", "import", "--task", "task_test", "--file", str(report)])
-
-            store = Store(db)
-            failure = store.list_where("failure_logs", "project_id=?", ("project_test",))[0]
-            store.close()
-            rules.write_text(
-                "# DerivedRules\n\n"
-                "## Rule\n"
-                f"source_failures: {failure['id']}\n"
-                "rule: 完了報告には検証ログの実行結果を具体的に記載する\n"
-                "tags: #evidence, #testing\n"
-                "severity: high\n"
-                "confidence: 0.8\n",
-                encoding="utf-8",
-            )
-
-            output = io.StringIO()
-            with redirect_stdout(output):
-                main(["--db", str(db), "rules", "derive", "import", "--project", "project_test", "--file", str(rules)])
-
-            store = Store(db)
-            imported = [
-                rule
-                for rule in store.list_where("derived_rules", "project_id=?", ("project_test",))
-                if rule["source"] == "agent_import"
-            ][0]
-            store.close()
-            self.assertIn("imported_rules: 1", output.getvalue())
-            self.assertEqual(imported["source_failure_ids"], [failure["id"]])
-            self.assertEqual(imported["tags"], ["#evidence", "#testing"])
-            self.assertEqual(imported["severity"], "high")
-            self.assertEqual(imported["confidence"], 0.8)
-            self.assertTrue(imported["auto_activated"])
-
-    def test_rules_derive_import_rejects_unknown_source_failure(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = root / "nilo.db"
-            rules = root / "rules.md"
-            rules.write_text(
-                "# DerivedRules\n\n"
-                "## Rule\n"
-                "source_failures: failure_missing\n"
-                "rule: 完了報告には検証ログの実行結果を具体的に記載する\n"
-                "tags: #evidence\n"
-                "severity: medium\n"
-                "confidence: 0.6\n",
-                encoding="utf-8",
-            )
+            db = Path(directory) / "nilo.db"
 
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
 
-            with self.assertRaises(SystemExit) as raised:
+            with self.assertRaises(SystemExit):
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "rules", "derive", "import", "--project", "project_test", "--file", str(rules)])
-            self.assertIn("unknown source failures: failure_missing", str(raised.exception))
+                    main(["--db", str(db), "rules", "derive", "prepare", "--project", "project_test"])
+
+            store = Store(db)
+            rules = store.list_where("derived_rules", "project_id=?", ("project_test",))
+            store.close()
+            self.assertEqual(rules, [])
+
+    def test_rules_list_reads_existing_rules_without_writing(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            store = Store(db)
+            store.insert(
+                "derived_rules",
+                {
+                    "id": "rule_existing",
+                    "project_id": "project_test",
+                    "source_failure_ids": ["failure_old"],
+                    "source": "legacy",
+                    "auto_activated": True,
+                    "manually_disabled": False,
+                    "rule_text": "既存ルール",
+                    "tags": ["#legacy"],
+                    "severity": "medium",
+                    "confidence": 0.5,
+                    "recurrence_count": 1,
+                    "success_count": 0,
+                    "last_seen_at": "2026-01-01T00:00:00+00:00",
+                    "state": "active",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            )
+            store.close()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "rules", "list", "--project", "project_test"])
+
+            self.assertIn("rule_existing [active] #legacy: 既存ルール", output.getvalue())
 
     def test_successful_reports_do_not_auto_update_derived_rules(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3973,7 +3910,7 @@ close 済み commitment を表示できるようにした。
             self.assertIn("status: completed_by_user", output.getvalue())
             self.assertIn("completed_with_reservations: True", output.getvalue())
 
-    def test_outcome_reject_connects_to_failure_rule(self) -> None:
+    def test_outcome_reject_records_failure_log_without_status_event(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
 
@@ -4007,9 +3944,17 @@ close 済み commitment を表示できるようにした。
                 )
 
             store = Store(db)
+            task = store.get("tasks", "task_test")
+            latest = store.latest_task_status_event("task_test")
+            projected = projected_task_status(store, task)
             failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
             rules = store.list_where("derived_rules", "project_id=?", ("project_test",))
+            outcome = store.latest_for_task("outcome_reviews", "task_test")
             store.close()
+            self.assertEqual(projected, "planned")
+            self.assertEqual(latest["source"], "task")
+            self.assertEqual(latest["status"], "planned")
+            self.assertIsNone(outcome)
             self.assertEqual(failures[0]["category"], "human_rejected")
             self.assertEqual(rules, [])
 
@@ -4604,74 +4549,77 @@ close 済み commitment を表示できるようにした。
                     )
             self.assertIn("unknown quality scores: unknown_axis", str(raised.exception))
 
-    def test_success_add_records_pattern(self) -> None:
+    def test_success_add_command_is_removed(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
-
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "task",
-                        "create",
-                        "--project",
-                        "project_test",
-                        "--id",
-                        "task_test",
-                        "--title",
-                        "仕様を調査する",
-                        "--type",
-                        "research",
-                    ]
-                )
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "success",
-                        "add",
-                        "--project",
-                        "project_test",
-                        "--task",
-                        "task_test",
-                        "--pattern",
-                        "影響範囲が不明な修正では先にresearchタスクを作る",
-                        "--tag",
-                        "#research_first",
-                        "--type",
-                        "implementation",
-                    ]
-                )
+
+            with self.assertRaises(SystemExit):
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "success",
+                            "add",
+                            "--project",
+                            "project_test",
+                            "--pattern",
+                            "影響範囲が不明な修正では先にresearchタスクを作る",
+                        ]
+                    )
 
             store = Store(db)
             patterns = store.list_where("success_patterns", "project_id=?", ("project_test",))
             store.close()
-            self.assertEqual(patterns[0]["source_task_ids"], ["task_test"])
-            self.assertEqual(patterns[0]["tags"], ["#research_first"])
-            self.assertEqual(patterns[0]["applicable_task_types"], ["implementation"])
-            self.assertEqual(patterns[0]["state"], "active")
+            self.assertEqual(patterns, [])
 
-    def test_success_pattern_is_injected_into_instruction(self) -> None:
+    def test_success_list_reads_existing_patterns_without_writing(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            store = Store(db)
+            store.insert(
+                "success_patterns",
+                {
+                    "id": "success_existing",
+                    "project_id": "project_test",
+                    "source_task_ids": ["task_old"],
+                    "pattern_text": "既存成功パターン",
+                    "tags": ["#legacy"],
+                    "applicable_task_types": ["implementation"],
+                    "confidence": 0.5,
+                    "success_count": 1,
+                    "last_used_at": "2026-01-01T00:00:00+00:00",
+                    "state": "active",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            )
+            store.close()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
                 main(
                     [
                         "--db",
                         str(db),
                         "success",
-                        "add",
+                        "list",
                         "--project",
                         "project_test",
-                        "--pattern",
-                        "影響範囲が不明な修正では先にresearchタスクを作る",
-                        "--type",
-                        "implementation",
                     ]
                 )
+
+            self.assertIn("success_existing [active] #legacy (implementation): 既存成功パターン", output.getvalue())
+
+    def test_success_pattern_is_not_injected_into_instruction(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(
                     [
                         "--db",
@@ -4688,12 +4636,30 @@ close 済み commitment を表示できるようにした。
                         "implementation",
                     ]
                 )
+            store = Store(db)
+            store.insert(
+                "success_patterns",
+                {
+                    "id": "success_existing",
+                    "project_id": "project_test",
+                    "source_task_ids": [],
+                    "pattern_text": "影響範囲が不明な修正では先にresearchタスクを作る",
+                    "tags": [],
+                    "applicable_task_types": ["implementation"],
+                    "confidence": 0.5,
+                    "success_count": 1,
+                    "last_used_at": "2026-01-01T00:00:00+00:00",
+                    "state": "active",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            )
+            store.close()
             output = io.StringIO()
             with redirect_stdout(output):
                 main(["--db", str(db), "instruct", "--task", "task_test"])
 
-            self.assertIn("## 参考にする成功パターン", output.getvalue())
-            self.assertIn("影響範囲が不明な修正では先にresearchタスクを作る", output.getvalue())
+            self.assertNotIn("## 参考にする成功パターン", output.getvalue())
+            self.assertNotIn("影響範囲が不明な修正では先にresearchタスクを作る", output.getvalue())
 
     def test_task_split_creates_subtasks(self) -> None:
         with TemporaryDirectory() as directory:
@@ -7605,54 +7571,44 @@ close 済み commitment を表示できるようにした。
             self.assertNotIn("sk-thislookssecret1234567890", stored_report["body_md"])
             self.assertIn("[MASKED:openai_api_key]", stored_report["body_md"])
 
-    def test_success_disable_archives_pattern(self) -> None:
+    def test_success_disable_command_is_removed(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "success",
-                        "add",
-                        "--project",
-                        "project_test",
-                        "--pattern",
-                        "レビュー前に変更範囲を確認する",
-                    ]
-                )
             store = Store(db)
-            pattern = store.list_where("success_patterns", "project_id=?", ("project_test",))[0]
+            store.insert(
+                "success_patterns",
+                {
+                    "id": "success_existing",
+                    "project_id": "project_test",
+                    "source_task_ids": [],
+                    "pattern_text": "レビュー前に変更範囲を確認する",
+                    "tags": [],
+                    "applicable_task_types": [],
+                    "confidence": 0.5,
+                    "success_count": 1,
+                    "last_used_at": "2026-01-01T00:00:00+00:00",
+                    "state": "active",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            )
             store.close()
 
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "success", "disable", "--pattern", pattern["id"]])
+            with self.assertRaises(SystemExit):
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "success", "disable", "--pattern", "success_existing"])
 
             store = Store(db)
-            disabled = store.get("success_patterns", pattern["id"])
+            disabled = store.get("success_patterns", "success_existing")
             store.close()
-            self.assertEqual(disabled["state"], "archived")
+            self.assertEqual(disabled["state"], "active")
 
-    def test_success_pattern_usage_updates_on_instruct(self) -> None:
+    def test_success_pattern_usage_does_not_update_on_instruct(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "success",
-                        "add",
-                        "--project",
-                        "project_test",
-                        "--pattern",
-                        "実装前に調査タスクを作る",
-                        "--type",
-                        "implementation",
-                    ]
-                )
                 main(
                     [
                         "--db",
@@ -7668,15 +7624,31 @@ close 済み commitment を表示できるようにした。
                     ]
                 )
             store = Store(db)
-            before = store.list_where("success_patterns", "project_id=?", ("project_test",))[0]
+            store.insert(
+                "success_patterns",
+                {
+                    "id": "success_existing",
+                    "project_id": "project_test",
+                    "source_task_ids": [],
+                    "pattern_text": "実装前に調査タスクを作る",
+                    "tags": [],
+                    "applicable_task_types": ["implementation"],
+                    "confidence": 0.5,
+                    "success_count": 1,
+                    "last_used_at": "2026-01-01T00:00:00+00:00",
+                    "state": "active",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            )
+            before = store.get("success_patterns", "success_existing")
             store.close()
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "instruct", "--task", "task_test"])
             store = Store(db)
-            after = store.get("success_patterns", before["id"])
+            after = store.get("success_patterns", "success_existing")
             store.close()
-            self.assertEqual(after["success_count"], before["success_count"] + 1)
-            self.assertGreaterEqual(after["last_used_at"], before["last_used_at"])
+            self.assertEqual(after["success_count"], before["success_count"])
+            self.assertEqual(after["last_used_at"], before["last_used_at"])
 
     def test_understanding_gate_blocks_high_risk_instruction_until_approved(self) -> None:
         with TemporaryDirectory() as directory:

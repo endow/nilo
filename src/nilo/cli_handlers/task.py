@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from ..cli_support import make_id
-from ..failure import deterministic_id, matched_failure_patterns_for_task, recurrence_prevention_summary_lines
+from ..failure import deterministic_id
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
 from ..task_logic import completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
@@ -80,7 +80,6 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         review_request = store.latest_for_task("review_requests", args.task)
         review_result = store.latest_for_task("review_results", args.task)
         review_findings = store.list_where("review_findings", "task_id=?", (args.task,))
-        failure_patterns = matched_failure_patterns_for_task(store, args.task)
         print(f"id: {task['id']}")
         print(f"status: {projected_task_status(store, task)}")
         print(f"task_type: {task['task_type']}")
@@ -122,10 +121,6 @@ def cmd_task_status(args: argparse.Namespace) -> None:
                 marker = "blocking" if finding["blocking"] else "nonblocking"
                 location = f" {finding['file_path']}:{finding['line']}" if finding["file_path"] else ""
                 print(f"- {finding['id']} [{finding['status']}] {finding['severity']} {marker}{location}: {finding['title']}")
-        if failure_patterns:
-            print("Recurrence prevention:")
-            for line in recurrence_prevention_summary_lines(failure_patterns):
-                print(line)
         understanding = store.latest_for_task("understanding_checks", args.task)
         if understanding:
             print(f"latest_understanding_check: {understanding['id']} ({understanding['status']})")

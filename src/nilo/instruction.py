@@ -4,9 +4,6 @@ from pathlib import Path
 
 from .snapshot import current_git_snapshot, evidence_status as computed_evidence_status
 
-from .failure import render_recurrence_prevention
-
-
 REPORT_FORMAT = """# 完了報告
 
 ## 1. 実施内容
@@ -206,24 +203,9 @@ confidence: 0.6
 def build_instruction(
     project: dict,
     task: dict,
-    selected_rules: list[tuple[dict, dict]],
-    success_patterns: list[dict] | None = None,
-    failure_patterns: list[dict] | None = None,
 ) -> tuple[str, str]:
     degraded = task["degradation_mode"] == "degraded"
     criteria = "\n".join(f"- {item}" for item in project["default_completion_criteria"])
-    rules = "\n".join(f"{index}. {rule['rule_text']}" for index, (rule, _) in enumerate(selected_rules, start=1))
-    if not rules:
-        rules = "なし"
-    patterns = "\n".join(
-        f"{index}. {pattern['pattern_text']}"
-        for index, pattern in enumerate(success_patterns or [], start=1)
-    )
-    if not patterns:
-        patterns = "なし"
-    recurrence = render_recurrence_prevention(failure_patterns or [])
-    if recurrence:
-        recurrence = "\n" + recurrence + "\n"
     description = task.get("description") or "未設定"
     acceptance = "\n".join(f"- {item}" for item in task.get("acceptance_criteria", []))
     if not acceptance:
@@ -273,12 +255,6 @@ def build_instruction(
 - 取り込みは `nilo report import --task {task["id"]} --file .nilo/reports/{task["id"]}.md` で行う
 - import 成功後は DB を正本とし、一時ファイルは削除してよい
 
-## 今回必須の行動規則
-{rules}
-
-## 参考にする成功パターン
-{patterns}
-{recurrence}
 {mode_note}
 ## 完了報告フォーマット
 以下の形式を維持し、空欄、TODO、N/A、[ここに記述] を残さないこと。

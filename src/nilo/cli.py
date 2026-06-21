@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .cli_support import cli_quote, make_id, read_text_or_exit
 from .design_residue import parse_design_residue
-from .failure import derived_rule_from_agent, derived_rule_from_failure, deterministic_id, parse_agent_derived_rules, select_rules
+from .failure import deterministic_id
 from .gitmeta import git_output, head_commit
 from .guard import evaluate_evidence
 from .instruction import build_autoscore_prompt, build_instruction, build_review_prompt, build_rules_derive_prompt, build_understanding_prompt
@@ -34,7 +34,6 @@ from .roadmap_render import (
 )
 from .secret import mask_secrets
 from .store import Store
-from .success_logic import record_rule_successes, record_success_pattern_usage, select_success_patterns
 from .task_logic import completion_status, is_task_completed_status, outcome_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from .timeutil import now_iso
 from .verification import run_local_verification
@@ -521,7 +520,7 @@ from .project_logic import (
     verification_working_tree_summary,
     write_handson_markdown,
 )
-from .cli_handlers.knowledge import cmd_rules_derive_import, cmd_rules_derive_prepare, cmd_rules_disable, cmd_rules_list, cmd_success_add, cmd_success_disable, cmd_success_list
+from .cli_handlers.knowledge import cmd_rules_list, cmd_success_list
 from .cli_handlers.mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
 from .cli_handlers.overdrive import cmd_roadmap_execute, cmd_run
 from .cli_handlers.project import cmd_project_create, cmd_project_export_handson, cmd_project_status, cmd_project_summary

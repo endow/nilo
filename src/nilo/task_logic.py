@@ -21,8 +21,6 @@ def projected_task_status(store, task: dict) -> str:
     latest = store.latest_task_status_event(task["id"])
     if not latest:
         return task["status"]
-    if latest["source"] == "outcome":
-        return outcome_status(latest["status"])
     return latest["status"]
 
 

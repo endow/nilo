@@ -4,7 +4,6 @@ import locale
 from pathlib import Path
 
 from .design_residue import parse_design_residue
-from .failure import matched_failure_patterns_for_task, recurrence_prevention_summary_lines
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
 from .snapshot import current_git_snapshot, evidence_status
 from .store import Store
@@ -953,7 +952,6 @@ def recent_project_history(store: Store, tasks: list[dict], limit: int = 8) -> l
         ("review_request", "review_requests"),
         ("review_result", "review_results"),
         ("verification_run", "verification_runs"),
-        ("outcome_review", "outcome_reviews"),
         ("task_completion", "task_completions"),
     ]
     for task in tasks:
@@ -1052,7 +1050,6 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
         verification_run = store.latest_for_task("verification_runs", task["id"])
         pending_review = latest_pending_review_request(store, task["id"])
         blocking_findings = unresolved_blocking_review_findings(store, task["id"])
-        failure_patterns = matched_failure_patterns_for_task(store, task["id"])
         active_summaries.append(
             {
                 "id": task["id"],
@@ -1069,15 +1066,6 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
                 "pending_review_reviewer": pending_review["reviewer"] if pending_review else "",
                 "pending_review_status": pending_review["status"] if pending_review else "",
                 "unresolved_blocking_review_findings": [finding["id"] for finding in blocking_findings],
-                "matched_failure_patterns": [
-                    {
-                        "id": pattern["id"],
-                        "severity": pattern["severity"],
-                        "failure_summary": pattern["failure_summary"],
-                        "required_next_check": pattern["preflight_checks"][0] if pattern["preflight_checks"] else "",
-                    }
-                    for pattern in failure_patterns
-                ],
             }
         )
         for item in unexecuted_verifications_for_task(status, verification_run):
@@ -1153,12 +1141,6 @@ def print_project_summary_text(summary: dict) -> None:
                 print("  unresolved_blocking_review_findings:")
                 for finding_id in task["unresolved_blocking_review_findings"]:
                     print(f"  - {finding_id}")
-            if task["matched_failure_patterns"]:
-                print("  Recurrence prevention:")
-                for pattern in task["matched_failure_patterns"]:
-                    print(f"  - {pattern['id']}: {pattern['severity']}")
-                    print(f"    Previous failure: {pattern['failure_summary']}")
-                    print(f"    Required next check: {pattern['required_next_check']}")
     else:
         print("- none")
 
@@ -1223,13 +1205,8 @@ def print_human_project_status(store: Store, project: dict, active_tasks: list[d
         task = {**task, "status": statuses[task["id"]]}
         verification_run = store.latest_for_task("verification_runs", task["id"])
         blocking = unresolved_blocking_review_findings(store, task["id"])
-        failure_patterns = matched_failure_patterns_for_task(store, task["id"])
         for line in human_active_task_lines(task, verification_run, len(blocking)):
             print(line)
-        if failure_patterns:
-            print("Recurrence prevention:")
-            for line in recurrence_prevention_summary_lines(failure_patterns):
-                print(line)
         print()
 
         status = task["status"]

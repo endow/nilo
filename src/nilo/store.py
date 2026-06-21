@@ -522,14 +522,12 @@ class Store:
               UNION ALL
               SELECT id AS event_id, 'verification_run' AS source, CASE WHEN timed_out=1 THEN 'verification_timed_out' WHEN exit_code=0 THEN 'verification_passed' ELSE 'verification_failed' END AS status, created_at, rowid AS event_rowid, 55 AS priority FROM verification_runs WHERE task_id=?
               UNION ALL
-              SELECT id AS event_id, 'outcome' AS source, decision AS status, created_at, rowid AS event_rowid, 60 AS priority FROM outcome_reviews WHERE task_id=?
-              UNION ALL
               SELECT id AS event_id, 'completion' AS source, CASE WHEN actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, created_at, rowid AS event_rowid, 70 AS priority FROM task_completions WHERE task_id=?
             )
             ORDER BY created_at DESC, priority DESC, event_rowid DESC
             LIMIT 1
             """,
-            (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),
+            (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),
         ).fetchone()
         return self._decode_row(row) if row else None
 

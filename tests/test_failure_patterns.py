@@ -8,11 +8,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.cli import main
-from nilo.failure import (
-    SEED_FAILURE_PATTERNS,
-    match_failure_patterns,
-    recurrence_evidence_issues,
-)
 from nilo.store import Store
 from nilo.timeutil import now_iso
 
@@ -46,15 +41,8 @@ passed
 """
 
 
-class FailurePatternTests(unittest.TestCase):
-    def test_claude_review_instruction_matches_cli_fallback_pattern(self) -> None:
-        task = {"title": "Claudeでレビューして", "description": "", "acceptance_criteria": [], "task_type": "review"}
-
-        matches = match_failure_patterns(SEED_FAILURE_PATTERNS, task)
-
-        self.assertIn("failure_mcp_review_cli_fallback", [pattern["id"] for pattern, _ in matches])
-
-    def test_matched_pattern_injects_cli_fallback_ban_and_required_evidence(self) -> None:
+class FailurePatternPurgeTests(unittest.TestCase):
+    def test_claude_review_instruction_does_not_inject_recurrence_prevention(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             with redirect_stdout(io.StringIO()):
@@ -78,26 +66,66 @@ class FailurePatternTests(unittest.TestCase):
                 main(["--db", str(db), "instruct", "--task", "task_review"])
 
             body = output.getvalue()
-            self.assertIn("failure_mcp_review_cli_fallback", body)
-            self.assertIn("Do not invoke claude, claude -p, or any Claude CLI fallback", body)
-            self.assertIn("Created review_request id, or a clear callable-tool-unavailable result.", body)
+            self.assertNotIn("Recurrence prevention", body)
+            self.assertNotIn("failure_mcp_review_cli_fallback", body)
+            self.assertNotIn("## 今回必須の行動規則", body)
+            self.assertNotIn("## 参考にする成功パターン", body)
 
             store = Store(db)
+            matches = store.list_where("task_failure_pattern_matches", "task_id=?", ("task_review",))
+            patterns = store.list_where("failure_patterns")
             instruction = store.latest_for_task("instructions", "task_review")
             store.close()
-            self.assertEqual(instruction["applied_failure_pattern_ids"], ["failure_mcp_review_cli_fallback"])
+            self.assertEqual(matches, [])
+            self.assertEqual(patterns, [])
+            self.assertEqual(instruction["applied_rule_ids"], [])
+            self.assertEqual(instruction["applied_failure_pattern_ids"], [])
 
-    def test_mcp_review_pattern_requires_review_request_or_unavailable_evidence(self) -> None:
-        pattern = next(pattern for pattern in SEED_FAILURE_PATTERNS if pattern["id"] == "failure_mcp_review_cli_fallback")
+    def test_report_import_keeps_failure_logs_without_pattern_rows(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            report = root / "report.md"
+            report.write_text(REPORT.replace("passed", "TODO"), encoding="utf-8")
 
-        issues = recurrence_evidence_issues(REPORT, [pattern])
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_review",
+                        "--title",
+                        "Claudeでレビューして",
+                    ]
+                )
+                main(["--db", str(db), "instruct", "--task", "task_review"])
+                main(["--db", str(db), "report", "import", "--task", "task_review", "--file", str(report)])
 
-        self.assertIn(
-            "recurrence prevention missing evidence (failure_mcp_review_cli_fallback): review_request id or callable-tool-unavailable result",
-            issues,
-        )
+            store = Store(db)
+            failures = store.list_where("failure_logs", "task_id=?", ("task_review",))
+            matches = store.list_where("task_failure_pattern_matches", "task_id=?", ("task_review",))
+            patterns = store.list_where("failure_patterns")
+            store.close()
+            self.assertTrue(failures)
+            self.assertEqual(matches, [])
+            self.assertEqual(patterns, [])
 
-    def test_missing_pattern_evidence_does_not_create_evidence_check_or_completion_readiness(self) -> None:
+    def test_pattern_schema_tables_remain_available(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "nilo.db")
+            try:
+                self.assertEqual(store.list_where("failure_patterns"), [])
+                self.assertEqual(store.list_where("task_failure_pattern_matches"), [])
+            finally:
+                store.close()
+
+    def test_completion_is_blocked_by_missing_current_verification_only(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -124,15 +152,12 @@ class FailurePatternTests(unittest.TestCase):
                     ]
                 )
                 main(["--db", str(db), "instruct", "--task", "task_review"])
-                output = io.StringIO()
-                with redirect_stdout(output):
-                    main(["--db", str(db), "report", "import", "--task", "task_review", "--file", str(report)])
+                main(["--db", str(db), "report", "import", "--task", "task_review", "--file", str(report)])
 
-            self.assertIn("report_form_status: present", output.getvalue())
             with self.assertRaisesRegex(SystemExit, "current verification run"):
                 main(["--db", str(db), "task", "complete", "--task", "task_review", "--actor", "ai", "--reason", "done"])
 
-    def test_pattern_missing_required_evidence_does_not_block_current_verification_completion(self) -> None:
+    def test_current_verification_allows_ai_completion_without_recurrence_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -196,70 +221,6 @@ class FailurePatternTests(unittest.TestCase):
             completion = store.latest_for_task("task_completions", "task_review")
             store.close()
             self.assertIsNotNone(completion)
-
-    def test_connectivity_pattern_result_requires_result_near_connectivity_check(self) -> None:
-        pattern = next(pattern for pattern in SEED_FAILURE_PATTERNS if pattern["id"] == "failure_integration_before_connectivity_check")
-        report = (
-            "# 完了報告\n\n"
-            "疎通確認コマンド: nilo mcp doctor\n\n"
-            + ("詳細説明。" * 90)
-            + "\n\n### テスト結果\npassed\n"
-        )
-
-        issues = recurrence_evidence_issues(report, [pattern])
-
-        self.assertIn(
-            "recurrence prevention missing evidence (failure_integration_before_connectivity_check): result of the connectivity check",
-            issues,
-        )
-
-    def test_connectivity_pattern_accepts_result_near_connectivity_check(self) -> None:
-        pattern = next(pattern for pattern in SEED_FAILURE_PATTERNS if pattern["id"] == "failure_integration_before_connectivity_check")
-        report = "# 完了報告\n\n疎通確認コマンド: nilo mcp doctor\n疎通確認結果: exit_code=0\n"
-
-        issues = recurrence_evidence_issues(report, [pattern])
-
-        self.assertNotIn(
-            "recurrence prevention missing evidence (failure_integration_before_connectivity_check): result of the connectivity check",
-            issues,
-        )
-
-    def test_mcp_external_tool_task_matches_connectivity_pattern(self) -> None:
-        task = {
-            "title": "MCP reviewer 連携を実装する",
-            "description": "",
-            "acceptance_criteria": [],
-            "task_type": "implementation",
-        }
-
-        matches = match_failure_patterns(SEED_FAILURE_PATTERNS, task)
-
-        self.assertIn("failure_integration_before_connectivity_check", [pattern["id"] for pattern, _ in matches])
-
-    def test_normal_task_does_not_inject_recurrence_prevention(self) -> None:
-        with TemporaryDirectory() as directory:
-            db = Path(directory) / "nilo.db"
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "task",
-                        "create",
-                        "--project",
-                        "project_test",
-                        "--id",
-                        "task_docs",
-                        "--title",
-                        "READMEの誤字を修正する",
-                    ]
-                )
-            output = io.StringIO()
-            with redirect_stdout(output):
-                main(["--db", str(db), "instruct", "--task", "task_docs"])
-
-            self.assertNotIn("Recurrence prevention", output.getvalue())
 
 
 if __name__ == "__main__":

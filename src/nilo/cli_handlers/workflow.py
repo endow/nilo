@@ -15,14 +15,12 @@ from ..cli import (
 )
 from ..agent_report_import import import_agent_report
 from ..cli_support import make_id, read_text_or_exit
-from ..failure import refresh_task_failure_pattern_matches, select_rules
 from ..gitmeta import head_commit
 from ..guard import evaluate_evidence
 from ..instruction import build_instruction, build_understanding_prompt
 from ..project_model import default_project_row
 from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
-from ..success_logic import record_success_pattern_usage, select_success_patterns
 from ..task_logic import outcome_status
 from ..timeutil import now_iso
 from ..verification import run_local_verification
@@ -98,40 +96,18 @@ def cmd_instruct(args: argparse.Namespace) -> None:
         store.update("tasks", task["id"], {"base_commit": head_commit(Path.cwd())})
         task = store.get("tasks", task["id"])
 
-        rules = store.list_where(
-            "derived_rules",
-            "project_id=? AND manually_disabled=0 AND state IN ('new', 'active')",
-            (project["id"],),
-        )
-        selected = select_rules(rules, task["title"], task["degradation_mode"] == "degraded")
-        success_patterns = select_success_patterns(store, project["id"], task)
-        failure_patterns = refresh_task_failure_pattern_matches(store, task)
-        body, report_format = build_instruction(project, task, selected, success_patterns, failure_patterns)
-        record_success_pattern_usage(store, success_patterns)
+        body, report_format = build_instruction(project, task)
         created_at = now_iso()
         instruction = {
             "id": make_id("instruction"),
             "task_id": task["id"],
-            "applied_rule_ids": [rule["id"] for rule, _ in selected],
-            "applied_failure_pattern_ids": [pattern["id"] for pattern in failure_patterns],
+            "applied_rule_ids": [],
             "degradation_mode": task["degradation_mode"],
             "body_md": body,
             "report_format_md": report_format,
             "created_at": created_at,
         }
         store.insert("instructions", instruction)
-        for rule, score in selected:
-            store.insert(
-                "active_instruction_rules",
-                {
-                    "id": make_id("active_rule"),
-                    "task_id": task["id"],
-                    "instruction_id": instruction["id"],
-                    "derived_rule_id": rule["id"],
-                    "selection_score": score,
-                    "created_at": created_at,
-                },
-            )
         print(body)
     finally:
         store.close()
@@ -276,19 +252,6 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
         }
         if accepted:
             store.insert("task_completions", row)
-        else:
-            outcome = {
-                "id": row["id"],
-                "task_id": args.task,
-                "agent_report_id": latest_report["id"] if latest_report else None,
-                "evidence_check_id": None,
-                "decision": decision,
-                "reason": args.reason,
-                "concerns": concerns,
-                "rework_required": decision in ("rejected", "rework_required"),
-                "created_at": row["created_at"],
-            }
-            store.insert("outcome_reviews", outcome)
         if decision in ("rejected", "rework_required"):
             severity = "high" if decision == "rejected" else "medium"
             record_failure_and_rule(
@@ -301,7 +264,8 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
                 severity,
             )
         print(f"status: {outcome_status(decision)}")
-        print(f"{'task_completion' if accepted else 'outcome_review'}: {row['id']}")
+        if accepted:
+            print(f"task_completion: {row['id']}")
     finally:
         store.close()
 

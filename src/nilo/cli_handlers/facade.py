@@ -5,7 +5,7 @@ import io
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from ..failure import deterministic_id, matched_failure_patterns_for_task, recurrence_prevention_summary_lines
+from ..failure import deterministic_id
 from ..store import Store
 from ..timeutil import now_iso
 from .task import cmd_task_complete, cmd_task_create
@@ -66,11 +66,6 @@ def print_facade_next_for_task(store: Store, task_id: str) -> None:
     print(f"task: {task['id']}")
     print(f"title: {task['title']}")
     print(f"status: {status}")
-    patterns = matched_failure_patterns_for_task(store, task_id)
-    if patterns:
-        print("Recurrence prevention:")
-        for line in recurrence_prevention_summary_lines(patterns):
-            print(line)
     print("next:")
     pending_review = p.latest_pending_review_request(store, task_id)
     if pending_review:
