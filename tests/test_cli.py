@@ -5788,10 +5788,12 @@ close 済み commitment を表示できるようにした。
 
             prompt = root / ".nilo" / "reviews" / f"{request_id}_prompt.md"
             template = root / ".nilo" / "reviews" / f"{request_id}.md"
+            default_prompt = Path(".nilo") / "reviews" / f"{request_id}_prompt.md"
+            default_template = Path(".nilo") / "reviews" / f"{request_id}.md"
             self.assertTrue(prompt.exists())
             self.assertTrue(template.exists())
-            self.assertIn(f"review_context: .nilo\\reviews\\{request_id}_prompt.md", prepare_output.getvalue())
-            self.assertIn(f"review_template: .nilo\\reviews\\{request_id}.md", template_output.getvalue())
+            self.assertIn(f"review_context: {default_prompt}", prepare_output.getvalue())
+            self.assertIn(f"review_template: {default_template}", template_output.getvalue())
             self.assertIn("# Review Request", prompt.read_text(encoding="utf-8"))
             self.assertIn("# ReviewResult", template.read_text(encoding="utf-8"))
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import tomllib
@@ -105,23 +104,21 @@ def find_executable(command: str, env: dict[str, str] | None = None) -> str | No
                     return str(suffixed)
         return None
     path = (env or os.environ).get("PATH")
-    resolved = shutil.which(command, path=path)
-    if resolved:
-        return resolved
     search_dirs = (path or "").split(os.pathsep)
     suffixes = WINDOWS_EXECUTABLE_EXTENSIONS if sys.platform == "win32" else WINDOWS_EXECUTABLE_EXTENSIONS[:2]
     lower_command = command.casefold()
     for directory in search_dirs:
         if not directory:
             continue
+        direct = Path(directory) / command
+        if direct.exists():
+            return str(direct)
         for suffix in suffixes:
+            if lower_command.endswith(suffix):
+                continue
             executable = Path(directory) / f"{command}{suffix}"
             if executable.exists():
                 return str(executable)
-            if lower_command.endswith(suffix):
-                executable = Path(directory) / command
-                if executable.exists():
-                    return str(executable)
     return None
 
 
