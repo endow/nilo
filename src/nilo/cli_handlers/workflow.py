@@ -50,6 +50,21 @@ def install_agent_blocks(project: dict, targets: list[str]) -> None:
         print(f"updated: {path.name}")
 
 
+def ensure_nilo_gitignore_entry() -> None:
+    path = Path.cwd() / ".gitignore"
+    entry = ".nilo/"
+    current = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = current.splitlines()
+    if any(line.strip().rstrip("/") == ".nilo" for line in lines):
+        return
+
+    prefix = current
+    if prefix and not prefix.endswith(("\n", "\r")):
+        prefix += "\n"
+    path.write_text(f"{prefix}{entry}\n", encoding="utf-8")
+    print("updated: .gitignore")
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     project_id = Path.cwd().name
     store = Store(args.db)
@@ -62,6 +77,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             store.insert("projects", project)
             print(f"created project: {project_id}")
         install_agent_blocks(project, list(AGENT_TARGET_FILES))
+        ensure_nilo_gitignore_entry()
     finally:
         store.close()
 

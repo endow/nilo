@@ -1117,14 +1117,17 @@ class CliTests(unittest.TestCase):
             self.assertIn("created project: sample_project", output.getvalue())
             self.assertIn("updated: AGENTS.md", output.getvalue())
             self.assertIn("updated: CLAUDE.md", output.getvalue())
+            self.assertIn("updated: .gitignore", output.getvalue())
             agents = (root / "AGENTS.md").read_text(encoding="utf-8")
             claude = (root / "CLAUDE.md").read_text(encoding="utf-8")
+            gitignore = (root / ".gitignore").read_text(encoding="utf-8")
             self.assertIn("nilo status --project sample_project", agents)
             self.assertIn("nilo status --project sample_project", claude)
             self.assertIn("nilo next --project sample_project", agents)
             self.assertIn("Nilo MCP が利用可能な場合は、作業開始前に", agents)
             self.assertIn("現在地と次の許可 action を確認する", agents)
             self.assertIn("表の入口", agents)
+            self.assertIn(".nilo/", gitignore)
 
     def test_init_is_repeatable_for_existing_project(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1151,6 +1154,27 @@ class CliTests(unittest.TestCase):
             self.assertIn("project exists: sample_project", output.getvalue())
             self.assertEqual(agents.count("<!-- BEGIN NILO MANAGED BLOCK -->"), 1)
             self.assertEqual(claude.count("<!-- BEGIN NILO MANAGED BLOCK -->"), 1)
+            self.assertEqual((root / ".gitignore").read_text(encoding="utf-8").splitlines().count(".nilo/"), 1)
+
+    def test_init_keeps_existing_nilo_gitignore_entry(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "sample_project"
+            root.mkdir()
+            (root / ".gitignore").write_text("build/\n.nilo\n", encoding="utf-8")
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "init"])
+            finally:
+                os.chdir(previous_cwd)
+
+            gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+            self.assertNotIn("updated: .gitignore", output.getvalue())
+            self.assertEqual(gitignore.splitlines().count(".nilo"), 1)
+            self.assertEqual(gitignore.splitlines().count(".nilo/"), 0)
 
     def test_report_import_creates_evidence_check_and_rules(self) -> None:
         with TemporaryDirectory() as directory:
