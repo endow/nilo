@@ -82,7 +82,8 @@ nilo init
 作成される主なものは次の通りです。
 
 - `.nilo/nilo.db`: 作業状態を保存する SQLite DB
-- `AGENTS.md` / `CLAUDE.md` への Nilo 手順の追記
+- `.nilo/agent-instructions.md`: AI エージェント向けの共通 runtime 指示
+- `AGENTS.override.md` / `CLAUDE.local.md`: 作業ツリーごとのローカル指示ファイル
 - 必要に応じたレポートや検証ログの置き場
 
 初期化後は、AI エージェントに普段どおり依頼できます。
@@ -191,7 +192,35 @@ Nilo は Codex、Claude Code、ChatGPT、ローカル LLM など、特定の AI 
 
 AI エージェントは、通常の CLI または MCP（Model Context Protocol）を通じて Nilo にアクセスします。MCP を使うと、AI は会話中の tool として Nilo の状態を読み、検証結果やレビュー結果を書き戻せます。
 
-`nilo init` は、AI エージェント向けの手順を `AGENTS.md` や `CLAUDE.md` に書き込みます。人間が読む README ではなく、AI が作業中に参照するための手順です。
+`nilo init` は、AI エージェント向けの runtime 指示を作業ツリーごとのローカルファイルへ書き込みます。通常、`CLAUDE.md` や `AGENTS.md` のような git 管理されるファイルへ現在状態を書き込みません。
+
+### AI エージェント向けのローカル指示
+
+Nilo は通常、`CLAUDE.md` や `AGENTS.md` のような git 管理されるファイルへ現在状態を書き込みません。
+
+代わりに、作業ツリーごとのローカルファイルへ出力します。
+
+- Claude Code: `CLAUDE.local.md`
+- Codex: `AGENTS.override.md`
+- 共通の生成本文: `.nilo/agent-instructions.md`
+
+これらは Nilo が生成する runtime file であり、commit しません。
+
+`.nilo/` や local override file の ignore 設定は、tracked `.gitignore` ではなく Git の local exclude に追加されます。そのため、新しい clone や作業ツリーでは最初に `nilo init` を実行してください。`nilo init` が `.git/info/exclude` 相当の local ignore を整えます。
+
+Git linked worktree では、Git が返す `info/exclude` の場所が common git directory 側になることがあります。その場合、ignore 設定は同じ repository の worktree 間で共有されます。
+
+古いバージョンの Nilo が `CLAUDE.md` / `AGENTS.md` に自動生成 block を書いていた場合、`nilo init` は警告と移行コマンドを表示します。`nilo init` 自体は tracked file を変更しません。
+
+```bash
+nilo migrate
+```
+
+は移行できる古い block を診断します。実際に tracked file から古い Nilo block を削除し、local runtime files を更新する場合だけ次を実行します。
+
+```bash
+nilo migrate --apply
+```
 
 AI エージェントには、次のように依頼します。
 

@@ -23,6 +23,12 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
 
     init = sub.add_parser("init")
     init.set_defaults(func=handlers.cmd_init)
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument("--fix-local-instructions", action="store_true")
+    doctor.set_defaults(func=handlers.cmd_doctor)
+    migrate = sub.add_parser("migrate")
+    migrate.add_argument("--apply", action="store_true")
+    migrate.set_defaults(func=handlers.cmd_migrate)
 
     register_run(sub, handlers)
     register_facade(sub, handlers)
