@@ -4,65 +4,220 @@
 >
 > The Japanese README is the primary document. This English README is a supplementary introduction.
 
-## What is Nilo?
+Nilo is a local development tool for not taking an AI agent's "done" at face value.
 
-Nilo is a workflow discipline tool for AI-assisted development.
+When you delegate development work to Codex, Claude Code, or another coding agent, the conversation can look productive while important questions stay unclear:
 
-It does not treat an AI agent's done report as sufficient proof that work is complete. Instead, it asks for evidence, reviewable state, and human confirmation.
+- what the agent is working on now
+- what conditions define completion
+- whether the work was actually verified
+- whether the verification log is only self-reported or actually recorded
+- whether review findings are still unresolved
+- who finally accepted the work as complete
 
-Nilo is not a security boundary. It is an evidence, audit, and workflow discipline layer for solo developers and small teams using coding agents.
+Nilo records the **current state, completion criteria, verification evidence, and review results** for AI-assisted development work inside the project's `.nilo/` directory.
 
-## Why Nilo exists
+It lets you keep the speed of AI-assisted coding while making the final acceptance decision from recorded evidence.
 
-AI coding agents are useful, but they can report completion before the work is actually verified.
+```text
+Human asks an AI agent to do work
+    ↓
+AI uses Nilo to record task state, checks, reports, and reviews
+    ↓
+Human decides to accept, send back, or ask for more verification
+```
 
-Nilo exists to make that gap visible.
+Nilo is not a tool that expects humans to memorize and run commands all day. Most operations are meant to be run by AI agents behind the scenes. Humans should look at what is happening, what remains unresolved, and whether the work is acceptable.
 
-It helps record:
+Nilo is not a task management app. It is a local workbench for keeping the evidence of AI-assisted development available for later inspection.
 
-- what was requested
-- what was changed
-- what evidence was provided
-- what still needs human review
-- what failures should not be repeated
+Nilo is currently an experimental tool for stabilizing AI-assisted development workflows. APIs, database schema, and CLI output may change. It is not a replacement for production safety, sandboxing, authentication, CI, or final human judgment. Nilo is not a security boundary; it records evidence, audit history, and workflow discipline.
 
-## Core idea
+## Why Nilo Exists
 
-Evidence before trust.
+In AI-assisted coding, the conversation alone often does not preserve the evidence needed to understand where the work stands or why it should be considered complete.
 
-Nilo treats completion as a state that must be supported by evidence, not as a statement made by an AI agent.
+If completion criteria, verification logs, review results, and final acceptance are ambiguous, it becomes hard to check later whether the task was really done.
 
-## Who is it for?
+Nilo records that ambiguity in `.nilo/nilo.db`, so you do not have to rely only on the AI agent's own completion report.
 
-Nilo is designed for people who use AI coding agents in real development work and want a lightweight way to keep the process honest.
+## Core Idea
 
-It is especially focused on:
+> Evidence Before Trust
+> Look at real changes and verification evidence before trusting an AI agent's report.
 
-- solo developers
-- small teams
-- AI-assisted coding workflows
-- review-before-completion discipline
+When an AI agent says "done", Nilo treats that as a candidate state, not final completion. Completion happens only after the criteria, changed files, verification results, and review results are inspected and accepted.
 
-## What Nilo is not
+Nilo records things such as:
 
-Nilo is not:
+- the current task
+- instructions given to the AI agent
+- completion criteria
+- verification commands and results
+- the git snapshot associated with checks and reviews
+- AI reports
+- human or AI review results
+- failures that should not be repeated
+- policy notes for later reference
 
-- a security sandbox
-- a full project management system
-- a replacement for tests or code review
-- a general-purpose agent framework
+Verification and review results are tied to a specific code state. If the code changes after a check, Nilo can distinguish older evidence as `stale` instead of treating it as evidence for the current tree.
 
-## How Nilo fits into a workflow
+## Install
 
-In a typical workflow, a human asks an AI agent to do a task. The agent uses Nilo to record the task state, evidence, checks, reports, and review results. The human then decides whether to accept the work, send it back, or ask for more verification.
+Nilo requires Python 3.12 or later and Git.
 
-The CLI and MCP integrations are implementation details for agents and advanced users. The main point is the discipline: completion should be reviewable, not just asserted.
+```bash
+git clone https://github.com/endow/nilo.git
+cd nilo
+python -m pip install -e .
+```
 
-## Current status
+You can check this repository with:
 
-Nilo is under active development. APIs, database schema, and CLI output may change.
+```bash
+python -m unittest discover tests
+nilo status --project nilo
+```
 
-The Japanese documentation is the primary source of truth. The English documentation may lag behind the Japanese version.
+## Update Nilo
+
+If Nilo was installed from a git checkout, update it with:
+
+```bash
+nilo upgrade
+```
+
+This checks the local repository state, runs `git pull --ff-only`, reinstalls Nilo, and runs migrations. If `.nilo/nilo.db` exists, Nilo creates a backup under `.nilo/backups/` before migration.
+
+If local changes are present, Nilo stops before updating. Commit, stash, or discard those changes before running `nilo upgrade` again.
+
+To see what would run without applying changes:
+
+```bash
+nilo upgrade --dry-run
+```
+
+## Getting Started
+
+Initialize Nilo once at the root of a project:
+
+```bash
+nilo init
+```
+
+This creates or updates local runtime files such as:
+
+- `.nilo/nilo.db`: SQLite database for task state
+- `.nilo/agent-instructions.md`: shared runtime instructions for AI agents
+- `AGENTS.override.md` / `CLAUDE.local.md`: per-worktree local instruction files
+
+After that, ask your AI agent as usual:
+
+```text
+Update the README. Check Nilo's state before you start.
+```
+
+The agent should check the current state, create or continue a task, read the instructions, run verification, and report back through Nilo.
+
+## Human Workflow
+
+Humans usually do not need to know the command set. The normal interface is natural language:
+
+```text
+What's next?
+```
+
+```text
+Is anything still unresolved?
+```
+
+```text
+Did verification pass?
+```
+
+```text
+Can I accept this as complete?
+```
+
+The AI agent reads Nilo as needed and explains the current state. The human decides whether to accept the work, send it back, or ask for additional verification.
+
+Completion, rejection, commits, and final direction changes are human decision points. Actor names in Nilo are audit labels, not OS-level or Git-level authorization. Nilo records who accepted what, but it is not an authorization system that can fully prevent misuse.
+
+## What AI Agents Do
+
+AI agents use Nilo behind the scenes to:
+
+- check the current state
+- create task units
+- read instructions and completion criteria
+- record verification results
+- leave work reports
+- request human or AI review
+- import review results
+- return to unresolved findings when needed
+
+These operations exist to preserve the evidence behind an AI agent's report. They are not meant to be a daily manual checklist for humans.
+
+## AI Agent Integration
+
+Nilo is not tied to a specific AI agent. Codex, Claude Code, ChatGPT, local LLMs, and other tools can use it through the CLI or MCP (Model Context Protocol).
+
+MCP lets an AI agent read Nilo state and write verification or review results through conversation tools.
+
+`nilo init` writes runtime instructions to local files rather than tracked files such as `CLAUDE.md` or `AGENTS.md`:
+
+- Claude Code: `CLAUDE.local.md`
+- Codex: `AGENTS.override.md`
+- Shared generated body: `.nilo/agent-instructions.md`
+
+These files are runtime files and should not be committed. Nilo uses Git local exclude instead of tracked `.gitignore` for `.nilo/` and local override files. Run `nilo init` in each new clone or worktree so the local ignore settings are prepared.
+
+Older versions of Nilo could write generated blocks into `CLAUDE.md` or `AGENTS.md`. To inspect old blocks:
+
+```bash
+nilo migrate
+```
+
+To remove old generated blocks from tracked files and update local runtime files:
+
+```bash
+nilo migrate --apply
+```
+
+For review integration, the important point is that a real reviewer or agent session exists and that its result is recorded in Nilo. A connection that only appears available, or a fixed imported file, is not treated as a real review.
+
+Reviewers are described by capability and availability, not only by names such as Codex or Claude Code. Local LLMs and OpenAI-compatible endpoints can be registered as thin local reviewers, but their low confidence and limitations are saved as limitations. They are not direct evidence for task completion. Completion still depends on tests, command output, diff inspection, and any needed human or trusted reviewer approval.
+
+## Stored Files
+
+Nilo stores project state in `.nilo/nilo.db`.
+
+This repository does not commit local runtime files such as:
+
+- `.nilo/`: state database, verification logs, temporary reports
+- `HANDOFF.md`: optional human handoff file
+- `.mcp.json`: local MCP settings
+- Python caches, virtual environments, coverage output, and build artifacts
+
+## Developer Notes
+
+Use `--help` for CLI details:
+
+```bash
+nilo --help
+nilo start --help
+nilo check --help
+nilo review --help
+nilo roadmap --help
+```
+
+Run tests with:
+
+```bash
+python -m unittest discover tests
+```
+
+For design details, see [docs/design.md](docs/design.md).
 
 ## License
 
