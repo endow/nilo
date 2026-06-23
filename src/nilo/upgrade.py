@@ -5,11 +5,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from importlib import metadata
 from pathlib import Path
 from typing import Callable
 
-from . import __version__
 from .store import default_db_path
 
 
@@ -21,13 +19,6 @@ class CommandResult:
 
 
 RunCommand = Callable[[list[str], Path], CommandResult]
-
-
-def nilo_version() -> str:
-    try:
-        return metadata.version("nilo")
-    except metadata.PackageNotFoundError:
-        return __version__
 
 
 def run_command(command: list[str], cwd: Path) -> CommandResult:
@@ -112,8 +103,6 @@ def print_failed_command(result: CommandResult | None) -> None:
 def run_upgrade(*, dry_run: bool = False, db_path: Path | None = None, run: RunCommand = run_command) -> int:
     print("Nilo upgrade")
     print()
-    current_version = nilo_version()
-    print(f"Current version: {current_version}")
 
     repo, repo_error = repo_root_from_package(run)
     if repo is None:
@@ -165,7 +154,7 @@ def run_upgrade(*, dry_run: bool = False, db_path: Path | None = None, run: RunC
             if dry_run:
                 print("Dry run: no update operations would be run.")
             print("Done.")
-            print(f"Nilo is already {current_version}.")
+            print(f"Nilo is up to date with {upstream}.")
             return 0
 
         print(f"Update available: {local_rev[:12]} -> {remote_rev[:12]}")
@@ -218,19 +207,11 @@ def run_upgrade(*, dry_run: bool = False, db_path: Path | None = None, run: RunC
             raise UpgradeError("Upgrade failed: migrations did not complete.", migrate)
         print("OK: migrations completed")
 
-        updated_version = installed_version_after_upgrade(repo, run)
         print()
         print("Done.")
-        print(f"Nilo is now {updated_version}.")
+        print(f"Nilo was updated from {local_rev[:12]} to {remote_rev[:12]}.")
         return 0
     except UpgradeError as exc:
         print(str(exc))
         print_failed_command(exc.result)
         return 1
-
-
-def installed_version_after_upgrade(repo: Path, run: RunCommand = run_command) -> str:
-    result = run([sys.executable, "-m", "nilo", "--version"], repo)
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip().replace("nilo ", "", 1)
-    return nilo_version()

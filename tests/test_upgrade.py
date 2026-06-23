@@ -47,8 +47,6 @@ class FakeGitRunner:
             return CommandResult(0, "installed", "")
         if command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"]:
             return CommandResult(0, "migrated", "")
-        if command == [sys.executable, "-m", "nilo", "--version"]:
-            return CommandResult(0, "nilo 0.2.0", "")
         return CommandResult(1, "", f"unexpected command: {command}")
 
     def command_was_run(self, expected: list[str]) -> bool:
@@ -114,6 +112,9 @@ class UpgradeTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("Already up to date.", output.getvalue())
+        self.assertIn("Nilo is up to date with origin/main.", output.getvalue())
+        self.assertNotIn("Nilo is already", output.getvalue())
+        self.assertNotIn("Current version:", output.getvalue())
         self.assertTrue(runner.command_was_run(["git", "fetch"]))
         self.assertFalse(runner.command_was_run(["git", "pull", "--ff-only"]))
         self.assertFalse(runner.command_prefix_was_run([sys.executable, "-m", "pip", "install"]))
@@ -138,7 +139,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertTrue(runner.command_prefix_was_run([sys.executable, "-m", "pip", "install"]))
         self.assertTrue(any(command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"] for command in runner.commands))
         self.assertEqual(len(backups), 1)
-        self.assertIn("Nilo is now 0.2.0.", output.getvalue())
+        self.assertIn("Nilo was updated from aaaaaaaaaaaa to bbbbbbbbbbbb.", output.getvalue())
 
     def test_upgrade_default_db_path_is_passed_to_migration(self) -> None:
         with TemporaryDirectory() as directory:
