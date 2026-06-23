@@ -6,18 +6,9 @@
 
 Nilo is a local development tool for not taking an AI agent's "done" at face value.
 
-When you delegate development work to Codex, Claude Code, or another coding agent, the conversation can look productive while important questions stay unclear:
+Nilo records the **current state, completion criteria, verification evidence, and review results** for work delegated to Codex, Claude Code, ChatGPT, local LLMs, and other AI agents inside the project's `.nilo/` directory.
 
-- what the agent is working on now
-- what conditions define completion
-- whether the work was actually verified
-- whether the verification log is only self-reported or actually recorded
-- whether review findings are still unresolved
-- who finally accepted the work as complete
-
-Nilo records the **current state, completion criteria, verification evidence, and review results** for AI-assisted development work inside the project's `.nilo/` directory.
-
-It lets you keep the speed of AI-assisted coding while making the final acceptance decision from recorded evidence.
+It keeps workflow state out of a vendor's chat history, so humans can inspect the same evidence and make an acceptance decision even when AI agents are swapped.
 
 ```text
 Human asks an AI agent to do work
@@ -26,6 +17,16 @@ AI uses Nilo to record task state, checks, reports, and reviews
     ↓
 Human decides to accept, send back, or ask for more verification
 ```
+
+When you delegate development work to Codex, Claude Code, or another coding agent, the conversation can look productive while important questions stay unclear:
+
+- what the agent is working on now
+- what conditions define completion
+- whether the work was actually verified
+- whether the verification log is only self-reported or actually recorded
+- whether review findings are still unresolved
+- who finally accepted the work as complete
+- whether the workflow state is locked inside a specific vendor's chat history or session
 
 Nilo is not a tool that expects humans to memorize and run commands all day. Most operations are meant to be run by AI agents behind the scenes. Humans should look at what is happening, what remains unresolved, and whether the work is acceptable.
 
@@ -39,12 +40,20 @@ In AI-assisted coding, the conversation alone often does not preserve the eviden
 
 If completion criteria, verification logs, review results, and final acceptance are ambiguous, it becomes hard to check later whether the task was really done.
 
-Nilo records that ambiguity in `.nilo/nilo.db`, so you do not have to rely only on the AI agent's own completion report.
+If workflow state is locked inside a specific AI vendor's chat history or session, context is lost when you move the work to another agent.
+
+The more you switch between Codex, Claude Code, ChatGPT, and local LLMs, the more important it becomes to decide where the authoritative workflow record lives.
+
+Nilo records that ambiguity in `.nilo/nilo.db`, so you do not have to rely only on the AI agent's own completion report. It keeps workflow state in the project, where it can be inspected later.
 
 ## Core Idea
 
 > Evidence Before Trust
 > Look at real changes and verification evidence before trusting an AI agent's report.
+
+Another premise is that the authoritative workflow record should live in the project, not on the AI vendor's side.
+
+AI agents can be swapped. Completion criteria, verification evidence, review results, and acceptance decisions should remain in the project.
 
 When an AI agent says "done", Nilo treats that as a candidate state, not final completion. Completion happens only after the criteria, changed files, verification results, and review results are inspected and accepted.
 
