@@ -51,6 +51,8 @@ Nilo records that ambiguity in `.nilo/nilo.db`, so you do not have to rely only 
 > Evidence Before Trust
 > Look at real changes and verification evidence before trusting an AI agent's report.
 
+Here, evidence does not mean an absolute authenticity guarantee. In Nilo, evidence means verification results, reviewer results, git snapshots, and human completion decisions recorded through the normal path separately from an AI agent's own report.
+
 Another premise is that the authoritative workflow record should live in the project, not on the AI vendor's side.
 
 AI agents can be swapped. Completion criteria, verification evidence, review results, and acceptance decisions should remain in the project.
@@ -70,6 +72,34 @@ Nilo records things such as:
 - policy notes for later reference
 
 Verification and review results are tied to a specific code state. If the code changes after a check, Nilo can distinguish older evidence as `stale` instead of treating it as evidence for the current tree.
+
+## The Boundary Nilo Enforces
+
+Nilo is not a security boundary that prevents malicious users or direct writes to the database.
+
+Nilo is designed for cooperative AI agents such as Codex, Claude Code, ChatGPT, and local LLMs working through Nilo's normal CLI / MCP paths.
+
+Within that scope, Nilo prevents these states from being confused:
+
+- a state where an AI agent only reported "done"
+- a state where Nilo actually ran and recorded a verification command
+- a state where an external AI agent reported verification
+- a state where a reviewer left findings against a specific snapshot
+- a state where a human accepted a specific snapshot as complete
+
+These are not treated as the same thing.
+
+Verification results carry a `source` that distinguishes whether the result was executed by Nilo or reported by an external AI agent. In common cases, a result run locally by Nilo is `nilo_executed`, while a result submitted by an external AI agent is `agent_reported`.
+
+Verification, review, and completion decisions are also saved with the `git_head`, `git_diff_hash`, and `working_tree_dirty` they targeted. If the code changes after the work, older checks and reviews are not treated as evidence for current completion; Nilo distinguishes them as `stale` when displaying state.
+
+Unresolved reviewer findings remain visible as items to check before completion. `actor=ai` cannot finalize task completion by its own judgment, and a human decision to accept a specific snapshot is recorded separately from the AI agent's work report.
+
+Nilo prevents a cooperative AI agent, on the normal path, from skipping work, presenting self-reports as verified results, or moving toward completion while hiding old verification or unresolved findings.
+
+Nilo does not prevent direct database modification, misuse of OS privileges, malicious actors, or a human forcing a completion decision.
+
+For the detailed design boundary, see [docs/design.md](docs/design.md).
 
 ## Install
 
@@ -193,9 +223,9 @@ To remove old generated blocks from tracked files and update local runtime files
 nilo migrate --apply
 ```
 
-For review integration, the important point is that a real reviewer or agent session exists and that its result is recorded in Nilo. A connection that only appears available, or a fixed imported file, is not treated as a real review.
+For review integration, the important point is that a real reviewer or agent session exists and that its result is recorded in Nilo. A connection that only appears available, or a fixed imported file, is not used as direct evidence for completion.
 
-Reviewers are described by capability and availability, not only by names such as Codex or Claude Code. Local LLMs and OpenAI-compatible endpoints can be registered as thin local reviewers, but their low confidence and limitations are saved as limitations. They are not direct evidence for task completion. Completion still depends on tests, command output, diff inspection, and any needed human or trusted reviewer approval.
+Review results are not a replacement for `VerificationRun`. Reviewers are described by capability, availability, limitations, and the target snapshot, not only by names such as Codex or Claude Code. Review results that do not match the current snapshot are distinguished as `stale`. Local LLMs and OpenAI-compatible endpoints can be registered as thin local reviewers, but their low confidence and limitations are saved as limitations. They are not direct evidence for task completion. Completion still depends on tests, command output, diff inspection, and any needed human or trusted reviewer approval.
 
 ## Stored Files
 

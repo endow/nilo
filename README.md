@@ -55,6 +55,8 @@ Nilo の中心にある考え方はシンプルです。
 > Evidence Before Trust  
 > AI の自己申告より、実体のある変更と検証証跡を先に見る。
 
+ここでいう Evidence は、絶対的な真正性保証ではありません。Nilo における Evidence とは、AI の自己申告とは別に、正規経路で記録された検証結果、reviewer 結果、git snapshot、人間の完了判断を指します。
+
 もうひとつの前提は、作業の正本を AI ベンダー側ではなく、プロジェクト側に置くことです。
 
 AI エージェントは入れ替わってよい。  
@@ -75,6 +77,34 @@ Nilo が残す主なものは次の通りです。
 - 後から参照するための方針メモ
 
 検証結果やレビュー結果は、特定のコード状態に対する記録です。作業後にコードが変わった場合、Nilo は古い検証やレビューを現在の証跡として扱わず、表示時に `stale` として区別します。
+
+## Nilo が守る境界
+
+Nilo は、悪意ある利用者や DB への直接書き込みを防ぐ security boundary ではありません。
+
+Nilo が対象にするのは、Codex、Claude Code、ChatGPT、ローカル LLM などの協力的な AI エージェントが、Nilo の CLI / MCP という正規経路を通って作業する場合です。
+
+その範囲で、Nilo は次の混同を防ぎます。
+
+- AI が「完了しました」と報告しただけの状態
+- Nilo が実際に検証コマンドを実行して記録した状態
+- 外部 AI が検証したと報告した状態
+- reviewer が特定 snapshot に対して指摘した状態
+- 人間が特定 snapshot を完了として受け入れた状態
+
+これらは同じものとして扱いません。
+
+検証結果には、それが Nilo によって実行されたものか、外部 AI が報告したものかを区別する `source` を持たせます。代表的には、Nilo がローカルで実行した結果は `nilo_executed`、外部 AI が提出した結果は `agent_reported` として扱います。
+
+また、検証・レビュー・完了判断は対象にした `git_head`、`git_diff_hash`、`working_tree_dirty` と結びつけて保存します。作業後にコードが変わった場合、古い検証やレビューは現在の完了根拠として扱わず、表示時に `stale` として区別します。
+
+未解決の reviewer 指摘は完了前の確認事項として残します。`actor=ai` は自己判断でタスクの完了を確定できず、人間が特定 snapshot を完了として受け入れた判断は、AI の作業報告とは別に記録します。
+
+Nilo が防ぐのは、協力的 AI が正規経路上で手を抜くこと、自己申告を検証済みのように見せること、古い検証や未解決指摘を隠して完了へ進めることです。
+
+Nilo は、DB の直接改竄、OS 権限の濫用、悪意ある actor、人間による強制的な完了判断を防ぐものではありません。
+
+詳細な設計境界は [docs/design.md](docs/design.md) を参照してください。
 
 ## インストール
 
@@ -278,9 +308,9 @@ Nilo の状態を見てから進めて。
 
 MCP や CLI の接続が使えない場合は、代替手段に逃げず、Nilo を読めないことを人間に報告するのが基本です。
 
-レビュー連携でも、人間が内部プロトコルを覚える必要はありません。重要なのは、実際にレビューした reviewer / agent セッションが存在し、その結果が Nilo に記録されていることです。「接続できているように見える」だけの状態や、固定ファイルを取り込んだだけの結果は、実体のあるレビューとして扱いません。
+レビュー連携でも、人間が内部プロトコルを覚える必要はありません。重要なのは、実際にレビューした reviewer / agent セッションが存在し、その結果が Nilo に記録されていることです。「接続できているように見える」だけの状態や、固定ファイルを取り込んだだけの結果は、完了判断の直接根拠にしません。
 
-Reviewer は Codex や Claude Code に限らず、`review_diff`、`summarize`、`propose_tests` などの capability と availability で扱います。ローカル LLM や OpenAI-compatible endpoint も thin local reviewer として登録できますが、local reviewer の低 confidence や limitations はそのまま保存され、task completion の直接根拠にはなりません。完了には引き続き tests、command output、diff inspection、必要な human / trusted reviewer approval が必要です。
+レビュー結果は `VerificationRun` の代わりではありません。Reviewer は Codex や Claude Code に限らず、`review_diff`、`summarize`、`propose_tests` などの capability、availability、limitations と、対象 snapshot に結びつけて扱います。現在の snapshot と一致しない review result は `stale` として区別します。ローカル LLM や OpenAI-compatible endpoint も thin local reviewer として登録できますが、local reviewer の低 confidence や limitations はそのまま保存され、task completion の直接根拠にはなりません。完了には引き続き tests、command output、diff inspection、必要な human / trusted reviewer approval が必要です。
 
 詳しい CLI、MCP、reviewer の仕様は、開発者向けのヘルプや設計文書で扱います。
 
