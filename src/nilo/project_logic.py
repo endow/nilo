@@ -709,6 +709,36 @@ def verification_working_tree_summary(verification_run: dict | None) -> str:
     return f"dirty ({count} file{'s' if count != 1 else ''})"
 
 
+def verification_snapshot_policy_summary(verification_run: dict | None) -> dict:
+    metadata = verification_run["metadata"] if verification_run else {}
+    excluded_paths = metadata.get("snapshot_excluded_paths", [])
+    hashed_paths = metadata.get("snapshot_hashed_paths", [])
+    reasons: dict[str, int] = {}
+    for item in excluded_paths:
+        reason = item.get("reason", "unknown") if isinstance(item, dict) else "unknown"
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return {
+        "observed_paths": len(metadata.get("working_tree_files", [])),
+        "hashed_paths": len(hashed_paths),
+        "skipped_paths": len(excluded_paths),
+        "skipped_reasons": reasons,
+    }
+
+
+def verification_snapshot_policy_lines(verification_run: dict | None) -> list[str]:
+    summary = verification_snapshot_policy_summary(verification_run)
+    if not summary["skipped_paths"]:
+        return []
+    reasons = ", ".join(f"{reason}={count}" for reason, count in sorted(summary["skipped_reasons"].items())) or "none"
+    return [
+        "snapshot:",
+        f"  observed paths: {summary['observed_paths']}",
+        f"  hashed paths: {summary['hashed_paths']}",
+        f"  skipped paths: {summary['skipped_paths']}",
+        f"  skipped reasons: {reasons}",
+    ]
+
+
 def unexecuted_verifications_for_task(status: str, verification_run: dict | None) -> list[str]:
     if verification_run:
         if verification_run["timed_out"]:
@@ -1042,6 +1072,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
                 "verification_working_tree_dirty": verification_working_tree_state(verification_run)["dirty"],
                 "verification_working_tree_available": verification_working_tree_state(verification_run)["available"],
                 "verification_working_tree_files": verification_working_tree_state(verification_run)["files"],
+                "verification_snapshot_policy": verification_snapshot_policy_summary(verification_run),
                 "pending_review_request": pending_review["id"] if pending_review else "",
                 "pending_review_reviewer": pending_review["reviewer"] if pending_review else "",
                 "pending_review_status": pending_review["status"] if pending_review else "",
@@ -1113,6 +1144,14 @@ def print_project_summary_text(summary: dict) -> None:
             print(f"- {task['id']} [{task['status']}] {task['task_type']} {task['risk_level']} {task['title']}")
             print(f"  latest_verification_run: {task['latest_verification_run']}")
             print(f"  verification_working_tree: {task['verification_working_tree']}")
+            policy = task.get("verification_snapshot_policy", {})
+            if policy.get("skipped_paths"):
+                reasons = ", ".join(f"{reason}={count}" for reason, count in sorted(policy.get("skipped_reasons", {}).items())) or "none"
+                print("  snapshot:")
+                print(f"    observed paths: {policy['observed_paths']}")
+                print(f"    hashed paths: {policy['hashed_paths']}")
+                print(f"    skipped paths: {policy['skipped_paths']}")
+                print(f"    skipped reasons: {reasons}")
             if task["pending_review_request"]:
                 print(
                     f"  pending_review_request: {task['pending_review_request']} "

@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from nilo.snapshot import DEFAULT_SNAPSHOT_MAX_FILE_BYTES, compact_snapshot, current_git_snapshot, evidence_status, max_snapshot_file_bytes
+
+
+def run_git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+
+
+def init_repo(root: Path) -> None:
+    run_git(root, "init")
+    run_git(root, "config", "user.email", "nilo@example.test")
+    run_git(root, "config", "user.name", "Nilo Test")
+    (root / "README.md").write_text("initial\n", encoding="utf-8")
+    run_git(root, "add", "README.md")
+    run_git(root, "commit", "-m", "initial")
+
+
+class SnapshotPolicyTests(unittest.TestCase):
+    def test_small_text_file_is_hashed_and_content_change_changes_hash(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            source = root / "src.txt"
+            source.write_text("first\n", encoding="utf-8")
+
+            first = current_git_snapshot(root)
+            source.write_text("second\n", encoding="utf-8")
+            second = current_git_snapshot(root)
+
+            self.assertIn("src.txt", first["snapshot_hashed_paths"])
+            self.assertIn("src.txt", first["observed_paths"])
+            self.assertNotEqual(first["git_diff_hash"], second["git_diff_hash"])
+
+    def test_niloignore_excludes_content_but_keeps_path_and_reason(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / ".niloignore").write_text("ignored/**\n", encoding="utf-8")
+            ignored_dir = root / "ignored"
+            ignored_dir.mkdir()
+            (ignored_dir / "data.txt").write_text("ignored content\n", encoding="utf-8")
+
+            snapshot = current_git_snapshot(root)
+
+            self.assertIn("ignored/data.txt", snapshot["observed_paths"])
+            self.assertNotIn("ignored/data.txt", snapshot["snapshot_hashed_paths"])
+            self.assertIn(("ignored/data.txt", "ignored"), {(item["path"], item["reason"]) for item in snapshot["snapshot_excluded_paths"]})
+            self.assertEqual(snapshot["snapshot_policy"]["ignore_file"], ".niloignore")
+
+    def test_large_file_is_recorded_without_content_hashing(self) -> None:
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {"NILO_SNAPSHOT_MAX_FILE_BYTES": "4"}):
+            root = Path(directory)
+            init_repo(root)
+            (root / "large.txt").write_text("too large\n", encoding="utf-8")
+
+            snapshot = current_git_snapshot(root)
+
+            self.assertIn("large.txt", snapshot["observed_paths"])
+            self.assertIn("large.txt", snapshot["snapshot_large_paths"])
+            self.assertNotIn("large.txt", snapshot["snapshot_hashed_paths"])
+            self.assertIn("large_file", {item["reason"] for item in snapshot["snapshot_excluded_paths"]})
+            self.assertEqual(snapshot["snapshot_policy"]["max_file_bytes"], 4)
+
+    def test_max_snapshot_file_bytes_uses_default_for_invalid_or_negative_values(self) -> None:
+        with patch.dict(os.environ, {"NILO_SNAPSHOT_MAX_FILE_BYTES": "not-an-int"}):
+            self.assertEqual(max_snapshot_file_bytes(), DEFAULT_SNAPSHOT_MAX_FILE_BYTES)
+        with patch.dict(os.environ, {"NILO_SNAPSHOT_MAX_FILE_BYTES": "-1"}):
+            self.assertEqual(max_snapshot_file_bytes(), DEFAULT_SNAPSHOT_MAX_FILE_BYTES)
+
+    def test_zero_max_snapshot_file_bytes_skips_non_empty_file_content(self) -> None:
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {"NILO_SNAPSHOT_MAX_FILE_BYTES": "0"}):
+            root = Path(directory)
+            init_repo(root)
+            (root / "one.txt").write_text("x", encoding="utf-8")
+
+            snapshot = current_git_snapshot(root)
+
+            self.assertEqual(snapshot["snapshot_policy"]["max_file_bytes"], 0)
+            self.assertIn("one.txt", snapshot["snapshot_large_paths"])
+            self.assertNotIn("one.txt", snapshot["snapshot_hashed_paths"])
+
+    def test_binary_file_is_recorded_without_content_hashing(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "binary.dat").write_bytes(b"text\0binary")
+
+            snapshot = current_git_snapshot(root)
+
+            self.assertIn("binary.dat", snapshot["observed_paths"])
+            self.assertIn("binary.dat", snapshot["snapshot_binary_paths"])
+            self.assertNotIn("binary.dat", snapshot["snapshot_hashed_paths"])
+            self.assertIn("binary", {item["reason"] for item in snapshot["snapshot_excluded_paths"]})
+
+    def test_skipped_file_mtime_change_changes_hash(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / ".niloignore").write_text("ignored/**\n", encoding="utf-8")
+            ignored_dir = root / "ignored"
+            ignored_dir.mkdir()
+            skipped = ignored_dir / "data.txt"
+            skipped.write_text("ignored content\n", encoding="utf-8")
+
+            first = current_git_snapshot(root)
+            stat = skipped.stat()
+            os.utime(skipped, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+            second = current_git_snapshot(root)
+
+            self.assertNotEqual(first["git_diff_hash"], second["git_diff_hash"])
+            self.assertIn(("ignored/data.txt", "ignored"), {(item["path"], item["reason"]) for item in second["snapshot_excluded_paths"]})
+
+    def test_unavailable_file_is_recorded_as_excluded_when_stat_fails_after_status(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            flaky = root / "flaky.txt"
+            flaky.write_text("content\n", encoding="utf-8")
+            original_is_file = Path.is_file
+            original_stat = Path.stat
+
+            def patched_is_file(path: Path) -> bool:
+                if path.name == "flaky.txt":
+                    return True
+                return original_is_file(path)
+
+            def patched_stat(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+                if path.name == "flaky.txt":
+                    raise OSError("stat failed")
+                return original_stat(path, *args, **kwargs)
+
+            with patch.object(Path, "is_file", patched_is_file), patch.object(Path, "stat", patched_stat):
+                snapshot = current_git_snapshot(root)
+
+            self.assertIn("flaky.txt", snapshot["observed_paths"])
+            self.assertIn({"path": "flaky.txt", "reason": "unavailable"}, snapshot["snapshot_excluded_paths"])
+            self.assertNotIn("flaky.txt", snapshot["snapshot_hashed_paths"])
+
+    def test_compact_snapshot_keeps_legacy_shape_and_evidence_status_still_matches(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "src.txt").write_text("work\n", encoding="utf-8")
+
+            snapshot = current_git_snapshot(root)
+            compact = compact_snapshot(snapshot)
+            run = {**compact, "timed_out": False, "exit_code": 0}
+
+            self.assertEqual(set(compact), {"git_head", "git_diff_hash", "working_tree_dirty"})
+            self.assertEqual(evidence_status(run, snapshot), "current")
+            self.assertEqual(evidence_status({**run, "git_diff_hash": "stale"}, snapshot), "stale")
+
+    def test_standard_nilo_review_outputs_are_ignored_but_agent_instructions_are_not(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            reviews = root / ".nilo" / "reviews"
+            reviews.mkdir(parents=True)
+            (reviews / "prompt.md").write_text("review prompt\n", encoding="utf-8")
+            instructions = root / ".nilo" / "agent-instructions.md"
+            instructions.write_text("canonical instructions\n", encoding="utf-8")
+
+            snapshot = current_git_snapshot(root)
+
+            self.assertIn(".nilo/reviews/prompt.md", snapshot["observed_paths"])
+            self.assertIn(".nilo/agent-instructions.md", snapshot["observed_paths"])
+            self.assertNotIn(".nilo/reviews/prompt.md", snapshot["snapshot_hashed_paths"])
+            self.assertIn(".nilo/agent-instructions.md", snapshot["snapshot_hashed_paths"])
+            self.assertIn(
+                (".nilo/reviews/prompt.md", "ignored"),
+                {(item["path"], item["reason"]) for item in snapshot["snapshot_excluded_paths"]},
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

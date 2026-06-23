@@ -22,6 +22,11 @@ class VerificationTests(unittest.TestCase):
                 "git_status_porcelain": "",
                 "observed_paths": [],
                 "git_available": True,
+                "snapshot_policy": {"max_file_bytes": 1000000},
+                "snapshot_excluded_paths": [{"path": "dist/app.js", "reason": "ignored"}],
+                "snapshot_hashed_paths": ["src/nilo/app.py"],
+                "snapshot_large_paths": [],
+                "snapshot_binary_paths": [],
             },
         ):
             result = run_local_verification('"python" -m unittest', Path.cwd(), 10)
@@ -30,6 +35,9 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(result["source"], "nilo_executed")
         self.assertEqual(result["git_diff_hash"], "diffhash")
         self.assertEqual(result["metadata"]["execution_mode"], "argv")
+        self.assertEqual(result["metadata"]["snapshot_policy"], {"max_file_bytes": 1000000})
+        self.assertEqual(result["metadata"]["snapshot_excluded_paths"], [{"path": "dist/app.js", "reason": "ignored"}])
+        self.assertEqual(result["metadata"]["snapshot_hashed_paths"], ["src/nilo/app.py"])
         self.assertEqual(run_mock.call_args_list[0].kwargs["shell"], False)
         self.assertEqual(run_mock.call_args_list[0].args[0], ["python", "-m", "unittest"])
 

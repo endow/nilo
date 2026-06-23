@@ -57,6 +57,8 @@ def cmd_project_status(args: argparse.Namespace) -> None:
             print(f"- {task['id']} [{status}] {task['task_type']} {task['risk_level']} {task['title']}")
             print(f"  latest_verification_run: {c.verification_summary(verification_run)}")
             print(f"  verification_working_tree: {c.verification_working_tree_summary(verification_run)}")
+            for line in c.verification_snapshot_policy_lines(verification_run):
+                print(f"  {line}")
             blocking = c.unresolved_blocking_review_findings(store, task["id"])
             if blocking:
                 print("  unresolved_blocking_review_findings:")

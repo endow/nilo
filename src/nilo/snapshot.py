@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import fnmatch
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +11,52 @@ from .gitmeta import git_output, head_commit, porcelain_path
 
 
 SNAPSHOT_KEYS = ("git_head", "git_diff_hash", "working_tree_dirty")
+DEFAULT_SNAPSHOT_MAX_FILE_BYTES = 1_000_000
+DEFAULT_SNAPSHOT_IGNORE_PATTERNS = [
+    ".git/**",
+    ".nilo/reviews/**",
+    ".nilo/backups/**",
+    ".nilo/*.db",
+    ".nilo/*.db-*",
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    ".next/**",
+    ".venv/**",
+    "venv/**",
+    "__pycache__/**",
+    ".pytest_cache/**",
+    ".mypy_cache/**",
+    ".ruff_cache/**",
+    "coverage/**",
+    ".coverage",
+    "*.pyc",
+    "*.pyo",
+    "*.log",
+    "*.tmp",
+    "*.zip",
+    "*.tar",
+    "*.tar.gz",
+    "*.tgz",
+    "*.7z",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.webp",
+    "*.mp4",
+    "*.mov",
+    "*.pdf",
+]
+
+
+@dataclass
+class SnapshotHashResult:
+    digest: str
+    hashed_paths: list[str]
+    excluded_paths: list[dict[str, Any]]
+    large_paths: list[str]
+    binary_paths: list[str]
 
 
 def current_git_snapshot(cwd: Path) -> dict[str, Any]:
@@ -26,13 +75,23 @@ def current_git_snapshot(cwd: Path) -> dict[str, Any]:
     if status_code != 0:
         status = ""
     paths = sorted({path for line in status.splitlines() if (path := porcelain_path(line).replace("\\", "/"))})
+    hash_result = _diff_hash(cwd, status, paths)
     return {
         "git_head": head_commit(cwd),
-        "git_diff_hash": _diff_hash(cwd, status, paths),
+        "git_diff_hash": hash_result.digest,
         "working_tree_dirty": bool(status.strip()),
         "git_status_porcelain": status,
         "observed_paths": paths,
         "git_available": True,
+        "snapshot_excluded_paths": hash_result.excluded_paths,
+        "snapshot_hashed_paths": hash_result.hashed_paths,
+        "snapshot_large_paths": hash_result.large_paths,
+        "snapshot_binary_paths": hash_result.binary_paths,
+        "snapshot_policy": {
+            "max_file_bytes": max_snapshot_file_bytes(),
+            "ignore_file": ".niloignore",
+            "default_ignore_patterns": True,
+        },
     }
 
 
@@ -81,8 +140,85 @@ def review_result_status(review_result: dict[str, Any], current_snapshot: dict[s
     return "stale"
 
 
-def _diff_hash(cwd: Path, status: str, paths: list[str]) -> str:
+def snapshot_ignore_patterns(cwd: Path) -> list[str]:
+    patterns = list(DEFAULT_SNAPSHOT_IGNORE_PATTERNS)
+    ignore_file = cwd / ".niloignore"
+    if not ignore_file.is_file():
+        return patterns
+    try:
+        for line in ignore_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            pattern = line.strip()
+            if not pattern or pattern.startswith("#"):
+                continue
+            # Negated patterns are intentionally unsupported for this lightweight policy.
+            if pattern.startswith("!"):
+                continue
+            patterns.append(pattern.replace("\\", "/"))
+    except OSError:
+        return patterns
+    return patterns
+
+
+def max_snapshot_file_bytes() -> int:
+    raw_value = os.environ.get("NILO_SNAPSHOT_MAX_FILE_BYTES", "")
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_SNAPSHOT_MAX_FILE_BYTES
+    return value if value >= 0 else DEFAULT_SNAPSHOT_MAX_FILE_BYTES
+
+
+def should_skip_file_content(path: str, full_path: Path, patterns: list[str], max_file_bytes: int) -> tuple[bool, str]:
+    normalized = path.replace("\\", "/")
+    if _matches_snapshot_pattern(normalized, patterns):
+        return True, "ignored"
+    try:
+        stat = full_path.stat()
+    except OSError:
+        return True, "unavailable"
+    if stat.st_size > max_file_bytes:
+        return True, "large_file"
+    if is_binary_file(full_path):
+        return True, "binary"
+    return False, ""
+
+
+def is_binary_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            chunk = handle.read(8192)
+    except OSError:
+        return False
+    if b"\0" in chunk:
+        return True
+    if not chunk:
+        return False
+    decoded = chunk.decode("utf-8", errors="replace")
+    replacement_count = decoded.count("\ufffd")
+    return replacement_count / max(len(decoded), 1) > 0.1
+
+
+def _matches_snapshot_pattern(path: str, patterns: list[str]) -> bool:
+    basename = path.rsplit("/", 1)[-1]
+    for pattern in patterns:
+        normalized = pattern.strip().replace("\\", "/")
+        if not normalized:
+            continue
+        if normalized.endswith("/"):
+            normalized = f"{normalized}**"
+        if fnmatch.fnmatch(path, normalized) or ("/" not in normalized and fnmatch.fnmatch(basename, normalized)):
+            return True
+    return False
+
+
+def _diff_hash(cwd: Path, status: str, paths: list[str]) -> SnapshotHashResult:
     hasher = hashlib.sha256()
+    hashed_paths: list[str] = []
+    excluded_paths: list[dict[str, Any]] = []
+    large_paths: list[str] = []
+    binary_paths: list[str] = []
+    patterns = snapshot_ignore_patterns(cwd)
+    max_file_bytes = max_snapshot_file_bytes()
     hasher.update(status.encode("utf-8", errors="replace"))
     for args in (["diff", "--no-ext-diff"], ["diff", "--cached", "--no-ext-diff"]):
         code, out, err = git_output(args, cwd)
@@ -93,8 +229,42 @@ def _diff_hash(cwd: Path, status: str, paths: list[str]) -> str:
         if not full_path.is_file():
             continue
         try:
+            skip, reason = should_skip_file_content(path, full_path, patterns, max_file_bytes)
+            if skip:
+                if reason == "unavailable":
+                    excluded_paths.append({"path": path, "reason": reason})
+                    _hash_unavailable_file_meta(hasher, path, reason)
+                    continue
+                stat = full_path.stat()
+                entry: dict[str, Any] = {"path": path, "reason": reason, "size": stat.st_size}
+                excluded_paths.append(entry)
+                if reason == "large_file":
+                    large_paths.append(path)
+                elif reason == "binary":
+                    binary_paths.append(path)
+                _hash_file_meta(hasher, path, stat.st_size, stat.st_mtime_ns, reason)
+                continue
             hasher.update(f"\n$ file {path}\n".encode())
             hasher.update(full_path.read_bytes())
+            hashed_paths.append(path)
         except OSError as exc:
             hasher.update(f"\n$ file {path} unavailable: {exc}\n".encode())
-    return hasher.hexdigest()
+    return SnapshotHashResult(
+        digest=hasher.hexdigest(),
+        hashed_paths=hashed_paths,
+        excluded_paths=excluded_paths,
+        large_paths=large_paths,
+        binary_paths=binary_paths,
+    )
+
+
+def _hash_file_meta(hasher: Any, path: str, size: int, mtime_ns: int, reason: str) -> None:
+    hasher.update(f"\n$ file-meta {path}\n".encode())
+    hasher.update(f"size={size}\n".encode())
+    hasher.update(f"mtime_ns={mtime_ns}\n".encode())
+    hasher.update(f"reason={reason}\n".encode())
+
+
+def _hash_unavailable_file_meta(hasher: Any, path: str, reason: str) -> None:
+    hasher.update(f"\n$ file-meta {path}\n".encode())
+    hasher.update(f"reason={reason}\n".encode())

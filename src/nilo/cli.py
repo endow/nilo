@@ -496,6 +496,8 @@ from .project_logic import (
     task_status_counts,
     unexecuted_verifications_for_task,
     unresolved_blocking_review_findings,
+    verification_snapshot_policy_lines,
+    verification_snapshot_policy_summary,
     verification_summary,
     verification_working_tree_state,
     verification_working_tree_summary,

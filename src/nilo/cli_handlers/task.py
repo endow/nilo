@@ -105,6 +105,8 @@ def cmd_task_status(args: argparse.Namespace) -> None:
             print(f"verification_source: {verification_run.get('source', 'nilo_executed')}")
             print(f"verification_command: {verification_run['command']}")
             print(f"verification_working_tree: {c.verification_working_tree_summary(verification_run)}")
+            for line in c.verification_snapshot_policy_lines(verification_run):
+                print(line)
             for file in c.verification_working_tree_state(verification_run)["files"]:
                 print(f"- {file}")
             if verification_run["evidence_check_id"]:

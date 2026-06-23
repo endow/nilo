@@ -7555,6 +7555,11 @@ close 済み commitment を表示できるようにした。
                     "working_tree_dirty": True,
                     "working_tree_files": ["src/nilo/cli.py", "tests/test_cli.py"],
                     "working_tree_available": True,
+                    "snapshot_excluded_paths": [{"path": "dist/app.js", "reason": "ignored", "size": 12}],
+                    "snapshot_hashed_paths": ["src/nilo/cli.py"],
+                    "snapshot_large_paths": [],
+                    "snapshot_binary_paths": [],
+                    "snapshot_policy": {"max_file_bytes": 1000000, "ignore_file": ".niloignore", "default_ignore_patterns": True},
                 },
                 "started_at": "2099-06-17T00:00:00+09:00",
                 "finished_at": "2099-06-17T00:00:01+09:00",
@@ -7594,13 +7599,18 @@ close 済み commitment を表示できるようにした。
             summary = json.loads(json_output.getvalue())
 
             self.assertIn("verification_working_tree: dirty (2 files)", task_output.getvalue())
+            self.assertIn("snapshot:", task_output.getvalue())
+            self.assertIn("skipped reasons: ignored=1", task_output.getvalue())
             self.assertIn("- src/nilo/cli.py", task_output.getvalue())
             self.assertIn("verification_working_tree: dirty (2 files)", project_output.getvalue())
+            self.assertIn("skipped reasons: ignored=1", project_output.getvalue())
             self.assertIn("verification_working_tree: dirty (2 files)", summary_output.getvalue())
+            self.assertIn("skipped reasons: ignored=1", summary_output.getvalue())
             self.assertIn("review dirty-tree verification metadata before accepting this task", project_output.getvalue())
             self.assertIn("add --commit only when you want Nilo to commit the accepted changes", project_output.getvalue())
             self.assertTrue(summary["active_tasks"][0]["verification_working_tree_dirty"])
             self.assertEqual(summary["active_tasks"][0]["verification_working_tree_files"], ["src/nilo/cli.py", "tests/test_cli.py"])
+            self.assertEqual(summary["active_tasks"][0]["verification_snapshot_policy"]["skipped_reasons"], {"ignored": 1})
 
     def test_verification_run_records_snapshot_without_evidence_check_link(self) -> None:
         with TemporaryDirectory() as directory:
