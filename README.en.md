@@ -182,6 +182,43 @@ The AI agent reads Nilo as needed and explains the current state. The human deci
 
 Completion, rejection, commits, and final direction changes are human decision points. Actor names in Nilo are audit labels, not OS-level or Git-level authorization. Nilo records who accepted what, but it is not an authorization system that can fully prevent misuse.
 
+## Overdrive Mode
+
+Nilo includes **Overdrive Mode** for continuously advancing AI agent work along an accepted roadmap commitment.
+
+In normal mode, humans confirm key moments such as instruction generation, task progression, evidence acceptance, and roadmap assessment. In Overdrive Mode, those approval gates can be bypassed when appropriate so Nilo can move to the next incomplete task.
+
+```bash
+nilo run --project <project> --overdrive
+```
+
+To target a specific roadmap commitment, pass `--commitment`:
+
+```bash
+nilo run --project <project> --overdrive --commitment <commitment_id>
+```
+
+The failure limit can be set with `--max-failures`:
+
+```bash
+nilo run --project <project> --overdrive --max-failures 3
+```
+
+Overdrive Mode does not remove human judgment. Nilo can bypass approval gates, but safety gates remain. For example, it stops for:
+
+- destructive operations (`destructive_operation`)
+- access to secrets or credentials (`secret_or_credential_access`)
+- billing or external publication (`billing_or_external_publication`)
+- delete operations (`delete_operation`)
+- exceeding the failure limit (`max_failure_exceeded`)
+- out-of-scope design changes (`out_of_scope_design_change`)
+- ambiguous specifications (`ambiguous_specification`)
+- an unexpected dirty working tree (`unexpected_dirty_working_tree`)
+
+A final human review checkpoint is still required.
+
+Overdrive Mode is therefore not a way to let AI agents act without bounds. It is an operating mode for preserving evidence, verification results, review results, and unresolved concerns while avoiding unnecessary stops for small human approvals. Nilo still does not treat an AI agent's self-report as completion by itself, and it still leaves humans with the evidence needed to decide whether to accept the work. Nilo is not a security boundary; it is an evidence, audit, and workflow discipline tool.
+
 ## What AI Agents Do
 
 AI agents use Nilo behind the scenes to:
