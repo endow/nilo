@@ -75,6 +75,24 @@ nilo status --project nilo
 
 `python -m unittest discover tests` はテストスイートの確認、`nilo status --project nilo` は Nilo の状態 DB を読めるかの確認です。
 
+## Nilo を更新する
+
+git checkout から Nilo をインストールした場合は、次で更新できます。
+
+```bash
+nilo upgrade
+```
+
+このコマンドは、ローカルリポジトリの状態を確認し、`git pull --ff-only` で更新し、Nilo を再インストールしてから migration を実行します。`.nilo/nilo.db` がある場合は、migration の前に `.nilo/backups/` へバックアップを作成します。
+
+ローカル変更がある場合、Nilo は更新前に停止します。変更を commit、stash、または破棄してから、もう一度 `nilo upgrade` を実行してください。
+
+実行予定だけ確認したい場合は次を使います。
+
+```bash
+nilo upgrade --dry-run
+```
+
 ## 使い始める
 
 Nilo を使いたいプロジェクトのルートで一度だけ初期化します。

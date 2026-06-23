@@ -36,6 +36,7 @@ from .secret import mask_secrets
 from .store import Store
 from .task_logic import completion_status, is_task_completed_status, outcome_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from .timeutil import now_iso
+from .upgrade import nilo_version
 from .verification import run_local_verification
 
 
@@ -542,6 +543,7 @@ from .cli_handlers.roadmap import (
 from .cli_handlers.task import cmd_task_complete, cmd_task_create, cmd_task_list, cmd_task_split, cmd_task_start, cmd_task_status, cmd_task_update
 from .cli_handlers.todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cmd_todo_show, cmd_todo_start, cmd_todo_triage
 from .cli_handlers.workflow import cmd_agent_install, cmd_doctor, cmd_init, cmd_instruct, cmd_migrate, cmd_outcome_record, cmd_report_import, cmd_understanding_approve, cmd_understanding_import, cmd_understanding_prepare, cmd_verification_run
+from .cli_handlers.workflow import cmd_upgrade
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -554,8 +556,10 @@ TOP_LEVEL_COMMANDS = {
     "agent",
     "check",
     "done",
+    "doctor",
     "init",
     "instruct",
+    "migrate",
     "mcp",
     "next",
     "outcome",
@@ -573,6 +577,7 @@ TOP_LEVEL_COMMANDS = {
     "task",
     "todo",
     "understanding",
+    "upgrade",
     "verification",
 }
 

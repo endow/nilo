@@ -25,6 +25,7 @@ from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
 from ..task_logic import outcome_status
 from ..timeutil import now_iso
+from ..upgrade import run_upgrade
 from ..verification import run_local_verification
 
 
@@ -244,6 +245,12 @@ def cmd_migrate(args: argparse.Namespace) -> None:
             print(f"updated: {path.name}")
     finally:
         store.close()
+
+
+def cmd_upgrade(args: argparse.Namespace) -> None:
+    code = run_upgrade(dry_run=args.dry_run, db_path=args.db)
+    if code != 0:
+        raise SystemExit(code)
 
 
 def cmd_init(args: argparse.Namespace) -> None:

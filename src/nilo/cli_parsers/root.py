@@ -18,6 +18,7 @@ from .workflow import register_agent, register_instruct, register_outcome, regis
 
 def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers: ModuleType) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nilo")
+    parser.add_argument("--version", action="version", version=f"nilo {handlers.nilo_version()}")
     add_common(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -29,6 +30,9 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     migrate = sub.add_parser("migrate")
     migrate.add_argument("--apply", action="store_true")
     migrate.set_defaults(func=handlers.cmd_migrate)
+    upgrade = sub.add_parser("upgrade")
+    upgrade.add_argument("--dry-run", action="store_true")
+    upgrade.set_defaults(func=handlers.cmd_upgrade)
 
     register_run(sub, handlers)
     register_facade(sub, handlers)
