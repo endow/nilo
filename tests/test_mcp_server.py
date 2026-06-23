@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.cli import main
-from nilo.mcp_server import McpToolError, call_tool, handle_request
+from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, handle_request
 from nilo.review_dispatcher import find_executable
 from nilo.store import JSON_COLUMNS, Store
 from nilo.timeutil import now_iso
@@ -355,6 +355,32 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("starts the configured reviewer process when auto_start=true", descriptions["dispatch_review"])
         self.assertIn("imports the ReviewResult", descriptions["dispatch_review"])
         self.assertIn("review request is completed", descriptions["dispatch_review"])
+        self.assertEqual(
+            response["result"]["tool_metadata"],
+            [
+                {
+                    "tool": "nilo_import_review_result",
+                    "compressible": False,
+                    "reason": "primary evidence / write payload",
+                },
+                {
+                    "tool": "nilo_get_test_log",
+                    "compressible": True,
+                    "reason": "large diagnostic output; raw artifact is stored separately",
+                },
+            ],
+        )
+        tool_by_name = {tool["name"]: tool for tool in tools}
+        self.assertEqual(
+            tool_by_name["import_review_result"]["metadata"],
+            {
+                "tool": "nilo_import_review_result",
+                "compressible": False,
+                "reason": "primary evidence / write payload",
+            },
+        )
+        self.assertIsNot(tool_by_name["import_review_result"]["metadata"], HEADROOM_TOOL_METADATA[0])
+        self.assertIsNot(response["result"]["tool_metadata"][0], HEADROOM_TOOL_METADATA[0])
 
     def test_get_agent_work_context_returns_next_step_and_write_token(self) -> None:
         with TemporaryDirectory() as directory:

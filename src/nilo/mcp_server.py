@@ -58,6 +58,31 @@ def json_schema(properties: dict[str, dict], required: list[str]) -> dict:
     }
 
 
+HEADROOM_TOOL_METADATA = [
+    {
+        "tool": "nilo_import_review_result",
+        "compressible": False,
+        "reason": "primary evidence / write payload",
+    },
+    {
+        "tool": "nilo_get_test_log",
+        "compressible": True,
+        "reason": "large diagnostic output; raw artifact is stored separately",
+    },
+]
+
+
+def headroom_tool_metadata(tool_name: str) -> dict | None:
+    for metadata in HEADROOM_TOOL_METADATA:
+        if metadata["tool"] == tool_name:
+            return dict(metadata)
+    return None
+
+
+def headroom_tool_metadata_list() -> list[dict]:
+    return [dict(metadata) for metadata in HEADROOM_TOOL_METADATA]
+
+
 TOOLS = [
     {
         "name": "get_agent_work_context",
@@ -267,6 +292,7 @@ TOOLS = [
     {
         "name": "import_review_result",
         "description": "Import a ReviewResult markdown body for an existing review request.",
+        "metadata": headroom_tool_metadata("nilo_import_review_result"),
         "inputSchema": json_schema(
             {
                 "task_id": {"type": "string"},
@@ -1669,7 +1695,7 @@ def handle_request(message: dict, db_path: Path | None = None) -> dict | None:
     if method == "notifications/initialized":
         return None
     if method == "tools/list":
-        return success_response(request_id, {"tools": TOOLS})
+        return success_response(request_id, {"tools": TOOLS, "tool_metadata": headroom_tool_metadata_list()})
     if method == "tools/call":
         params = message.get("params") or {}
         name = params.get("name")
