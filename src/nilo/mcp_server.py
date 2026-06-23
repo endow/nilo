@@ -1704,7 +1704,7 @@ def handle_request(message: dict, db_path: Path | None = None) -> dict | None:
             {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "nilo", "version": "0.1.1"},
+                "serverInfo": {"name": "nilo", "version": "0.1.2"},
             },
         )
     if method == "notifications/initialized":

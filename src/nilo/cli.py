@@ -5,7 +5,6 @@ import json
 import locale
 import subprocess
 import sys
-from importlib import metadata
 from pathlib import Path
 
 from . import __version__
@@ -57,10 +56,7 @@ CLAUDE_CODE_REVIEWER_PROTOCOL_HEADING = "## Nilo MCP Reviewer Protocol"
 
 
 def nilo_version() -> str:
-    try:
-        return metadata.version("nilo")
-    except metadata.PackageNotFoundError:
-        return __version__
+    return __version__
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
