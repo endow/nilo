@@ -7,6 +7,7 @@ from typing import Any, TextIO
 
 from .agent_report_import import import_agent_report
 from .cli_support import make_id
+from .human_status import human_next_action_text, human_task_status
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from .review_dispatcher import dispatch_review
 from .reviewer_registry import (
@@ -637,6 +638,8 @@ def classify_next_step(summary: dict) -> dict:
     if active_tasks:
         task = active_tasks[0]
         action = (summary["next_actions"] or ["review current task state"])[0]
+        human_action = (summary.get("human_next_actions") or [human_next_action_text(action)])[0]
+        human_status = task.get("human_status") or human_task_status(task["status"], task)
         requires_human = task["task_type"] in BEHAVIOR_CHANGING_TASK_TYPES and task["status"] in {
             "verification_passed",
             "needs_human_review",
@@ -649,6 +652,8 @@ def classify_next_step(summary: dict) -> dict:
             "task_type": task["task_type"],
             "task_status": task["status"],
             "command_hint": action,
+            "human_next_action": human_action,
+            "human_status": human_status,
             "safe_for_ai": not requires_human,
             "requires_explicit_human_intent": requires_human,
             "reason": "active task is the current work focus",
@@ -663,6 +668,7 @@ def classify_next_step(summary: dict) -> dict:
             "task_type": "",
             "task_status": "",
             "command_hint": action["command_hint"],
+            "human_next_action": action.get("human_next_action", action["command_hint"]),
             "safe_for_ai": not requires_human,
             "requires_explicit_human_intent": requires_human,
             "reason": action["reason"],
@@ -674,6 +680,7 @@ def classify_next_step(summary: dict) -> dict:
         "task_type": "",
         "task_status": "",
         "command_hint": action,
+        "human_next_action": human_next_action_text(action),
         "safe_for_ai": True,
         "requires_explicit_human_intent": False,
         "reason": "project-level next action",
@@ -698,6 +705,7 @@ def agent_work_context_from_summary(store: Store, summary: dict) -> dict:
         "project_name": summary["project_name"],
         "roadmap_position": summary["roadmap_position"],
         "work_state": summary["work_state"],
+        "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],
@@ -706,6 +714,7 @@ def agent_work_context_from_summary(store: Store, summary: dict) -> dict:
         "human_gates": sorted(HUMAN_GATED_TOOL_NAMES),
         "active_tasks": active_tasks,
         "next_actions": summary["next_actions"],
+        "human_next_actions": summary["human_next_actions"],
         "next_step": next_step,
         "write_context_token": write_context_token,
         "unexecuted_verifications": summary["unexecuted_verifications"],
@@ -727,6 +736,7 @@ def refreshed_task_context(store: Store, task_id: str) -> dict:
             "id": task_id,
             "title": task["title"],
             "status": projected_task_status(store, task),
+            "human_status": human_task_status(projected_task_status(store, task), task),
             "task_type": task["task_type"],
             "risk_level": task["risk_level"],
             "latest_task_status_event": latest_event,
@@ -744,11 +754,13 @@ def get_project_status(store: Store, arguments: dict) -> dict:
         "project_name": summary["project_name"],
         "roadmap_position": summary["roadmap_position"],
         "work_state": summary["work_state"],
+        "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],
         "active_tasks": summary["active_tasks"],
         "next_actions": summary["next_actions"],
+        "human_next_actions": summary["human_next_actions"],
         "unexecuted_verifications": summary["unexecuted_verifications"],
     }
 
@@ -768,6 +780,7 @@ def get_next_step(store: Store, arguments: dict) -> dict:
         "project_id": summary["project_id"],
         "roadmap_position": summary["roadmap_position"],
         "work_state": summary["work_state"],
+        "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
         "next_step": classify_next_step(summary),
     }
@@ -878,9 +891,11 @@ def get_task_status(store: Store, arguments: dict) -> dict:
     if not task:
         raise McpToolError(f"task not found: {task_id}")
     latest = latest_for_task_tables(store, task_id)
+    status = projected_task_status(store, task)
     return {
         "task": task,
-        "status": projected_task_status(store, task),
+        "status": status,
+        "human_status": human_task_status(status, task, latest),
         "latest_task_status_event": store.latest_task_status_event(task_id),
         "latest": latest,
     }

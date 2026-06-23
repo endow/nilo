@@ -347,7 +347,7 @@ def human_roadmap_position_text(value: str, language: str) -> str:
     for prefix, label in prefixes:
         if value.startswith(prefix):
             return f"{label}{mask_internal_ids(value.removeprefix(prefix))}"
-    if value == "active task なし":
+    if value in ("active task なし", "作業中のタスクはありません。"):
         return "no active work"
     return mask_internal_ids(value)
 
@@ -366,17 +366,45 @@ def human_roadmap_work_state_text(value: str, language: str) -> str:
     labels = {
         "ja": {
             "active task なし": "進行中の作業はありません",
+            "作業中のタスクはありません。": "進行中の作業はありません",
             "implementation/report 待ち": "作業と報告の完了待ち",
+            "作業報告待ちです。": "作業と報告の完了待ち",
             "acceptance review 待ち": "人間の確認待ち",
+            "人間の確認待ちです。": "人間の確認待ち",
+            "人間の完了判断待ちです。": "人間の完了判断待ち",
             "review 待ち": "レビュー待ち",
+            "レビュー依頼中です。": "レビュー待ち",
             "reviewer unavailable": "レビュー担当の準備待ち",
+            "レビュー担当の起動待ちです。": "レビュー担当の準備待ち",
+            "レビュー中です。": "レビュー中",
+            "レビューで修正が必要です。": "レビューで修正が必要",
+            "レビュー結果の確認待ちです。": "レビュー結果の確認待ち",
+            "レビューが停止しています。": "レビューが停止中",
+            "検証に失敗しています。": "検証失敗",
+            "検証がタイムアウトしています。": "検証タイムアウト",
+            "検証待ちです。": "検証待ち",
+            "作業指示の作成待ちです。": "作業指示の作成待ち",
         },
         "en": {
             "active task なし": "no active work",
+            "作業中のタスクはありません。": "no active work",
             "implementation/report 待ち": "waiting for work and report",
+            "作業報告待ちです。": "waiting for work and report",
             "acceptance review 待ち": "waiting for human review",
+            "人間の確認待ちです。": "waiting for human review",
+            "人間の完了判断待ちです。": "waiting for human completion decision",
             "review 待ち": "waiting for review",
+            "レビュー依頼中です。": "waiting for review",
             "reviewer unavailable": "reviewer unavailable",
+            "レビュー担当の起動待ちです。": "waiting for reviewer",
+            "レビュー中です。": "review in progress",
+            "レビューで修正が必要です。": "changes requested by review",
+            "レビュー結果の確認待ちです。": "waiting for review comment triage",
+            "レビューが停止しています。": "review stalled",
+            "検証に失敗しています。": "verification failed",
+            "検証がタイムアウトしています。": "verification timed out",
+            "検証待ちです。": "waiting for verification",
+            "作業指示の作成待ちです。": "waiting for instructions",
         },
     }
     return labels.get(language, labels["en"]).get(value, mask_internal_ids(value))

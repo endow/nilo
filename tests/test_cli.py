@@ -1528,7 +1528,7 @@ class CliTests(unittest.TestCase):
             body = output.getvalue()
             self.assertIn("project_id: project_test", body)
             self.assertIn("roadmap_position:", body)
-            self.assertIn("work_state: acceptance review 待ち", body)
+            self.assertIn("work_state: 人間の完了判断待ちです。", body)
             self.assertIn("current_phase: implementation", body)
             self.assertIn("active_tasks:", body)
             self.assertIn("task_verified [verification_passed] implementation medium 検証済みタスク", body)
@@ -1690,7 +1690,7 @@ class CliTests(unittest.TestCase):
 
             body = output.getvalue()
             self.assertIn("roadmap_position:", body)
-            self.assertIn("work_state: acceptance review 待ち", body)
+            self.assertIn("work_state: 人間の完了判断待ちです。", body)
             self.assertIn("current_phase: implementation", body)
             self.assertIn("task_status_counts:", body)
             self.assertIn("- instruction_generated: 1", body)
@@ -1747,7 +1747,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(summary["project_id"], "project_test")
             self.assertIn("roadmap_position", summary)
             self.assertIn("work_state", summary)
-            self.assertEqual(summary["work_state"], "acceptance review 待ち")
+            self.assertEqual(summary["work_state"], "人間の完了判断待ちです。")
+            self.assertIn("human_next_actions", summary)
             self.assertIn("current_phase", summary)
             self.assertIn("task_status_counts", summary)
             self.assertIn("recent_history", summary)
@@ -1758,6 +1759,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("design_residue", summary)
             self.assertEqual(summary["task_status_counts"]["verification_passed"], 1)
             self.assertEqual(summary["active_tasks"][0]["id"], "task_verified")
+            self.assertEqual(summary["active_tasks"][0]["human_status"]["machine_status"], "verification_passed")
             self.assertEqual(summary["commit_mapping"][0]["task_id"], "task_verified")
             self.assertIn(summary["commit_mapping"][0]["status"], {"insufficient_git_metadata", "mapped_candidate", "same_head"})
             self.assertIn("base_commit", summary["commit_mapping"][0])
@@ -1921,7 +1923,7 @@ project status からロードマップ現在地を読めるようにする。
             "project_id": "project_test",
             "project_name": "Nilo",
             "roadmap_position": "active task focus: Refactor task_scheduler commitment_123",
-            "work_state": "acceptance review 待ち",
+            "work_state": "人間の確認待ちです。",
             "current_phase": "implementation",
             "roadmap_commitments": [],
             "pending_roadmap_revisions": [
@@ -3600,7 +3602,7 @@ close 済み commitment を表示できるようにした。
             self.assertIn("# 作業進捗", body)
             self.assertIn("## ロードマップ現在地", body)
             self.assertIn("## 現在の作業状態", body)
-            self.assertIn("acceptance review 待ち", body)
+            self.assertIn("人間の完了判断待ちです。", body)
             self.assertIn("## 現在のフェーズ", body)
             self.assertIn("## 進行中タスク", body)
             self.assertIn("task_verified [verification_passed]", body)
@@ -5987,7 +5989,7 @@ close 済み commitment を表示できるようにした。
                 main(["--db", str(db), "project", "status", "--project", "project_test", "--verbose"])
 
             body = output.getvalue()
-            self.assertIn("work_state: acceptance review 待ち", body)
+            self.assertIn("work_state: レビュー結果の確認待ちです。", body)
             self.assertIn("task_test [review_commented]", body)
             self.assertIn("review imported findings and decide whether to address them", body)
 

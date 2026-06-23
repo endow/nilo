@@ -4,6 +4,7 @@ import locale
 from pathlib import Path
 
 from .design_residue import parse_design_residue
+from .human_status import human_next_action_text, human_project_work_state, human_task_status
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
 from .snapshot import current_git_snapshot, evidence_status
 from .store import Store
@@ -42,31 +43,9 @@ def project_current_phase(tasks: list[dict], statuses: dict[str, str]) -> str:
 def project_work_state(tasks: list[dict], statuses: dict[str, str]) -> str:
     active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
     if not active:
-        return "active task なし"
+        return human_project_work_state(set())
     active_statuses = {statuses[task["id"]] for task in active}
-    if "review_reviewer_unavailable" in active_statuses:
-        return "reviewer unavailable"
-    if "review_stale" in active_statuses:
-        return "review stale"
-    if "review_claimed" in active_statuses or "review_in_progress" in active_statuses:
-        return "review in progress"
-    if "review_requested" in active_statuses:
-        return "review 待ち"
-    if "review_changes_requested" in active_statuses:
-        return "rework 待ち"
-    if "review_commented" in active_statuses or "review_approved" in active_statuses:
-        return "acceptance review 待ち"
-    if "needs_human_review" in active_statuses:
-        return "human review 待ち"
-    if "verification_passed" in active_statuses or "evidence_submitted" in active_statuses:
-        return "acceptance review 待ち"
-    if "agent_reported" in active_statuses:
-        return "verification 待ち"
-    if "instruction_generated" in active_statuses:
-        return "implementation/report 待ち"
-    if "planned" in active_statuses:
-        return "instruction 生成待ち"
-    return "active"
+    return human_project_work_state(active_statuses)
 
 
 def accepted_roadmap_commitments(store: Store, project_id: str) -> list[dict]:
@@ -1055,6 +1034,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
                 "id": task["id"],
                 "title": task["title"],
                 "status": status,
+                "human_status": human_task_status(status, task, {"verification_run": verification_run}),
                 "task_type": task["task_type"],
                 "risk_level": task["risk_level"],
                 "latest_verification_run": verification_summary(verification_run),
@@ -1088,6 +1068,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
         "work_state": project_work_state(tasks, statuses),
         "current_phase": project_current_phase(tasks, statuses),
         "next_actions": next_actions,
+        "human_next_actions": [human_next_action_text(action) for action in next_actions],
         "todo_status_counts": todo_status_counts(store, project["id"]),
         "task_status_counts": task_status_counts(tasks, statuses),
         "recent_history": recent_project_history(store, tasks),
