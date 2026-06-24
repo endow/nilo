@@ -10,7 +10,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nilo.backup import BackupError, cleanup_backup_files, create_backup, load_backup_records, reserve_backup_path, restore_backup, sha256_file, sqlite_sidecar_paths
+from nilo.backup import (
+    BackupError,
+    cleanup_backup_files,
+    create_backup,
+    export_backup_files,
+    load_backup_records,
+    reserve_backup_path,
+    restore_backup,
+    sha256_file,
+    sqlite_sidecar_paths,
+)
 from nilo.cli import main
 from tests.backup_helpers import make_sqlite_db
 
@@ -70,6 +80,107 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(len(metas), 1)
         self.assertEqual(meta["reason"], "daily")
         self.assertIn("integrity_check: ok", output.getvalue())
+
+    def test_create_backup_exports_db_and_meta_with_verified_sha256(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "exported"
+            make_sqlite_db(db)
+
+            result = create_backup(db, reason="manual", cwd=root, export_dir=export_dir)
+
+            exported = result.meta["exported_to"]
+            exported_backup = root / exported["backup_path"]
+            exported_meta = root / exported["meta_path"]
+            exported_meta_json = json.loads(exported_meta.read_text(encoding="utf-8"))
+            backup = sqlite3.connect(exported_backup)
+            try:
+                rows = backup.execute("SELECT body FROM notes").fetchall()
+            finally:
+                backup.close()
+
+            self.assertEqual(rows, [("committed",)])
+            self.assertTrue(exported_backup.exists())
+            self.assertTrue(exported_meta.exists())
+            self.assertEqual(exported["sha256"], result.meta["sha256"])
+            self.assertEqual(sha256_file(exported_backup), result.meta["sha256"])
+            self.assertEqual(exported_meta_json["exported_to"], exported)
+            self.assertEqual(exported_meta_json["backup_path"], exported["backup_path"])
+
+    def test_create_backup_keeps_local_backup_when_export_fails(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "exported"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.shutil.copy2", side_effect=OSError("export failed")):
+                with self.assertRaisesRegex(OSError, "export failed"):
+                    create_backup(db, reason="manual", cwd=root, export_dir=export_dir)
+
+            local_backups = list((root / ".nilo" / "backups").glob("nilo-*.db"))
+            local_metas = list((root / ".nilo" / "backups").glob("nilo-*.db.meta.json"))
+            exported_files = list(export_dir.glob("*"))
+
+            self.assertEqual(len(local_backups), 1)
+            self.assertEqual(len(local_metas), 1)
+            self.assertEqual(exported_files, [])
+
+    def test_export_backup_files_cleans_export_on_sha256_mismatch_and_keeps_local_backup(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "exported"
+            make_sqlite_db(db)
+            result = create_backup(db, reason="manual", cwd=root)
+            bad_meta = dict(result.meta)
+            bad_meta["sha256"] = "0" * 64
+
+            with self.assertRaisesRegex(BackupError, "export sha256 mismatch"):
+                export_backup_files(result.backup_path, result.meta_path, bad_meta, export_dir, root)
+
+            self.assertTrue(result.backup_path.exists())
+            self.assertTrue(result.meta_path.exists())
+            self.assertEqual(list(export_dir.glob("*")), [])
+
+    def test_backup_cli_exports_backup(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "cloud backups"
+            make_sqlite_db(db)
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                main(["--db", str(db), "backup", "--export", str(export_dir)])
+
+            exported_backups = list(export_dir.glob("nilo-*.db"))
+            exported_metas = list(export_dir.glob("nilo-*.db.meta.json"))
+
+            self.assertEqual(len(exported_backups), 1)
+            self.assertEqual(len(exported_metas), 1)
+            self.assertIn("exported_to:", output.getvalue())
+            self.assertIn("exported_meta:", output.getvalue())
+
+    def test_export_backup_files_uses_collision_suffix(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "exported"
+            make_sqlite_db(db)
+            result = create_backup(db, reason="manual", cwd=root)
+            export_dir.mkdir()
+            collision = export_dir / result.backup_path.name
+            collision.write_bytes(b"existing")
+            collision.with_suffix(collision.suffix + ".meta.json").write_text("{}", encoding="utf-8")
+
+            updated_meta = export_backup_files(result.backup_path, result.meta_path, result.meta, export_dir, root)
+
+            exported = updated_meta["exported_to"]
+            exported_backup = root / exported["backup_path"]
+            self.assertTrue(exported_backup.name.endswith("-01.db"))
+            self.assertEqual(sha256_file(exported_backup), result.meta["sha256"])
 
     def test_create_backup_rejects_invalid_reason(self) -> None:
         with TemporaryDirectory() as directory:

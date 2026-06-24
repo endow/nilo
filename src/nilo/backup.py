@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 from dataclasses import dataclass
@@ -108,7 +109,13 @@ def cleanup_backup_files(backup_path: Path) -> None:
             pass
 
 
-def create_backup(db_path: Path | None = None, *, reason: str = "manual", cwd: Path | None = None) -> BackupResult:
+def create_backup(
+    db_path: Path | None = None,
+    *,
+    reason: str = "manual",
+    cwd: Path | None = None,
+    export_dir: Path | None = None,
+) -> BackupResult:
     if reason not in BACKUP_REASONS:
         raise BackupError(f"invalid backup reason: {reason}")
     source = resolve_db_path(db_path)
@@ -160,7 +167,65 @@ def create_backup(db_path: Path | None = None, *, reason: str = "manual", cwd: P
     except Exception:
         cleanup_backup_files(backup_path)
         raise
+    if export_dir is not None:
+        meta = export_backup_files(backup_path, meta_path, meta, export_dir, repo)
     return BackupResult(backup_path=backup_path, meta_path=meta_path, meta=meta)
+
+
+def reserve_export_path(export_dir: Path, source_name: str) -> Path:
+    destination = export_dir.expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    source = Path(source_name)
+    stem = source.stem
+    suffix = source.suffix
+    candidate = destination / source.name
+    if reserve_file(candidate):
+        return candidate
+    for index in range(1, 100):
+        candidate = destination / f"{stem}-{index:02d}{suffix}"
+        if reserve_file(candidate):
+            return candidate
+    raise BackupError("could not allocate export file name")
+
+
+def export_backup_files(backup_path: Path, meta_path: Path, meta: dict[str, Any], export_dir: Path, cwd: Path) -> dict[str, Any]:
+    export_path = reserve_export_path(export_dir, backup_path.name)
+    export_meta_path = meta_path_for_backup(export_path)
+    temp_path = export_path.with_name(f".{export_path.name}.{os.getpid()}.tmp")
+    temp_meta_path = export_meta_path.with_name(f".{export_meta_path.name}.{os.getpid()}.tmp")
+    try:
+        shutil.copy2(backup_path, temp_path)
+        temp_sha = sha256_file(temp_path)
+        expected_sha = str(meta.get("sha256") or "")
+        if temp_sha != expected_sha:
+            raise BackupError(f"export sha256 mismatch: expected {expected_sha}, got {temp_sha}")
+        temp_path.replace(export_path)
+        export_sha = sha256_file(export_path)
+        if export_sha != expected_sha:
+            raise BackupError(f"export sha256 mismatch after copy: expected {expected_sha}, got {export_sha}")
+
+        local_meta = dict(meta)
+        export_meta = dict(meta)
+        exported_to = {
+            "backup_path": display_path(export_path, cwd),
+            "meta_path": display_path(export_meta_path, cwd),
+            "sha256": export_sha,
+            "exported_at": now_iso(),
+        }
+        local_meta["exported_to"] = exported_to
+        export_meta["backup_path"] = display_path(export_path, cwd)
+        export_meta["exported_to"] = exported_to
+        meta_path.write_text(json.dumps(local_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp_meta_path.write_text(json.dumps(export_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp_meta_path.replace(export_meta_path)
+    except Exception:
+        for path in (temp_meta_path, temp_path, export_meta_path, export_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+    return local_meta
 
 
 def display_path(path: Path, cwd: Path) -> str:

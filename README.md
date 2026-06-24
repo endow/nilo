@@ -143,6 +143,18 @@ nilo upgrade
 nilo upgrade --dry-run
 ```
 
+## DB バックアップと外部退避
+
+Nilo の状態 DB は `.nilo/nilo.db` にあります。稼働中の DB 本体や `.db-wal` / `.db-shm` をクラウド同期ディレクトリへ直接置く運用は推奨しません。外部退避が必要な場合は、SQLite backup API で整合性を確認したバックアップ成果物を export します。
+
+```bash
+nilo backup
+nilo backup --reason daily
+nilo backup --export ~/NiloBackups
+```
+
+`nilo backup` は `.nilo/backups/` に `.db` と隣接する `.meta.json` を作成し、`integrity_check` と sha256 を記録します。`--export <dir>` を付けると、検証済みバックアップと meta を指定ディレクトリへコピーし、コピー後の sha256 を再検証してから meta の `exported_to` に結果を記録します。export 先に同名ファイルがある場合は上書きせず、suffix 付きのファイル名を使います。
+
 ## 使い始める
 
 Nilo を使いたいプロジェクトのルートで一度だけ初期化します。

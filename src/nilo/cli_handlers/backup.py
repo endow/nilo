@@ -7,13 +7,17 @@ from ..backup import BackupError, create_backup, load_backup_records, restore_ba
 
 def cmd_backup(args: argparse.Namespace) -> None:
     try:
-        result = create_backup(args.db, reason=args.reason)
+        result = create_backup(args.db, reason=args.reason, export_dir=args.export)
     except BackupError as exc:
         raise SystemExit(str(exc)) from exc
     print(f"backup: {result.backup_path}")
     print(f"meta: {result.meta_path}")
     print(f"integrity_check: {result.meta['integrity_check']}")
     print(f"sha256: {result.meta['sha256']}")
+    if result.meta.get("exported_to"):
+        exported = result.meta["exported_to"]
+        print(f"exported_to: {exported['backup_path']}")
+        print(f"exported_meta: {exported['meta_path']}")
 
 
 def cmd_backups(args: argparse.Namespace) -> None:
