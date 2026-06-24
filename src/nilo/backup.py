@@ -5,9 +5,11 @@ import json
 import os
 import shutil
 import sqlite3
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from subprocess import PIPE, run
 from typing import Any
 
 from . import __version__
@@ -109,15 +111,90 @@ def cleanup_backup_files(backup_path: Path) -> None:
             pass
 
 
+def backup_config_path(db_path: Path | None = None) -> Path:
+    return resolve_db_path(db_path).parent / "config.toml"
+
+
+def load_backup_config(db_path: Path | None = None) -> dict[str, Any]:
+    path = backup_config_path(db_path)
+    if not path.exists():
+        return {}
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise BackupError(f"could not parse backup config: {path}: {exc}") from exc
+    backup = data.get("backup", {})
+    if not isinstance(backup, dict):
+        raise BackupError(f"backup config section must be a table: {path}")
+    return backup
+
+
+def configured_age_recipient(db_path: Path | None = None) -> str:
+    value = load_backup_config(db_path).get("age_recipient", "")
+    return value if isinstance(value, str) else ""
+
+
+def save_age_recipient(db_path: Path | None, recipient: str) -> Path:
+    if not recipient:
+        raise BackupError("age recipient is required to save backup config")
+    path = backup_config_path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(recipient, ensure_ascii=False)
+    if not path.exists():
+        write_text_atomic(path, f"[backup]\nage_recipient = {encoded}\n")
+        return path
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    backup_header_index = next((index for index, line in enumerate(lines) if line.strip() == "[backup]"), None)
+    if backup_header_index is None:
+        suffix = ["", "[backup]", f"age_recipient = {encoded}"] if lines else ["[backup]", f"age_recipient = {encoded}"]
+        write_text_atomic(path, "\n".join(lines + suffix) + "\n")
+        return path
+
+    insert_index = len(lines)
+    for index in range(backup_header_index + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            insert_index = index
+            break
+        if stripped.split("=", 1)[0].strip() == "age_recipient":
+            lines[index] = f"age_recipient = {encoded}"
+            write_text_atomic(path, "\n".join(lines) + "\n")
+            return path
+    lines.insert(insert_index, f"age_recipient = {encoded}")
+    write_text_atomic(path, "\n".join(lines) + "\n")
+    return path
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temp_path.write_text(text, encoding="utf-8")
+        temp_path.replace(path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def create_backup(
     db_path: Path | None = None,
     *,
     reason: str = "manual",
     cwd: Path | None = None,
     export_dir: Path | None = None,
+    encrypt: bool = False,
+    recipient: str | None = None,
+    age_command: str = "age",
 ) -> BackupResult:
     if reason not in BACKUP_REASONS:
         raise BackupError(f"invalid backup reason: {reason}")
+    age_executable: str | None = None
+    if encrypt:
+        age_executable = require_age_ready(recipient, age_command)
     source = resolve_db_path(db_path)
     if not source.exists():
         raise BackupError(f"database not found: {source}")
@@ -167,9 +244,110 @@ def create_backup(
     except Exception:
         cleanup_backup_files(backup_path)
         raise
+    if encrypt:
+        try:
+            encrypted = encrypt_backup_file(backup_path, meta_path, meta, recipient or "", repo, age_command, age_executable)
+        except Exception:
+            cleanup_backup_files(backup_path)
+            raise
+        backup_path = encrypted.backup_path
+        meta_path = encrypted.meta_path
+        meta = encrypted.meta
     if export_dir is not None:
         meta = export_backup_files(backup_path, meta_path, meta, export_dir, repo)
     return BackupResult(backup_path=backup_path, meta_path=meta_path, meta=meta)
+
+
+def require_age_ready(recipient: str | None, age_command: str = "age") -> str:
+    if not recipient:
+        raise BackupError("age recipient is required for encrypted backup")
+    executable = shutil.which(age_command)
+    if executable is None:
+        raise BackupError(f"age command not found: {age_command}")
+    return executable
+
+
+def require_age_command(age_command: str = "age") -> str:
+    executable = shutil.which(age_command)
+    if executable is None:
+        raise BackupError(f"age command not found: {age_command}")
+    return executable
+
+
+def encrypt_file_with_age(
+    plaintext_path: Path,
+    encrypted_path: Path,
+    recipient: str,
+    age_command: str = "age",
+    age_executable: str | None = None,
+) -> None:
+    executable = age_executable or require_age_ready(recipient, age_command)
+    with encrypted_path.open("wb") as output:
+        result = run(
+            [executable, "-r", recipient, str(plaintext_path)],
+            stdout=output,
+            stderr=PIPE,
+            check=False,
+        )
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else "age encryption failed"
+        raise BackupError(message)
+
+
+def decrypt_file_with_age(encrypted_path: Path, plaintext_path: Path, age_command: str = "age") -> None:
+    executable = require_age_command(age_command)
+    with plaintext_path.open("wb") as output:
+        result = run(
+            [executable, "-d", str(encrypted_path)],
+            stdout=output,
+            stderr=PIPE,
+            check=False,
+        )
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else "age decryption failed"
+        raise BackupError(message)
+
+
+def encrypt_backup_file(
+    backup_path: Path,
+    meta_path: Path,
+    meta: dict[str, Any],
+    recipient: str,
+    cwd: Path,
+    age_command: str = "age",
+    age_executable: str | None = None,
+) -> BackupResult:
+    encrypted_path = Path(str(backup_path) + ".age")
+    encrypted_meta_path = meta_path_for_backup(encrypted_path)
+    if encrypted_path.exists() or encrypted_meta_path.exists():
+        raise BackupError(f"encrypted backup already exists: {encrypted_path}")
+    try:
+        encrypt_file_with_age(backup_path, encrypted_path, recipient, age_command, age_executable)
+        ciphertext_sha = sha256_file(encrypted_path)
+        plaintext_sha = str(meta["sha256"])
+        encrypted_meta = dict(meta)
+        encrypted_meta.update(
+            {
+                "db_size_bytes": encrypted_path.stat().st_size,
+                "sha256": ciphertext_sha,
+                "backup_path": display_path(encrypted_path, cwd),
+                "encrypted": True,
+                "encryption": {
+                    "tool": "age",
+                    "recipient": recipient,
+                    "plaintext_sha256": plaintext_sha,
+                    "ciphertext_sha256": ciphertext_sha,
+                    "plaintext_size_bytes": meta["db_size_bytes"],
+                    "ciphertext_size_bytes": encrypted_path.stat().st_size,
+                },
+            }
+        )
+        encrypted_meta_path.write_text(json.dumps(encrypted_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        cleanup_backup_files(encrypted_path)
+        raise
+    cleanup_backup_files(backup_path)
+    return BackupResult(backup_path=encrypted_path, meta_path=encrypted_meta_path, meta=encrypted_meta)
 
 
 def reserve_export_path(export_dir: Path, source_name: str) -> Path:
@@ -245,7 +423,8 @@ def load_backup_records(db_path: Path | None = None) -> list[BackupRecord]:
     if not backup_dir.exists():
         return []
     records: list[BackupRecord] = []
-    for meta_path in sorted(backup_dir.glob("*.db.meta.json")):
+    meta_paths = sorted(set(backup_dir.glob("*.db.meta.json")) | set(backup_dir.glob("*.db.age.meta.json")))
+    for meta_path in meta_paths:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -260,6 +439,8 @@ def verify_backup_file(backup_path: Path) -> None:
     source = backup_path.resolve()
     if not source.exists():
         raise BackupError(f"backup not found: {source}")
+    if source.suffix == ".age":
+        raise BackupError("encrypted backup requires restore --decrypt")
     meta_path = meta_path_for_backup(source)
     if not meta_path.exists():
         raise BackupError(f"backup meta not found: {meta_path}")
@@ -270,10 +451,45 @@ def verify_backup_file(backup_path: Path) -> None:
     expected_sha = str(meta.get("sha256") or "")
     if not expected_sha:
         raise BackupError(f"backup meta has no sha256: {meta_path}")
+    if meta.get("encrypted"):
+        raise BackupError("encrypted backup requires restore --decrypt")
     integrity_check(source)
     actual_sha = sha256_file(source)
     if actual_sha != expected_sha:
         raise BackupError(f"backup sha256 mismatch: expected {expected_sha}, got {actual_sha}")
+
+
+def load_backup_meta(backup_path: Path) -> dict[str, Any]:
+    meta_path = meta_path_for_backup(backup_path)
+    if not meta_path.exists():
+        raise BackupError(f"backup meta not found: {meta_path}")
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BackupError(f"could not read backup meta: {meta_path}: {exc}") from exc
+
+
+def verify_encrypted_backup_file(encrypted_path: Path, plaintext_path: Path) -> None:
+    source = encrypted_path.resolve()
+    if not source.exists():
+        raise BackupError(f"backup not found: {source}")
+    meta = load_backup_meta(source)
+    encryption = meta.get("encryption")
+    if not meta.get("encrypted") or not isinstance(encryption, dict):
+        raise BackupError(f"backup meta is not encrypted backup meta: {meta_path_for_backup(source)}")
+    expected_ciphertext_sha = str(encryption.get("ciphertext_sha256") or meta.get("sha256") or "")
+    if not expected_ciphertext_sha:
+        raise BackupError(f"backup meta has no ciphertext sha256: {meta_path_for_backup(source)}")
+    actual_ciphertext_sha = sha256_file(source)
+    if actual_ciphertext_sha != expected_ciphertext_sha:
+        raise BackupError(f"encrypted backup sha256 mismatch: expected {expected_ciphertext_sha}, got {actual_ciphertext_sha}")
+    integrity_check(plaintext_path)
+    expected_plaintext_sha = str(encryption.get("plaintext_sha256") or "")
+    if not expected_plaintext_sha:
+        raise BackupError(f"backup meta has no plaintext sha256: {meta_path_for_backup(source)}")
+    actual_plaintext_sha = sha256_file(plaintext_path)
+    if actual_plaintext_sha != expected_plaintext_sha:
+        raise BackupError(f"decrypted backup sha256 mismatch: expected {expected_plaintext_sha}, got {actual_plaintext_sha}")
 
 
 def sqlite_sidecar_paths(db_path: Path) -> tuple[Path, Path, Path]:
@@ -294,13 +510,13 @@ def remove_sqlite_sidecars(db_path: Path) -> None:
             raise BackupError(f"could not remove SQLite sidecar file before restore verification: {sidecar}: {exc}") from exc
 
 
-def restore_backup(backup_path: Path, db_path: Path | None = None, *, cwd: Path | None = None) -> RestoreResult:
-    source = backup_path.resolve()
-    destination = resolve_db_path(db_path)
-    if source == destination:
-        raise BackupError("backup path is the same as destination database")
-    verify_backup_file(source)
-
+def replace_database_from_verified_backup(
+    source: Path,
+    destination: Path,
+    *,
+    cwd: Path | None = None,
+    reported_backup_path: Path | None = None,
+) -> RestoreResult:
     before_restore: BackupResult | None = None
     if destination.exists():
         before_restore = create_backup(destination, reason="before-restore", cwd=cwd)
@@ -325,7 +541,42 @@ def restore_backup(backup_path: Path, db_path: Path | None = None, *, cwd: Path 
         raise BackupError(f"restore verification changed unexpectedly: {temp_check} -> {final_check}")
     return RestoreResult(
         restored_path=destination,
-        backup_path=source,
+        backup_path=reported_backup_path or source,
         before_restore=before_restore,
         integrity_check=final_check,
     )
+
+
+def restore_backup(backup_path: Path, db_path: Path | None = None, *, cwd: Path | None = None) -> RestoreResult:
+    source = backup_path.resolve()
+    destination = resolve_db_path(db_path)
+    if source == destination:
+        raise BackupError("backup path is the same as destination database")
+    verify_backup_file(source)
+    return replace_database_from_verified_backup(source, destination, cwd=cwd)
+
+
+def restore_encrypted_backup(
+    backup_path: Path,
+    db_path: Path | None = None,
+    *,
+    cwd: Path | None = None,
+    age_command: str = "age",
+) -> RestoreResult:
+    source = backup_path.resolve()
+    destination = resolve_db_path(db_path)
+    if source == destination:
+        raise BackupError("backup path is the same as destination database")
+    require_age_command(age_command)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    plaintext_path = destination.with_name(f".{destination.name}.{os.getpid()}.decrypt.tmp")
+    try:
+        decrypt_file_with_age(source, plaintext_path, age_command)
+        verify_encrypted_backup_file(source, plaintext_path)
+        return replace_database_from_verified_backup(plaintext_path, destination, cwd=cwd, reported_backup_path=source)
+    finally:
+        try:
+            plaintext_path.unlink()
+        except FileNotFoundError:
+            pass
+        remove_sqlite_sidecars(plaintext_path)

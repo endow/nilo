@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -18,11 +19,26 @@ from nilo.backup import (
     load_backup_records,
     reserve_backup_path,
     restore_backup,
+    restore_encrypted_backup,
     sha256_file,
     sqlite_sidecar_paths,
 )
 from nilo.cli import main
 from tests.backup_helpers import make_sqlite_db
+
+
+def fake_age_run(args, stdout=None, stderr=None, check=False):
+    if "-r" in args:
+        source = Path(args[-1])
+        assert stdout is not None
+        stdout.write(source.read_bytes()[::-1])
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+    if "-d" in args:
+        source = Path(args[-1])
+        assert stdout is not None
+        stdout.write(source.read_bytes()[::-1])
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+    return subprocess.CompletedProcess(args, 1, b"", b"unsupported fake age command")
 
 
 class BackupTests(unittest.TestCase):
@@ -162,6 +178,150 @@ class BackupTests(unittest.TestCase):
             self.assertEqual(len(exported_metas), 1)
             self.assertIn("exported_to:", output.getvalue())
             self.assertIn("exported_meta:", output.getvalue())
+
+    def test_create_backup_encrypts_with_age_and_removes_plaintext_backup(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.shutil.which", return_value="age") as which, patch("nilo.backup.run", side_effect=fake_age_run):
+                result = create_backup(db, reason="manual", cwd=root, encrypt=True, recipient="age1recipient")
+
+            meta = json.loads(result.meta_path.read_text(encoding="utf-8"))
+            plaintext_backup = Path(str(result.backup_path).removesuffix(".age"))
+            plaintext_meta = plaintext_backup.with_suffix(plaintext_backup.suffix + ".meta.json")
+
+            self.assertTrue(result.backup_path.name.endswith(".db.age"))
+            self.assertFalse(plaintext_backup.exists())
+            self.assertFalse(plaintext_meta.exists())
+            self.assertTrue(meta["encrypted"])
+            self.assertEqual(meta["encryption"]["tool"], "age")
+            self.assertEqual(meta["encryption"]["recipient"], "age1recipient")
+            self.assertEqual(meta["sha256"], meta["encryption"]["ciphertext_sha256"])
+            self.assertRegex(meta["encryption"]["plaintext_sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(sha256_file(result.backup_path), meta["encryption"]["ciphertext_sha256"])
+            which.assert_called_once_with("age")
+
+    def test_create_backup_encrypt_rejects_missing_age_without_plaintext_fallback(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.shutil.which", return_value=None):
+                with self.assertRaisesRegex(BackupError, "age command not found"):
+                    create_backup(db, reason="manual", cwd=root, encrypt=True, recipient="age1recipient")
+
+            self.assertFalse((root / ".nilo" / "backups").exists())
+
+    def test_backup_cli_encrypt_requires_recipient(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with self.assertRaisesRegex(SystemExit, "age recipient is required"):
+                main(["--db", str(db), "backup", "--encrypt"])
+
+            self.assertFalse((root / ".nilo" / "backups").exists())
+
+    def test_backup_cli_recipient_requires_encrypt(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with self.assertRaisesRegex(SystemExit, "--recipient requires --encrypt"):
+                main(["--db", str(db), "backup", "--recipient", "age1recipient"])
+
+            self.assertFalse((root / ".nilo" / "backups").exists())
+
+    def test_backup_cli_encrypt_exports_encrypted_artifacts(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "encrypted exports"
+            make_sqlite_db(db)
+            output = io.StringIO()
+
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                with redirect_stdout(output):
+                    main(["--db", str(db), "backup", "--encrypt", "--recipient", "age1recipient", "--export", str(export_dir)])
+
+            exported_backups = list(export_dir.glob("nilo-*.db.age"))
+            exported_metas = list(export_dir.glob("nilo-*.db.age.meta.json"))
+
+            self.assertEqual(len(exported_backups), 1)
+            self.assertEqual(len(exported_metas), 1)
+            self.assertIn("encrypted: true", output.getvalue())
+            self.assertIn("ciphertext_sha256:", output.getvalue())
+
+    def test_backup_cli_encrypt_uses_configured_age_recipient(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            config = root / ".nilo" / "config.toml"
+            config.write_text('[backup]\nage_recipient = "age1configured"\n', encoding="utf-8")
+            output = io.StringIO()
+
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                with redirect_stdout(output):
+                    main(["--db", str(db), "backup", "--encrypt"])
+
+            meta_path = next((root / ".nilo" / "backups").glob("nilo-*.db.age.meta.json"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+            self.assertIn("encrypted: true", output.getvalue())
+            self.assertEqual(meta["encryption"]["recipient"], "age1configured")
+
+    def test_backup_cli_save_recipient_updates_config_after_success(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            output = io.StringIO()
+
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                with redirect_stdout(output):
+                    main(["--db", str(db), "backup", "--encrypt", "--recipient", "age1saved", "--save-recipient"])
+
+            config = (root / ".nilo" / "config.toml").read_text(encoding="utf-8")
+
+            self.assertIn('[backup]', config)
+            self.assertIn('age_recipient = "age1saved"', config)
+            self.assertIn("saved_recipient:", output.getvalue())
+
+    def test_backup_cli_save_recipient_does_not_overwrite_similar_config_key(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            config_path = root / ".nilo" / "config.toml"
+            config_path.write_text('[backup]\nage_recipient_backup = "keep-me"\n', encoding="utf-8")
+            output = io.StringIO()
+
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                with redirect_stdout(output):
+                    main(["--db", str(db), "backup", "--encrypt", "--recipient", "age1saved", "--save-recipient"])
+
+            config = config_path.read_text(encoding="utf-8")
+
+            self.assertIn('age_recipient_backup = "keep-me"', config)
+            self.assertIn('age_recipient = "age1saved"', config)
+            self.assertIn("saved_recipient:", output.getvalue())
+
+    def test_backup_cli_save_recipient_requires_encrypt(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with self.assertRaisesRegex(SystemExit, "--save-recipient requires --encrypt"):
+                main(["--db", str(db), "backup", "--save-recipient"])
+
+            self.assertFalse((root / ".nilo" / "config.toml").exists())
 
     def test_export_backup_files_uses_collision_suffix(self) -> None:
         with TemporaryDirectory() as directory:
@@ -353,6 +513,69 @@ class BackupTests(unittest.TestCase):
 
             self.assertEqual(rows, [("old",)])
             self.assertIn("before_restore_backup:", output.getvalue())
+
+    def test_restore_encrypted_backup_decrypts_verifies_and_removes_temp_plaintext(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db, body="old")
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                backup = create_backup(db, reason="manual", cwd=root, encrypt=True, recipient="age1recipient")
+            db.unlink()
+            make_sqlite_db(db, body="new")
+
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                result = restore_encrypted_backup(backup.backup_path, db, cwd=root)
+
+            restored = sqlite3.connect(db)
+            before = sqlite3.connect(result.before_restore.backup_path) if result.before_restore else None
+            try:
+                restored_rows = restored.execute("SELECT body FROM notes").fetchall()
+                before_rows = before.execute("SELECT body FROM notes").fetchall() if before else []
+            finally:
+                restored.close()
+                if before is not None:
+                    before.close()
+
+            self.assertEqual(restored_rows, [("old",)])
+            self.assertEqual(before_rows, [("new",)])
+            self.assertEqual(result.backup_path, backup.backup_path)
+            self.assertEqual(list(db.parent.glob("*.decrypt.tmp")), [])
+
+    def test_restore_cli_requires_decrypt_for_encrypted_backup(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db, body="old")
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                backup = create_backup(db, reason="manual", cwd=root, encrypt=True, recipient="age1recipient")
+
+            with self.assertRaisesRegex(SystemExit, "encrypted backup requires restore --decrypt"):
+                main(["--db", str(db), "restore", str(backup.backup_path)])
+
+    def test_restore_cli_decrypt_restores_encrypted_backup(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db, body="old")
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                backup = create_backup(db, reason="manual", cwd=root, encrypt=True, recipient="age1recipient")
+            db.unlink()
+            make_sqlite_db(db, body="new")
+            output = io.StringIO()
+
+            with patch("nilo.backup.shutil.which", return_value="age"), patch("nilo.backup.run", side_effect=fake_age_run):
+                with redirect_stdout(output):
+                    main(["--db", str(db), "restore", "--decrypt", str(backup.backup_path)])
+
+            restored = sqlite3.connect(db)
+            try:
+                rows = restored.execute("SELECT body FROM notes").fetchall()
+            finally:
+                restored.close()
+
+            self.assertEqual(rows, [("old",)])
+            self.assertIn("from:", output.getvalue())
 
 
 if __name__ == "__main__":
