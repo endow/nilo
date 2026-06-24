@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable
 from types import ModuleType
 
+from .backup import register_backup
 from .facade import register_facade
 from .knowledge import register_rules, register_success
 from .mcp import register_mcp
@@ -36,6 +37,7 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     upgrade.set_defaults(func=handlers.cmd_upgrade)
     update_check = sub.add_parser("update-check")
     update_check.set_defaults(func=handlers.cmd_update_check)
+    register_backup(sub, handlers)
 
     register_run(sub, handlers)
     register_facade(sub, handlers)

@@ -8,8 +8,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from nilo.backup import BackupError
 from nilo.cli import main
-from nilo.upgrade import CommandResult, run_upgrade
+from nilo.upgrade import CommandResult, backup_database, run_upgrade
+from tests.backup_helpers import make_sqlite_db
 
 
 class FakeGitRunner:
@@ -124,8 +126,7 @@ class UpgradeTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             repo = Path(directory)
             db = repo / ".nilo" / "nilo.db"
-            db.parent.mkdir()
-            db.write_text("db", encoding="utf-8")
+            make_sqlite_db(db)
             runner = FakeGitRunner(repo, remote_rev="b" * 40)
             output = io.StringIO()
 
@@ -133,12 +134,14 @@ class UpgradeTests(unittest.TestCase):
                 code = run_upgrade(db_path=db, run=runner)
 
             backups = list((repo / ".nilo" / "backups").glob("nilo-*.db"))
+            metas = list((repo / ".nilo" / "backups").glob("nilo-*.db.meta.json"))
 
         self.assertEqual(code, 0)
         self.assertTrue(runner.command_was_run(["git", "pull", "--ff-only"]))
         self.assertTrue(runner.command_prefix_was_run([sys.executable, "-m", "pip", "install"]))
         self.assertTrue(any(command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"] for command in runner.commands))
         self.assertEqual(len(backups), 1)
+        self.assertEqual(len(metas), 1)
         self.assertIn("Nilo was updated from aaaaaaaaaaaa to bbbbbbbbbbbb.", output.getvalue())
 
     def test_upgrade_default_db_path_is_passed_to_migration(self) -> None:
@@ -149,8 +152,7 @@ class UpgradeTests(unittest.TestCase):
             repo.mkdir()
             project.mkdir()
             db = project / ".nilo" / "nilo.db"
-            db.parent.mkdir()
-            db.write_text("db", encoding="utf-8")
+            make_sqlite_db(db)
             runner = FakeGitRunner(repo, remote_rev="b" * 40)
             output = io.StringIO()
 
@@ -163,9 +165,11 @@ class UpgradeTests(unittest.TestCase):
                 if command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"]
             ]
             backups = list((project / ".nilo" / "backups").glob("nilo-*.db"))
+            metas = list((project / ".nilo" / "backups").glob("nilo-*.db.meta.json"))
 
         self.assertEqual(code, 0)
         self.assertEqual(len(backups), 1)
+        self.assertEqual(len(metas), 1)
         self.assertEqual(len(migrate_commands), 1)
         self.assertEqual(migrate_commands[0], [sys.executable, "-m", "nilo", "--db", str(db.resolve()), "migrate", "--apply"])
 
@@ -186,8 +190,7 @@ class UpgradeTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             repo = Path(directory)
             db = repo / ".nilo" / "nilo.db"
-            db.parent.mkdir()
-            db.write_text("db", encoding="utf-8")
+            make_sqlite_db(db)
             runner = FakeGitRunner(repo, remote_rev="b" * 40)
             output = io.StringIO()
 
@@ -197,6 +200,15 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Upgrade stopped: database backup failed.", output.getvalue())
         self.assertFalse(any(command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"] for command in runner.commands))
+
+    def test_backup_database_translates_backup_error_to_os_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with patch("nilo.upgrade.create_backup", side_effect=BackupError("integrity failed")):
+                with self.assertRaisesRegex(OSError, "integrity failed"):
+                    backup_database(db)
 
     def test_dry_run_does_not_pull_reinstall_or_migrate(self) -> None:
         with TemporaryDirectory() as directory:

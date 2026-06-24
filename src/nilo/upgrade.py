@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from .backup import BackupError, create_backup
 from .store import default_db_path
 
 
@@ -76,12 +75,10 @@ def git_rev(repo: Path, ref: str, run: RunCommand = run_command) -> str:
 def backup_database(db_path: Path) -> Path | None:
     if not db_path.exists():
         return None
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_dir = db_path.parent / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_dir / f"nilo-{timestamp}.db"
-    shutil.copy2(db_path, backup_path)
-    return backup_path
+    try:
+        return create_backup(db_path, reason="before-upgrade").backup_path
+    except BackupError as exc:
+        raise OSError(str(exc)) from exc
 
 
 class UpgradeError(RuntimeError):
