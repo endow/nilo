@@ -7,6 +7,7 @@ from ..backup import (
     configured_age_recipient,
     create_backup,
     load_backup_records,
+    prune_backup_records,
     restore_backup,
     restore_encrypted_backup,
     save_age_recipient,
@@ -60,6 +61,21 @@ def cmd_backups(args: argparse.Namespace) -> None:
         status = "present" if record.db_exists else "missing"
         path = str(record.backup_path)
         print(f"{created_at[:25]:25}  {reason[:14]:14}  {size:>10}  {sha:12}  {integrity[:9]:9}  {status:7}  {path}")
+
+
+def cmd_backups_prune(args: argparse.Namespace) -> None:
+    include_reasons = set(args.include_reason) if args.include_reason else None
+    try:
+        result = prune_backup_records(args.db, keep=args.keep, include_reasons=include_reasons, dry_run=args.dry_run)
+    except BackupError as exc:
+        raise SystemExit(str(exc)) from exc
+    action = "would_prune" if args.dry_run else "pruned"
+    print(f"{action}: {len(result.pruned)}")
+    print(f"kept: {len(result.kept)}")
+    print(f"protected: {len(result.protected)}")
+    for record in result.pruned:
+        reason = str(record.meta.get("reason", ""))
+        print(f"{action}: {record.backup_path} reason={reason}")
 
 
 def cmd_restore(args: argparse.Namespace) -> None:

@@ -18,6 +18,18 @@ def register_backup(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
 
     backups = sub.add_parser("backups")
     backups.set_defaults(func=handlers.cmd_backups)
+    backups_sub = backups.add_subparsers(dest="backups_command")
+    prune = backups_sub.add_parser("prune")
+    prune.add_argument("--keep", type=int, required=True, help="Keep the newest N prunable backup records")
+    prune.add_argument(
+        "--include-reason",
+        choices=sorted(BACKUP_REASONS),
+        action="append",
+        default=None,
+        help="Restrict pruning to this reason; repeat to include multiple reasons",
+    )
+    prune.add_argument("--dry-run", action="store_true", help="Print what would be pruned without deleting files")
+    prune.set_defaults(func=handlers.cmd_backups_prune)
 
     restore = sub.add_parser("restore")
     restore.add_argument("--decrypt", action="store_true", help="Decrypt an age-encrypted backup before restore")

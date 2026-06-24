@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from subprocess import PIPE, run
-from typing import Any
+from typing import Any, Sequence
 
 from . import __version__
 from .gitmeta import head_commit, working_tree_state
@@ -19,6 +19,8 @@ from .timeutil import now_iso
 
 
 BACKUP_REASONS = {"manual", "before-upgrade", "before-migration", "before-restore", "daily", "other"}
+DEFAULT_PRUNE_PROTECTED_REASONS = {"manual", "before-upgrade", "before-migration", "before-restore"}
+POST_COMMAND_OUTPUT_LIMIT = 8192
 
 
 class BackupError(RuntimeError):
@@ -38,6 +40,13 @@ class BackupRecord:
     meta_path: Path
     meta: dict[str, Any]
     db_exists: bool
+
+
+@dataclass(frozen=True)
+class PruneResult:
+    kept: list[BackupRecord]
+    pruned: list[BackupRecord]
+    protected: list[BackupRecord]
 
 
 @dataclass(frozen=True)
@@ -135,6 +144,24 @@ def configured_age_recipient(db_path: Path | None = None) -> str:
     return value if isinstance(value, str) else ""
 
 
+def configured_post_command(db_path: Path | None = None) -> list[str] | None:
+    value = load_backup_config(db_path).get("post_command")
+    if value is None:
+        return None
+    return validate_post_command(value)
+
+
+def validate_post_command(value: Any) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise BackupError("backup.post_command must be a non-empty argv array")
+    argv: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or item == "":
+            raise BackupError("backup.post_command entries must be non-empty strings")
+        argv.append(item)
+    return argv
+
+
 def save_age_recipient(db_path: Path | None, recipient: str) -> Path:
     if not recipient:
         raise BackupError("age recipient is required to save backup config")
@@ -189,6 +216,7 @@ def create_backup(
     encrypt: bool = False,
     recipient: str | None = None,
     age_command: str = "age",
+    post_command: Sequence[str] | None = None,
 ) -> BackupResult:
     if reason not in BACKUP_REASONS:
         raise BackupError(f"invalid backup reason: {reason}")
@@ -255,6 +283,9 @@ def create_backup(
         meta = encrypted.meta
     if export_dir is not None:
         meta = export_backup_files(backup_path, meta_path, meta, export_dir, repo)
+    configured_command = list(post_command) if post_command is not None else configured_post_command(db_path)
+    if configured_command:
+        meta = run_post_command(configured_command, backup_path, meta_path, meta, repo)
     return BackupResult(backup_path=backup_path, meta_path=meta_path, meta=meta)
 
 
@@ -406,6 +437,115 @@ def export_backup_files(backup_path: Path, meta_path: Path, meta: dict[str, Any]
     return local_meta
 
 
+def run_post_command(argv_template: Sequence[str], backup_path: Path, meta_path: Path, meta: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    argv = render_post_command(argv_template, backup_path, meta_path, meta, cwd)
+    executed_at = now_iso()
+    try:
+        result = run(argv, stdout=PIPE, stderr=PIPE, text=True, check=False)
+    except OSError as exc:
+        updated_meta = with_post_command_meta(
+            meta,
+            argv,
+            executed_at,
+            returncode=None,
+            stdout="",
+            stderr=str(exc),
+        )
+        meta_path.write_text(json.dumps(updated_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        update_exported_post_command_meta(updated_meta, cwd)
+        raise BackupError(f"post_command failed to start: {exc}") from exc
+
+    updated_meta = with_post_command_meta(
+        meta,
+        argv,
+        executed_at,
+        returncode=result.returncode,
+        stdout=result.stdout or "",
+        stderr=result.stderr or "",
+    )
+    meta_path.write_text(json.dumps(updated_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    update_exported_post_command_meta(updated_meta, cwd)
+    if result.returncode != 0:
+        raise BackupError(f"post_command failed with exit code {result.returncode}")
+    return updated_meta
+
+
+def render_post_command(argv_template: Sequence[str], backup_path: Path, meta_path: Path, meta: dict[str, Any], cwd: Path) -> list[str]:
+    argv = validate_post_command(list(argv_template))
+    exported_to = meta.get("exported_to")
+    exported_backup_path = ""
+    exported_meta_path = ""
+    if isinstance(exported_to, dict):
+        exported_backup_path = str(exported_to.get("backup_path") or "")
+        exported_meta_path = str(exported_to.get("meta_path") or "")
+    tokens = {
+        "backup_path": display_path(backup_path, cwd),
+        "meta_path": display_path(meta_path, cwd),
+        "reason": str(meta.get("reason") or ""),
+        "sha256": str(meta.get("sha256") or ""),
+        "encrypted": "true" if meta.get("encrypted") else "false",
+        "exported_backup_path": exported_backup_path,
+        "exported_meta_path": exported_meta_path,
+    }
+    rendered: list[str] = []
+    for arg in argv:
+        rendered_arg = arg
+        for key, value in tokens.items():
+            rendered_arg = rendered_arg.replace("{" + key + "}", value)
+        if "{" in rendered_arg or "}" in rendered_arg:
+            raise BackupError(f"unsupported post_command template token in argument: {arg}")
+        rendered.append(rendered_arg)
+    return rendered
+
+
+def with_post_command_meta(
+    meta: dict[str, Any],
+    argv: Sequence[str],
+    executed_at: str,
+    *,
+    returncode: int | None,
+    stdout: str,
+    stderr: str,
+) -> dict[str, Any]:
+    updated = dict(meta)
+    updated["post_command"] = {
+        "argv": list(argv),
+        "executed_at": executed_at,
+        "returncode": returncode,
+        "success": returncode == 0,
+        "stdout": truncate_output(stdout),
+        "stderr": truncate_output(stderr),
+    }
+    return updated
+
+
+def update_exported_post_command_meta(meta: dict[str, Any], cwd: Path) -> None:
+    exported_to = meta.get("exported_to")
+    post_command = meta.get("post_command")
+    if not isinstance(exported_to, dict) or not isinstance(post_command, dict):
+        return
+    meta_value = exported_to.get("meta_path")
+    if not isinstance(meta_value, str) or not meta_value:
+        return
+    export_meta_path = Path(meta_value)
+    if not export_meta_path.is_absolute():
+        export_meta_path = cwd / export_meta_path
+    if not export_meta_path.exists():
+        return
+    try:
+        exported_meta = json.loads(export_meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BackupError(f"could not update exported backup meta with post_command result: {export_meta_path}: {exc}") from exc
+    exported_meta["post_command"] = post_command
+    export_meta_path.write_text(json.dumps(exported_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def truncate_output(value: str) -> str:
+    if len(value) <= POST_COMMAND_OUTPUT_LIMIT:
+        return value
+    return value[:POST_COMMAND_OUTPUT_LIMIT] + "\n[truncated]"
+
+
 def display_path(path: Path, cwd: Path) -> str:
     try:
         return path.relative_to(cwd).as_posix()
@@ -433,6 +573,55 @@ def load_backup_records(db_path: Path | None = None) -> list[BackupRecord]:
         records.append(BackupRecord(backup_path=backup_path, meta_path=meta_path, meta=meta, db_exists=backup_path.exists()))
     records.sort(key=lambda record: str(record.meta.get("created_at", "")), reverse=True)
     return records
+
+
+def prune_backup_records(
+    db_path: Path | None = None,
+    *,
+    keep: int,
+    include_reasons: set[str] | None = None,
+    dry_run: bool = False,
+) -> PruneResult:
+    if keep < 0:
+        raise BackupError("--keep must be zero or greater")
+    if include_reasons is not None:
+        invalid = include_reasons - BACKUP_REASONS
+        if invalid:
+            raise BackupError(f"invalid backup reason for prune: {sorted(invalid)[0]}")
+    records = load_backup_records(db_path)
+    if include_reasons is None:
+        candidate_reasons = BACKUP_REASONS - DEFAULT_PRUNE_PROTECTED_REASONS
+    else:
+        candidate_reasons = set(include_reasons)
+
+    protected: list[BackupRecord] = []
+    candidates: list[BackupRecord] = []
+    for record in records:
+        reason = str(record.meta.get("reason") or "")
+        if reason in candidate_reasons:
+            candidates.append(record)
+        else:
+            protected.append(record)
+
+    kept = candidates[:keep]
+    pruned = candidates[keep:]
+    if not dry_run:
+        for record in pruned:
+            remove_backup_record(record)
+    return PruneResult(kept=kept, pruned=pruned, protected=protected)
+
+
+def remove_backup_record(record: BackupRecord) -> None:
+    errors: list[str] = []
+    for path in (record.backup_path, record.meta_path):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+    if errors:
+        raise BackupError("could not prune backup record: " + "; ".join(errors))
 
 
 def verify_backup_file(backup_path: Path) -> None:

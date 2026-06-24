@@ -17,11 +17,14 @@ from nilo.backup import (
     create_backup,
     export_backup_files,
     load_backup_records,
+    prune_backup_records,
     reserve_backup_path,
+    render_post_command,
     restore_backup,
     restore_encrypted_backup,
     sha256_file,
     sqlite_sidecar_paths,
+    truncate_output,
 )
 from nilo.cli import main
 from tests.backup_helpers import make_sqlite_db
@@ -449,6 +452,189 @@ class BackupTests(unittest.TestCase):
                 main(["--db", str(db), "backups"])
 
             self.assertIn("missing", output.getvalue())
+
+    def test_backups_prune_keeps_newest_prunable_and_protects_safety_backups_by_default(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            old_daily = create_backup(db, reason="daily", cwd=root)
+            new_daily = create_backup(db, reason="daily", cwd=root)
+            manual = create_backup(db, reason="manual", cwd=root)
+            before_upgrade = create_backup(db, reason="before-upgrade", cwd=root)
+            before_migration = create_backup(db, reason="before-migration", cwd=root)
+            before_restore = create_backup(db, reason="before-restore", cwd=root)
+            for result, created_at in (
+                (old_daily, "2026-01-01T00:00:00+00:00"),
+                (new_daily, "2026-01-02T00:00:00+00:00"),
+                (manual, "2026-01-03T00:00:00+00:00"),
+                (before_upgrade, "2026-01-04T00:00:00+00:00"),
+                (before_migration, "2026-01-05T00:00:00+00:00"),
+                (before_restore, "2026-01-06T00:00:00+00:00"),
+            ):
+                meta = json.loads(result.meta_path.read_text(encoding="utf-8"))
+                meta["created_at"] = created_at
+                result.meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                main(["--db", str(db), "backups", "prune", "--keep", "1"])
+
+            self.assertFalse(old_daily.backup_path.exists())
+            self.assertFalse(old_daily.meta_path.exists())
+            self.assertTrue(new_daily.backup_path.exists())
+            self.assertTrue(manual.backup_path.exists())
+            self.assertTrue(before_upgrade.backup_path.exists())
+            self.assertTrue(before_migration.backup_path.exists())
+            self.assertTrue(before_restore.backup_path.exists())
+            self.assertIn("pruned: 1", output.getvalue())
+            self.assertIn("protected: 4", output.getvalue())
+
+    def test_backups_prune_include_reason_can_explicitly_prune_protected_reason(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            old_upgrade = create_backup(db, reason="before-upgrade", cwd=root)
+            new_upgrade = create_backup(db, reason="before-upgrade", cwd=root)
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "backups", "prune", "--keep", "1", "--include-reason", "before-upgrade"])
+
+            self.assertFalse(old_upgrade.backup_path.exists())
+            self.assertFalse(old_upgrade.meta_path.exists())
+            self.assertTrue(new_upgrade.backup_path.exists())
+
+    def test_backups_prune_dry_run_does_not_delete_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            old_daily = create_backup(db, reason="daily", cwd=root)
+            new_daily = create_backup(db, reason="daily", cwd=root)
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                main(["--db", str(db), "backups", "prune", "--keep", "1", "--dry-run"])
+
+            self.assertTrue(old_daily.backup_path.exists())
+            self.assertTrue(old_daily.meta_path.exists())
+            self.assertTrue(new_daily.backup_path.exists())
+            self.assertIn("would_prune: 1", output.getvalue())
+
+    def test_backups_prune_keep_zero_prunes_all_prunable_records(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            first = create_backup(db, reason="daily", cwd=root)
+            second = create_backup(db, reason="other", cwd=root)
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "backups", "prune", "--keep", "0"])
+
+            self.assertFalse(first.backup_path.exists())
+            self.assertFalse(second.backup_path.exists())
+
+    def test_prune_backup_records_rejects_invalid_reason(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with self.assertRaisesRegex(BackupError, "invalid backup reason"):
+                prune_backup_records(db, keep=1, include_reasons={"invalid"})
+
+    def test_create_backup_runs_post_command_and_records_result_in_meta(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.run", return_value=subprocess.CompletedProcess(["sync-tool"], 0, "copied\n", "")) as command:
+                result = create_backup(
+                    db,
+                    reason="daily",
+                    cwd=root,
+                    post_command=["sync-tool", "copy", "{backup_path}", "{meta_path}", "{reason}", "{sha256}", "{encrypted}"],
+                )
+
+            meta = json.loads(result.meta_path.read_text(encoding="utf-8"))
+            argv = command.call_args.args[0]
+
+            self.assertEqual(argv[0:3], ["sync-tool", "copy", result.meta["backup_path"]])
+            self.assertEqual(argv[3], meta["post_command"]["argv"][3])
+            self.assertTrue(argv[3].endswith(".db.meta.json"))
+            self.assertEqual(argv[4], "daily")
+            self.assertEqual(argv[5], result.meta["sha256"])
+            self.assertEqual(argv[6], "false")
+            self.assertEqual(meta["post_command"]["argv"], argv)
+            self.assertEqual(meta["post_command"]["returncode"], 0)
+            self.assertTrue(meta["post_command"]["success"])
+            self.assertEqual(meta["post_command"]["stdout"], "copied\n")
+
+    def test_create_backup_records_post_command_result_in_exported_meta(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            export_dir = root / "exports"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.run", return_value=subprocess.CompletedProcess(["sync-tool"], 0, "copied\n", "")):
+                result = create_backup(db, cwd=root, export_dir=export_dir, post_command=["sync-tool", "{exported_meta_path}"])
+
+            exported_meta_path = root / result.meta["exported_to"]["meta_path"]
+            exported_meta = json.loads(exported_meta_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(exported_meta["post_command"], result.meta["post_command"])
+            self.assertEqual(exported_meta["backup_path"], result.meta["exported_to"]["backup_path"])
+
+    def test_create_backup_records_failed_post_command_before_raising(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.run", return_value=subprocess.CompletedProcess(["sync-tool"], 23, "", "denied")):
+                with self.assertRaisesRegex(BackupError, "post_command failed with exit code 23"):
+                    create_backup(db, cwd=root, post_command=["sync-tool", "{backup_path}"])
+
+            meta_path = next((root / ".nilo" / "backups").glob("*.meta.json"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(meta["post_command"]["returncode"], 23)
+            self.assertFalse(meta["post_command"]["success"])
+            self.assertEqual(meta["post_command"]["stderr"], "denied")
+
+    def test_create_backup_records_post_command_start_failure_before_raising(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+
+            with patch("nilo.backup.run", side_effect=OSError("missing command")):
+                with self.assertRaisesRegex(BackupError, "post_command failed to start"):
+                    create_backup(db, cwd=root, post_command=["missing-command"])
+
+            meta_path = next((root / ".nilo" / "backups").glob("*.meta.json"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+            self.assertIsNone(meta["post_command"]["returncode"])
+            self.assertFalse(meta["post_command"]["success"])
+            self.assertIn("missing command", meta["post_command"]["stderr"])
+
+    def test_render_post_command_rejects_unsupported_template_token(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            make_sqlite_db(db)
+            result = create_backup(db, cwd=root)
+
+            with self.assertRaisesRegex(BackupError, "unsupported post_command template token"):
+                render_post_command(["sync-tool", "{unknown}"], result.backup_path, result.meta_path, result.meta, root)
+
+    def test_truncate_output_limits_post_command_output(self) -> None:
+        self.assertEqual(truncate_output("short"), "short")
+        self.assertTrue(truncate_output("x" * 9000).endswith("\n[truncated]"))
 
     def test_restore_backup_verifies_backup_and_creates_before_restore_backup(self) -> None:
         with TemporaryDirectory() as directory:

@@ -136,6 +136,29 @@ To see what would run without applying changes:
 nilo upgrade --dry-run
 ```
 
+## Database Backups
+
+Nilo stores its state database at `.nilo/nilo.db`. Do not place the live database or its `.db-wal` / `.db-shm` files directly in a cloud sync folder. Use verified backup artifacts instead:
+
+```bash
+nilo backup
+nilo backup --reason daily
+nilo backup --export ~/NiloBackups
+nilo backup --encrypt --recipient age1... --export ~/NiloBackups
+nilo backups
+nilo backups prune --keep 30
+nilo restore --decrypt ~/NiloBackups/nilo-20260624-180000.db.age
+```
+
+`nilo backup` writes a `.db` file and adjacent `.meta.json` under `.nilo/backups/`, including `integrity_check` and sha256. `nilo backups prune --keep 30` keeps the newest 30 prunable backups and deletes older ones. By default, `manual`, `before-upgrade`, `before-migration`, and `before-restore` backups are protected; use `--dry-run` to preview deletions and `--include-reason daily` to scope pruning by reason.
+
+For external handoff, configure `.nilo/config.toml` with an argv-style `backup.post_command`. Nilo does not run it through a shell. It only substitutes `{backup_path}`, `{meta_path}`, `{reason}`, `{sha256}`, `{encrypted}`, `{exported_backup_path}`, and `{exported_meta_path}`. Unknown `{...}` tokens and literal braces are rejected. Nilo records the result in local backup metadata and mirrors it to exported metadata when an export artifact exists.
+
+```toml
+[backup]
+post_command = ["rclone", "copy", "{backup_path}", "remote:nilo-backups"]
+```
+
 ## Getting Started
 
 Initialize Nilo once at the root of a project:

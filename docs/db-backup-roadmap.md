@@ -207,10 +207,10 @@ Phase 1-4 では暗号化なしの backup/export/restore を完成させる。Ph
 
 ### Phase 6: 世代管理と外部連携
 
-- `nilo backups prune --keep 30` または `nilo backup --prune --keep 30` を検討する。
-- reason 別 keep policy を検討する。例: manual は残す、daily は最新 30 件、before-restore は明示 prune まで残す。
-- `postCommand` を設定に追加し、`rclone copy ...` などを呼べるようにする。
-- `postCommand` は shell 文字列ではなく argv 配列またはテンプレート制限付きにし、実行ログを meta または別 log に残す。
+- `nilo backups prune --keep 30` を追加する。実装済み。
+- reason-aware な retention として、既定では `manual`、`before-upgrade`、`before-migration`、`before-restore` を削除対象から外し、`--include-reason` で明示された reason だけを対象にできるようにする。実装済み。
+- `backup.post_command` を `.nilo/config.toml` に追加し、`rclone copy ...` などを呼べるようにする。実装済み。
+- `post_command` は shell 文字列ではなく argv 配列にし、許可されたテンプレート token だけを置換する。未知 token や literal braces は拒否する。実行結果は local meta の `post_command` に残し、export 済み meta が存在する場合は同じ結果を反映する。実装済み。
 
 ## リスクと対策
 
