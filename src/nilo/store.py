@@ -326,6 +326,18 @@ CREATE TABLE IF NOT EXISTS task_completions (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS recipe_task_provenance (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  recipe_name TEXT NOT NULL,
+  source_layer TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  rendered_fields TEXT NOT NULL,
+  recipe_snapshot TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS roadmap_commitments (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
@@ -386,6 +398,7 @@ CREATE TABLE IF NOT EXISTS overdrive_runs (
   cursor_task_id TEXT NOT NULL DEFAULT '',
   max_failures INTEGER NOT NULL,
   failure_count INTEGER NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
   summary_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -440,6 +453,8 @@ JSON_COLUMNS = {
     "review_gates",
     "evidence_policy",
     "summary_json",
+    "rendered_fields",
+    "recipe_snapshot",
 }
 
 TABLE_JSON_COLUMNS = {
@@ -543,6 +558,7 @@ class Store:
         self._ensure_column("tasks", "roadmap_item_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("tasks", "mode", "TEXT NOT NULL DEFAULT 'normal'")
         self._ensure_column("instructions", "applied_failure_pattern_ids", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("overdrive_runs", "summary", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("overdrive_runs", "summary_json", "TEXT NOT NULL DEFAULT '{}'")
         self._ensure_column("task_completions", "actor", "TEXT NOT NULL DEFAULT 'human'")
         self._ensure_column("roadmap_commitments", "closed_by", "TEXT NOT NULL DEFAULT ''")

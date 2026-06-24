@@ -1,0 +1,27 @@
+schema_version: 1
+name: docs-update
+title: Documentation Update
+summary: Update documentation while keeping scope and verification explicit.
+instruction: |
+  Update the requested documentation without changing implementation behavior.
+acceptance:
+  - Documentation reflects the requested change.
+  - Scope and non-goals are clear.
+  - Implementation files are not changed unless explicitly requested.
+variables:
+  topic:
+    type: string
+    required: true
+verification:
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm Nilo state after documentation work."
+review:
+  required: false
+  focus:
+    - accuracy
+    - scope creep
+completion_contract:
+  evidence:
+    - changed files are listed
+    - verification command output is recorded
+stability: experimental

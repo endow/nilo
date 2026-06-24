@@ -10,6 +10,7 @@ from .mcp import register_mcp
 from .overdrive import register_run
 from .project import register_project
 from .quality import register_quality
+from .recipe import register_recipe
 from .roadmap import register_roadmap
 from .task import register_task
 from .todo import register_todo
@@ -37,6 +38,7 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     register_run(sub, handlers)
     register_facade(sub, handlers)
     register_project(sub, handlers)
+    register_recipe(sub, handlers)
     register_roadmap(sub, handlers)
     register_agent(sub, handlers)
     register_task(sub, handlers)

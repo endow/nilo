@@ -197,6 +197,7 @@ def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
         "latest_verification_source": verification_run.get("source", "nilo_executed") if verification_run else "",
         "latest_verification_command": verification_run["command"] if verification_run else "",
         "diff_verification": diff_aware_verification_summary(report, verification_run),
+        "recipe_provenance": recipe_provenance_summary(store, task["id"]),
     }
 
 
@@ -652,6 +653,215 @@ def verification_summary(verification_run: dict | None) -> str:
     return f"{verification_run['id']} ({result}, source={source})"
 
 
+def recipe_provenance_summary(store: Store, task_id: str) -> dict | None:
+    provenance = store.latest_for_task("recipe_task_provenance", task_id)
+    if not provenance:
+        return None
+    return {
+        "recipe_name": provenance["recipe_name"],
+        "source_layer": provenance["source_layer"],
+        "source_label": f"{provenance['source_layer']} recipe",
+        "source_id": provenance["source_id"],
+        "content_hash": provenance["content_hash"],
+        "created_at": provenance["created_at"],
+        "rendered_fields": provenance["rendered_fields"],
+        "recipe_snapshot": provenance["recipe_snapshot"],
+    }
+
+
+def human_recipe_provenance_label(provenance: dict | None) -> str:
+    if not provenance:
+        return ""
+    return f"{provenance['recipe_name']} ({provenance['source_layer']} layer)"
+
+
+def recipe_completion_warnings(store: Store, task_id: str) -> list[dict]:
+    provenance = recipe_provenance_summary(store, task_id)
+    if not provenance:
+        return []
+    contract = provenance.get("recipe_snapshot", {}).get("data", {}).get("completion_contract", {})
+    evidence_items = contract.get("evidence", []) if isinstance(contract, dict) else []
+    if not isinstance(evidence_items, list):
+        return []
+    report = store.latest_for_task("agent_reports", task_id)
+    report_body = (report or {}).get("body_md", "").casefold()
+    warnings = []
+    for item in evidence_items:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        if item.casefold() in report_body:
+            continue
+        warnings.append(
+            {
+                "severity": "warning",
+                "code": "missing_recipe_completion_evidence",
+                "recipe_name": provenance["recipe_name"],
+                "source_layer": provenance["source_layer"],
+                "message": f"Recipe warning: missing completion_contract evidence: {item}",
+            }
+        )
+    return warnings
+
+
+def recipe_handoff_export_data(store: Store, project: dict, cwd: Path) -> dict:
+    from .recipe import discover_recipes
+
+    diagnostics: list[dict] = []
+    discovered = discover_recipes(cwd)
+    recipe_sources = []
+    for source in discovered["all_sources"]:
+        entry = source.to_dict()
+        entry["body"] = ""
+        if source.layer == "project":
+            path = Path(source.source_id)
+            if path.exists():
+                entry["body"] = path.read_text(encoding="utf-8")
+            else:
+                diagnostics.append(
+                    {
+                        "severity": "warning",
+                        "code": "missing_recipe_source_file",
+                        "message": f"recipe source file is missing: {source.source_id}",
+                    }
+                )
+        recipe_sources.append(entry)
+
+    tasks = store.list_where("tasks", "project_id=?", (project["id"],))
+    task_by_id = {task["id"]: task for task in tasks}
+    provenance_rows = []
+    exported_tasks = []
+    for task in reversed(tasks):
+        rows = list(reversed(store.list_where("recipe_task_provenance", "task_id=?", (task["id"],))))
+        if not rows:
+            continue
+        exported_tasks.append(task)
+        for row in rows:
+            if row["source_layer"] != "builtin" and row["source_id"] and not Path(row["source_id"]).exists():
+                diagnostics.append(
+                    {
+                        "severity": "warning",
+                        "code": "missing_recipe_source_file",
+                        "message": f"recipe provenance source file is missing for {task['id']}: {row['source_id']}",
+                    }
+                )
+            provenance_rows.append(row)
+
+    return {
+        "schema_version": 1,
+        "format": "nilo.recipe_handoff",
+        "project_id": project["id"],
+        "project_name": project["name"],
+        "exported_at": now_iso(),
+        "recipe_sources": recipe_sources,
+        "tasks": [task_by_id[task["id"]] for task in exported_tasks],
+        "recipe_task_provenance": provenance_rows,
+        "diagnostics": diagnostics,
+    }
+
+
+def recipe_handoff_import_data(store: Store, project: dict, data: dict, cwd: Path) -> dict:
+    if data.get("schema_version") != 1 or data.get("format") != "nilo.recipe_handoff":
+        raise SystemExit("unsupported recipe handoff format")
+    diagnostics: list[dict] = []
+    imported_recipe_files = 0
+    imported_tasks = 0
+    imported_provenance = 0
+
+    recipe_dir = cwd / ".nilo" / "recipes"
+    for source in data.get("recipe_sources", []):
+        if source.get("layer") != "project":
+            continue
+        body = source.get("body") or ""
+        if not body:
+            diagnostics.append(
+                {
+                    "severity": "warning",
+                    "code": "missing_recipe_definition_body",
+                    "message": f"recipe definition body is missing for {source.get('name', '<unknown>')}",
+                }
+            )
+            continue
+        recipe_dir.mkdir(parents=True, exist_ok=True)
+        filename = Path(source.get("source_id") or f"{source.get('name', 'recipe')}.recipe.yml").name
+        (recipe_dir / filename).write_text(body, encoding="utf-8", newline="\n")
+        imported_recipe_files += 1
+
+    for task in data.get("tasks", []):
+        task_id = task.get("id")
+        if not task_id or store.get("tasks", task_id):
+            continue
+        row = dict(task)
+        row["project_id"] = project["id"]
+        row.setdefault("description", "")
+        row.setdefault("acceptance_criteria", [])
+        row.setdefault("parent_task_id", None)
+        row.setdefault("split_index", None)
+        row.setdefault("task_type", "implementation")
+        row.setdefault("risk_level", "medium")
+        row.setdefault("requires_understanding_check", False)
+        row.setdefault("roadmap_commitment_id", "")
+        row.setdefault("roadmap_item_id", "")
+        row.setdefault("status", "planned")
+        row.setdefault("assigned_model_profile", "")
+        row.setdefault("degradation_mode", "normal")
+        row.setdefault("mode", "normal")
+        row.setdefault("base_commit", None)
+        row.setdefault("created_at", now_iso())
+        store.insert("tasks", row)
+        imported_tasks += 1
+
+    for provenance in data.get("recipe_task_provenance", []):
+        provenance_id = provenance.get("id")
+        task_id = provenance.get("task_id")
+        if not provenance_id or not task_id:
+            continue
+        if store.get("recipe_task_provenance", provenance_id):
+            continue
+        if not store.get("tasks", task_id):
+            rendered = provenance.get("rendered_fields") or {}
+            store.insert(
+                "tasks",
+                {
+                    "id": task_id,
+                    "project_id": project["id"],
+                    "title": rendered.get("title", f"Imported recipe task {task_id}"),
+                    "description": rendered.get("description", ""),
+                    "acceptance_criteria": rendered.get("acceptance", []),
+                    "parent_task_id": None,
+                    "split_index": None,
+                    "task_type": "implementation",
+                    "risk_level": "medium",
+                    "requires_understanding_check": False,
+                    "roadmap_commitment_id": "",
+                    "roadmap_item_id": "",
+                    "status": "planned",
+                    "assigned_model_profile": "",
+                    "degradation_mode": "normal",
+                    "mode": "normal",
+                    "base_commit": None,
+                    "created_at": now_iso(),
+                },
+            )
+            imported_tasks += 1
+        if provenance.get("source_layer") != "builtin" and provenance.get("source_id") and not Path(provenance["source_id"]).exists():
+            diagnostics.append(
+                {
+                    "severity": "warning",
+                    "code": "missing_recipe_source_file",
+                    "message": f"recipe provenance source file is missing for {task_id}: {provenance['source_id']}",
+                }
+            )
+        store.insert("recipe_task_provenance", dict(provenance))
+        imported_provenance += 1
+
+    return {
+        "imported_tasks": imported_tasks,
+        "imported_provenance": imported_provenance,
+        "imported_recipe_files": imported_recipe_files,
+        "diagnostics": diagnostics,
+    }
+
+
 def human_verification_summary(verification_run: dict | None) -> str:
     if not verification_run:
         return "直近の検証結果はまだ記録されていません。"
@@ -1059,6 +1269,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
         verification_run = store.latest_for_task("verification_runs", task["id"])
         pending_review = latest_pending_review_request(store, task["id"])
         blocking_findings = unresolved_blocking_review_findings(store, task["id"])
+        recipe_provenance = recipe_provenance_summary(store, task["id"])
         active_summaries.append(
             {
                 "id": task["id"],
@@ -1077,6 +1288,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
                 "pending_review_reviewer": pending_review["reviewer"] if pending_review else "",
                 "pending_review_status": pending_review["status"] if pending_review else "",
                 "unresolved_blocking_review_findings": [finding["id"] for finding in blocking_findings],
+                "recipe_provenance": recipe_provenance,
             }
         )
         for item in unexecuted_verifications_for_task(status, verification_run):
@@ -1142,6 +1354,9 @@ def print_project_summary_text(summary: dict) -> None:
     if summary["active_tasks"]:
         for task in summary["active_tasks"]:
             print(f"- {task['id']} [{task['status']}] {task['task_type']} {task['risk_level']} {task['title']}")
+            recipe_label = human_recipe_provenance_label(task.get("recipe_provenance"))
+            if recipe_label:
+                print(f"  recipe: {recipe_label}")
             print(f"  latest_verification_run: {task['latest_verification_run']}")
             print(f"  verification_working_tree: {task['verification_working_tree']}")
             policy = task.get("verification_snapshot_policy", {})
@@ -1227,6 +1442,9 @@ def print_human_project_status(store: Store, project: dict, active_tasks: list[d
         blocking = unresolved_blocking_review_findings(store, task["id"])
         for line in human_active_task_lines(task, verification_run, len(blocking)):
             print(line)
+        recipe_label = human_recipe_provenance_label(recipe_provenance_summary(store, task["id"]))
+        if recipe_label:
+            print(f"Recipe: {recipe_label}")
         print()
 
         status = task["status"]
@@ -1438,6 +1656,9 @@ def render_handson_markdown(summary: dict) -> str:
     if summary["active_tasks"]:
         for task in summary["active_tasks"]:
             lines.append(f"- {task['id']} [{task['status']}] {task['task_type']} {task['risk_level']} {task['title']}")
+            recipe_label = human_recipe_provenance_label(task.get("recipe_provenance"))
+            if recipe_label:
+                lines.append(f"  - recipe: {recipe_label}")
             lines.append(f"  - latest_verification_run: {task['latest_verification_run']}")
     else:
         lines.append("- none")

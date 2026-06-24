@@ -29,6 +29,9 @@ nilo = "nilo.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+nilo = ["builtin_recipes/*.recipe.yml"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

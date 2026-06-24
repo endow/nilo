@@ -75,6 +75,879 @@ def register_test_reviewer(db: Path, reviewer: str) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_recipe_list_resolves_project_user_builtin_precedence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            project = root / "project"
+            project_recipe_dir = project / ".nilo" / "recipes"
+            user_recipe_dir = home / ".nilo" / "recipes"
+            project_recipe_dir.mkdir(parents=True)
+            user_recipe_dir.mkdir(parents=True)
+            user_recipe_dir.joinpath("basic-design.recipe.yml").write_text(
+                """schema_version: 1
+name: basic-design
+title: User Design
+summary: User override.
+instruction: User instruction.
+acceptance:
+  - User acceptance
+""",
+                encoding="utf-8",
+            )
+            project_recipe_dir.joinpath("basic-design.recipe.yml").write_text(
+                """schema_version: 1
+name: basic-design
+title: Project Design
+summary: Project override.
+instruction: Project instruction.
+acceptance:
+  - Project acceptance
+""",
+                encoding="utf-8",
+            )
+
+            with patch("nilo.recipe.Path.home", return_value=home):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["recipe", "list", "--project", str(project), "--all"])
+
+            body = output.getvalue()
+            self.assertIn("- basic-design (project): Project Design", body)
+            self.assertIn("- basic-design (user) [shadowed]: User Design", body)
+            self.assertIn("- basic-design (builtin) [shadowed]: Basic Design Task", body)
+
+    def test_recipe_show_prints_effective_recipe_details(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("docs-update.recipe.yml").write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs Update
+summary: Update docs.
+instruction: |
+  Update the requested docs.
+acceptance:
+  - Docs are accurate
+variables:
+  project_id:
+    type: string
+    required: true
+completion_contract:
+  evidence:
+    - changed files are listed
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "show", "docs-update", "--project", str(root)])
+
+            body = output.getvalue()
+            self.assertIn("name: docs-update", body)
+            self.assertIn("instruction:", body)
+            self.assertIn("Update the requested docs.", body)
+            self.assertIn("variables:", body)
+            self.assertIn('"project_id"', body)
+            self.assertIn("completion_contract:", body)
+            self.assertIn('"evidence"', body)
+
+    def test_recipe_parser_accepts_documented_verification_mapping_items(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("verify-docs.recipe.yml").write_text(
+                """schema_version: 1
+name: verify-docs
+title: Verify Docs
+summary: Includes structured verification.
+instruction: Check docs.
+acceptance:
+  - Docs checked
+verification:
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm Nilo state after documentation work."
+review:
+  required: false
+completion_contract:
+  evidence:
+    - changed files are listed
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "show", "verify-docs", "--project", str(root)])
+
+            body = output.getvalue()
+            self.assertIn("verification:", body)
+            self.assertIn('"command"', body)
+            self.assertIn('"reason"', body)
+            self.assertNotIn("parse_error", body)
+
+    def test_recipe_doctor_reports_invalid_and_duplicate_recipes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("one.recipe.yml").write_text(
+                """schema_version: 1
+name: duplicate
+title: Duplicate One
+summary: First.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+            recipe_dir.joinpath("two.recipe.yml").write_text(
+                """schema_version: 1
+name: duplicate
+title: Duplicate Two
+summary: Second.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+            recipe_dir.joinpath("invalid.recipe.yml").write_text(
+                """schema_version: 1
+name: invalid
+title: Invalid
+summary: Missing acceptance.
+instruction: Do work.
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit) as raised, redirect_stdout(output):
+                main(["recipe", "doctor", "--project", str(root)])
+
+            self.assertEqual(raised.exception.code, 1)
+            body = output.getvalue()
+            self.assertIn("error: duplicate_name", body)
+            self.assertIn("error: missing_required_field", body)
+
+    def test_recipe_doctor_json_exits_nonzero_for_invalid_recipe(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("invalid.recipe.yml").write_text(
+                """schema_version: 1
+name: invalid
+title: Invalid
+summary: Invalid optional field shape.
+instruction: Do work.
+acceptance:
+  - Done
+verification: "oops"
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit) as raised, redirect_stdout(output):
+                main(["recipe", "doctor", "--project", str(root), "--format", "json"])
+
+            self.assertEqual(raised.exception.code, 1)
+            recipes = json.loads(output.getvalue())
+            self.assertEqual(recipes[0]["diagnostics"][0]["code"], "invalid_verification")
+
+    def test_recipe_doctor_reports_parse_error_and_unsupported_schema(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("malformed.recipe.yml").write_text("schema_version 1\n", encoding="utf-8")
+            recipe_dir.joinpath("future.recipe.yml").write_text(
+                """schema_version: 2
+name: future
+title: Future
+summary: Unsupported schema.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit), redirect_stdout(output):
+                main(["recipe", "doctor", "--project", str(root)])
+
+            body = output.getvalue()
+            self.assertIn("error: parse_error", body)
+            self.assertIn("error: unsupported_schema_version", body)
+
+    def test_recipe_doctor_reports_unreadable_recipe(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("unreadable.recipe.yml").write_text("", encoding="utf-8")
+
+            output = io.StringIO()
+            with patch("pathlib.Path.read_text", side_effect=OSError("denied")):
+                with self.assertRaises(SystemExit), redirect_stdout(output):
+                    main(["recipe", "doctor", "--project", str(root)])
+
+            self.assertIn("error: unreadable", output.getvalue())
+
+    def test_recipe_show_falls_back_to_invalid_source_diagnostics(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("invalid.recipe.yml").write_text(
+                """schema_version: 1
+name: invalid
+title: Invalid
+summary: Missing acceptance.
+instruction: Do work.
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "show", "invalid", "--project", str(root)])
+
+            body = output.getvalue()
+            self.assertIn("status: invalid", body)
+            self.assertIn("missing_required_field", body)
+
+    def test_recipe_json_lists_builtin_without_project_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "list", "--project", directory, "--format", "json"])
+
+            recipes = json.loads(output.getvalue())
+            self.assertTrue(any(recipe["name"] == "basic-design" and recipe["layer"] == "builtin" for recipe in recipes))
+            self.assertTrue(any(recipe["name"] == "docs-update" and recipe["layer"] == "builtin" for recipe in recipes))
+            self.assertTrue(any(recipe["name"] == "focused-implementation" and recipe["layer"] == "builtin" for recipe in recipes))
+
+    def test_recipe_doctor_accepts_all_builtin_recipes(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "doctor", "--project", directory, "--format", "json"])
+
+            recipes = json.loads(output.getvalue())
+            builtin = [recipe for recipe in recipes if recipe["layer"] == "builtin"]
+            self.assertGreaterEqual(len(builtin), 3)
+            self.assertTrue(all(recipe["status"] == "valid" for recipe in builtin))
+            self.assertFalse(any(diagnostic["severity"] == "error" for recipe in builtin for diagnostic in recipe["diagnostics"]))
+
+    def test_recipe_project_id_matching_current_directory_uses_cwd(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("local.recipe.yml").write_text(
+                """schema_version: 1
+name: local
+title: Local Recipe
+summary: Uses cwd project id.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["recipe", "list", "--project", root.name])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("- local (project): Local Recipe", output.getvalue())
+
+    def test_recipe_unknown_project_path_fails(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            main(["recipe", "list", "--project", "__missing_recipe_project__"])
+        self.assertIn("recipe project path not found", str(raised.exception))
+
+    def test_recipe_run_dry_run_renders_task_without_creating_it(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("docs-update.recipe.yml").write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: |
+  Update docs for {topic} in project {project_id}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+verification:
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm state."
+review:
+  required: false
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes", "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = output.getvalue()
+            self.assertIn("recipe_run: dry-run", body)
+            self.assertIn("title: Docs for recipes", body)
+            self.assertIn("Update docs for recipes", body)
+            self.assertIn("Verification requirements:", body)
+            store = Store(db)
+            try:
+                self.assertEqual(store.list_where("tasks", "project_id=?", (root.name,)), [])
+            finally:
+                store.close()
+
+    def test_recipe_run_create_adds_single_plain_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("docs-update.recipe.yml").write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: |
+  Update docs for {topic} in project {project_id}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+verification:
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm state."
+review:
+  required: false
+completion_contract:
+  evidence:
+    - changed files are listed
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes", "--type", "documentation", "--risk", "low"])
+            finally:
+                os.chdir(previous_cwd)
+
+            task_id = output.getvalue().strip()
+            store = Store(db)
+            try:
+                task = store.get("tasks", task_id)
+                self.assertIsNotNone(task)
+                self.assertEqual(task["project_id"], root.name)
+                self.assertEqual(task["title"], "Docs for recipes")
+                self.assertEqual(task["task_type"], "documentation")
+                self.assertEqual(task["risk_level"], "low")
+                self.assertEqual(task["acceptance_criteria"], ["Docs mention recipes"])
+                self.assertIn("Recipe: docs-update", task["description"])
+                self.assertIn("Update docs for recipes", task["description"])
+                self.assertIn("Verification requirements:", task["description"])
+                self.assertIn("Review requirements:", task["description"])
+                self.assertIn("Completion contract:", task["description"])
+                self.assertEqual(store.list_where("review_requests", "task_id=?", (task_id,)), [])
+                provenance = store.latest_for_task("recipe_task_provenance", task_id)
+                self.assertIsNotNone(provenance)
+                self.assertEqual(provenance["recipe_name"], "docs-update")
+                self.assertEqual(provenance["source_layer"], "project")
+                self.assertIn("docs-update.recipe.yml", provenance["source_id"])
+                self.assertEqual(provenance["rendered_fields"]["title"], "Docs for recipes")
+                self.assertEqual(provenance["rendered_fields"]["acceptance"], ["Docs mention recipes"])
+                self.assertEqual(provenance["recipe_snapshot"]["data"]["title"], "Docs for {topic}")
+                self.assertRegex(provenance["content_hash"], r"^[0-9a-f]{64}$")
+            finally:
+                store.close()
+
+    def test_recipe_run_provenance_snapshot_survives_recipe_file_changes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_file = recipe_dir / "docs-update.recipe.yml"
+            recipe_file.write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: Update docs for {topic}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes"])
+            finally:
+                os.chdir(previous_cwd)
+
+            task_id = output.getvalue().strip()
+            store = Store(db)
+            try:
+                before = store.latest_for_task("recipe_task_provenance", task_id)
+                self.assertIsNotNone(before)
+                before_hash = before["content_hash"]
+                self.assertEqual(before["recipe_snapshot"]["data"]["title"], "Docs for {topic}")
+            finally:
+                store.close()
+
+            recipe_file.write_text(
+                """schema_version: 1
+name: docs-update
+title: Changed Docs
+summary: Changed recipe.
+instruction: Changed instruction.
+acceptance:
+  - Changed acceptance
+""",
+                encoding="utf-8",
+            )
+
+            store = Store(db)
+            try:
+                after = store.latest_for_task("recipe_task_provenance", task_id)
+                self.assertEqual(after["content_hash"], before_hash)
+                self.assertEqual(after["rendered_fields"]["title"], "Docs for recipes")
+                self.assertEqual(after["recipe_snapshot"]["data"]["title"], "Docs for {topic}")
+            finally:
+                store.close()
+
+    def test_plain_task_status_remains_valid_without_recipe_provenance(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "nilo"])
+            task_output = io.StringIO()
+            with redirect_stdout(task_output):
+                main(["--db", str(db), "task", "create", "--project", "nilo", "--title", "Plain task"])
+            task_id = task_output.getvalue().strip()
+
+            store = Store(db)
+            try:
+                self.assertIsNone(store.latest_for_task("recipe_task_provenance", task_id))
+            finally:
+                store.close()
+
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "task", "status", "--task", task_id])
+
+            body = status_output.getvalue()
+            self.assertIn("id: " + task_id, body)
+            self.assertNotIn("recipe:", body)
+
+            project_output = io.StringIO()
+            with redirect_stdout(project_output):
+                main(["--db", str(db), "project", "status", "--project", "nilo", "--verbose"])
+            self.assertNotIn("recipe:", project_output.getvalue())
+
+    def test_recipe_provenance_appears_on_human_status_surfaces(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("docs-update.recipe.yml").write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: Update docs for {topic}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes"])
+
+                task_id = task_output.getvalue().strip()
+
+                task_status_output = io.StringIO()
+                with redirect_stdout(task_status_output):
+                    main(["--db", str(db), "task", "status", "--task", task_id])
+
+                project_status_output = io.StringIO()
+                with redirect_stdout(project_status_output):
+                    main(["--db", str(db), "project", "status", "--project", root.name, "--verbose"])
+
+                project_summary_output = io.StringIO()
+                with redirect_stdout(project_summary_output):
+                    main(["--db", str(db), "project", "summary", "--project", root.name])
+
+                project_json_output = io.StringIO()
+                with redirect_stdout(project_json_output):
+                    main(["--db", str(db), "project", "summary", "--project", root.name, "--format", "json"])
+
+                roadmap_discuss_output = io.StringIO()
+                with redirect_stdout(roadmap_discuss_output):
+                    main(["--db", str(db), "roadmap", "discuss", "--project", root.name])
+
+                roadmap_file = root / "ROADMAP.md"
+                with redirect_stdout(io.StringIO()), patch("nilo.project_logic.locale.getlocale", return_value=("en_US", "UTF-8")):
+                    main(["--db", str(db), "roadmap", "export", "--project", root.name, "--file", str(roadmap_file)])
+            finally:
+                os.chdir(previous_cwd)
+
+            for body in [
+                task_status_output.getvalue(),
+                project_status_output.getvalue(),
+                project_summary_output.getvalue(),
+                roadmap_discuss_output.getvalue(),
+                roadmap_file.read_text(encoding="utf-8"),
+            ]:
+                self.assertIn("recipe: docs-update (project layer)", body)
+                self.assertNotIn("recipe_content_hash", body)
+
+            summary = json.loads(project_json_output.getvalue())
+            provenance = summary["active_tasks"][0]["recipe_provenance"]
+            self.assertEqual(provenance["recipe_name"], "docs-update")
+            self.assertEqual(provenance["source_layer"], "project")
+            self.assertIn("docs-update.recipe.yml", provenance["source_id"])
+            self.assertRegex(provenance["content_hash"], r"^[0-9a-f]{64}$")
+
+    def test_recipe_completion_contract_warns_without_blocking_task_complete_and_done(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("docs-update.recipe.yml").write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: Update docs for {topic}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+completion_contract:
+  evidence:
+    - verification command output is recorded
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                first_output = io.StringIO()
+                with redirect_stdout(first_output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes"])
+                second_output = io.StringIO()
+                with redirect_stdout(second_output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=guides"])
+
+                first_task_id = first_output.getvalue().strip()
+                second_task_id = second_output.getvalue().strip()
+
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "task", "status", "--task", first_task_id])
+
+                complete_output = io.StringIO()
+                with redirect_stdout(complete_output):
+                    main(["--db", str(db), "task", "complete", "--task", first_task_id, "--reason", "accepted despite warning"])
+
+                done_output = io.StringIO()
+                with redirect_stdout(done_output):
+                    main(["--db", str(db), "done", "--task", second_task_id, "--reason", "daily accepted despite warning"])
+            finally:
+                os.chdir(previous_cwd)
+
+            expected = "Recipe warning: missing completion_contract evidence: verification command output is recorded"
+            self.assertIn(expected, status_output.getvalue())
+            self.assertIn("status: completed_by_user", complete_output.getvalue())
+            self.assertIn(expected, complete_output.getvalue())
+            self.assertIn("status: completed_by_user", done_output.getvalue())
+            self.assertIn(expected, done_output.getvalue())
+
+    def test_recipe_completion_contract_warning_clears_when_report_contains_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("docs-update.recipe.yml").write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: Update docs for {topic}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+completion_contract:
+  evidence:
+    - verification command output is recorded
+""",
+                encoding="utf-8",
+            )
+            report = root / "report.md"
+            report.write_text(REPORT.replace("CLIフローを確認した。", "verification command output is recorded"), encoding="utf-8")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes"])
+                task_id = task_output.getvalue().strip()
+                with redirect_stdout(io.StringIO()), patch(
+                    "nilo.cli_handlers.workflow.evaluate_evidence",
+                    return_value=("evidence_submitted", [], {"ok": True}),
+                ):
+                    main(["--db", str(db), "report", "import", "--task", task_id, "--file", str(report)])
+
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "task", "status", "--task", task_id])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertNotIn("completion_warnings:", status_output.getvalue())
+
+    def test_project_recipe_handoff_export_import_preserves_provenance_with_missing_source_diagnostic(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "source"
+            target_root = root / "target"
+            source_root.mkdir()
+            target_root.mkdir()
+            source_db = root / "source.db"
+            target_db = root / "target.db"
+            handoff = root / "recipes.json"
+            recipe_dir = source_root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_file = recipe_dir / "docs-update.recipe.yml"
+            recipe_file.write_text(
+                """schema_version: 1
+name: docs-update
+title: Docs for {topic}
+summary: Update docs.
+instruction: Update docs for {topic}.
+acceptance:
+  - Docs mention {topic}
+variables:
+  topic:
+    type: string
+    required: true
+completion_contract:
+  evidence:
+    - verification command output is recorded
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(source_root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(source_db), "project", "create", "Source", "--id", source_root.name])
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(["--db", str(source_db), "recipe", "run", "docs-update", "--project", source_root.name, "--var", "topic=recipes"])
+                task_id = task_output.getvalue().strip()
+
+                export_output = io.StringIO()
+                with redirect_stdout(export_output):
+                    main(["--db", str(source_db), "project", "export-recipes", "--project", source_root.name, "--file", str(handoff)])
+
+                recipe_file.unlink()
+
+                os.chdir(target_root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(target_db), "project", "create", "Target", "--id", "target_project"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(target_db), "project", "import-recipes", "--project", "target_project", "--file", str(handoff)])
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(target_db), "task", "status", "--task", task_id])
+            finally:
+                os.chdir(previous_cwd)
+
+            exported = json.loads(handoff.read_text(encoding="utf-8"))
+            self.assertEqual(exported["format"], "nilo.recipe_handoff")
+            self.assertEqual(exported["recipe_task_provenance"][0]["recipe_name"], "docs-update")
+            self.assertEqual(exported["recipe_task_provenance"][0]["recipe_snapshot"]["data"]["title"], "Docs for {topic}")
+            self.assertIn("imported_tasks: 1", import_output.getvalue())
+            self.assertIn("imported_provenance: 1", import_output.getvalue())
+            self.assertIn("imported_recipe_files: 1", import_output.getvalue())
+            self.assertIn("diagnostic: warning: missing_recipe_source_file", import_output.getvalue())
+            self.assertIn("recipe: docs-update (project layer)", status_output.getvalue())
+            self.assertTrue((target_root / ".nilo" / "recipes" / "docs-update.recipe.yml").exists())
+
+            target_store = Store(target_db)
+            try:
+                task = target_store.get("tasks", task_id)
+                provenance = target_store.latest_for_task("recipe_task_provenance", task_id)
+                self.assertEqual(task["project_id"], "target_project")
+                self.assertEqual(provenance["recipe_name"], "docs-update")
+                self.assertEqual(provenance["rendered_fields"]["title"], "Docs for recipes")
+                self.assertEqual(provenance["recipe_snapshot"]["data"]["title"], "Docs for {topic}")
+            finally:
+                target_store.close()
+
+    def test_recipe_run_requires_declared_variables(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("needs-topic.recipe.yml").write_text(
+                """schema_version: 1
+name: needs-topic
+title: Needs Topic
+summary: Needs a variable.
+instruction: Work on {topic}.
+acceptance:
+  - Topic is {topic}
+variables:
+  topic:
+    type: string
+    required: true
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaises(SystemExit) as raised:
+                    main(["recipe", "run", "needs-topic", "--project", root.name, "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("missing required recipe variable: topic", str(raised.exception))
+
+    def test_recipe_run_allows_declared_project_id_without_var(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("uses-project.recipe.yml").write_text(
+                """schema_version: 1
+name: uses-project
+title: Project {project_id}
+summary: Uses auto project id.
+instruction: Work in {project_id}.
+acceptance:
+  - Project is {project_id}
+variables:
+  project_id:
+    type: string
+    required: true
+""",
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["recipe", "run", "uses-project", "--project", root.name, "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn(f"title: Project {root.name}", output.getvalue())
+
+    def test_recipe_run_interpolation_preserves_literal_braces(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("literal-braces.recipe.yml").write_text(
+                """schema_version: 1
+name: literal-braces
+title: Literal Braces
+summary: Keeps non-variable braces.
+instruction: |
+  Emit JSON {"key": "value"} and shell ${VAR} for {topic}.
+acceptance:
+  - Topic is {topic}
+variables:
+  topic:
+    type: string
+    required: true
+""",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "run", "literal-braces", "--project", str(root), "--var", "topic=recipes", "--dry-run"])
+
+            body = output.getvalue()
+            self.assertIn('Emit JSON {"key": "value"}', body)
+            self.assertIn("shell ${VAR}", body)
+            self.assertIn("for recipes", body)
+
     def test_handson_language_detects_japanese_locale(self) -> None:
         with patch("nilo.project_logic.locale.getlocale", return_value=("Japanese_Japan", "utf8")):
             self.assertEqual(handson_language(), "ja")

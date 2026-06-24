@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from ..cli_support import read_text_or_exit
 from ..project_model import project_row_from_args
 from ..store import Store
 from ..timeutil import now_iso
@@ -55,6 +56,9 @@ def cmd_project_status(args: argparse.Namespace) -> None:
             unexecuted = c.unexecuted_verifications_for_task(status, verification_run)
             all_unexecuted.extend((task["id"], item) for item in unexecuted)
             print(f"- {task['id']} [{status}] {task['task_type']} {task['risk_level']} {task['title']}")
+            recipe_label = c.human_recipe_provenance_label(c.recipe_provenance_summary(store, task["id"]))
+            if recipe_label:
+                print(f"  recipe: {recipe_label}")
             print(f"  latest_verification_run: {c.verification_summary(verification_run)}")
             print(f"  verification_working_tree: {c.verification_working_tree_summary(verification_run)}")
             for line in c.verification_snapshot_policy_lines(verification_run):
@@ -118,5 +122,44 @@ def cmd_project_export_handson(args: argparse.Namespace) -> None:
         output = Path(args.file)
         c.write_handson_markdown(store, args.project, output)
         print(f"exported: {output}")
+    finally:
+        store.close()
+
+
+def cmd_project_export_recipes(args: argparse.Namespace) -> None:
+    from .. import cli as c
+
+    store = Store(args.db)
+    try:
+        project = store.get("projects", args.project)
+        if not project:
+            raise SystemExit(f"project not found: {args.project}")
+        data = c.recipe_handoff_export_data(store, project, Path.cwd())
+        output = Path(args.file)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"written: {output}")
+        for diagnostic in data["diagnostics"]:
+            print(f"diagnostic: {diagnostic['severity']}: {diagnostic['code']}: {diagnostic['message']}")
+    finally:
+        store.close()
+
+
+def cmd_project_import_recipes(args: argparse.Namespace) -> None:
+    from .. import cli as c
+
+    store = Store(args.db)
+    try:
+        project = store.get("projects", args.project)
+        if not project:
+            raise SystemExit(f"project not found: {args.project}")
+        body = read_text_or_exit(Path(args.file))
+        data = json.loads(body)
+        result = c.recipe_handoff_import_data(store, project, data, Path.cwd())
+        print(f"imported_tasks: {result['imported_tasks']}")
+        print(f"imported_provenance: {result['imported_provenance']}")
+        print(f"imported_recipe_files: {result['imported_recipe_files']}")
+        for diagnostic in result["diagnostics"]:
+            print(f"diagnostic: {diagnostic['severity']}: {diagnostic['code']}: {diagnostic['message']}")
     finally:
         store.close()

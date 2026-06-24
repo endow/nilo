@@ -275,6 +275,62 @@ This repository does not commit local runtime files such as:
 - `.mcp.json`: local MCP settings
 - Python caches, virtual environments, coverage output, and build artifacts
 
+## Recipes
+
+A recipe helps start common work in a consistent way.
+
+For example, these requests often need the same kind of setup:
+
+- update documentation only
+- summarize design points before implementation
+- make a small change with verification and review focus
+
+In those cases, you can ask an AI agent like this:
+
+```text
+Use a recipe for this work.
+```
+
+```text
+Create a work item from the README update recipe.
+```
+
+The agent checks the available recipes, chooses one that fits the work, and creates a Nilo work item. After that, the work proceeds like any other Nilo work: instructions, completion criteria, verification, reports, and reviews are recorded.
+
+Nilo includes a few starter recipes, such as:
+
+- write a design note
+- update documentation
+- make a small implementation change
+
+Recipes save you from explaining the same work setup every time. They are not a mechanism for letting AI run everything automatically. Work created from a recipe still ends with a human deciding whether to accept it after reading the verification results and report.
+
+You can also ask an AI agent to create a project recipe for repeated work. You do not need to start by editing YAML yourself. Describe what you want to reuse in natural language:
+
+```text
+Turn the release note update work into a recipe I can reuse next time.
+```
+
+```text
+This project has specific checks for README updates. Create a README update recipe for it.
+```
+
+```text
+Turn the work we just did into a recipe so we can follow the same approach next time.
+```
+
+The agent asks or infers the purpose, allowed scope, non-goals, completion criteria, and verification points, then saves the result as a project recipe. You review the finished recipe description and decide whether that workflow is the one you want.
+
+After a recipe exists, you can ask:
+
+```text
+Use the release note update recipe we created earlier.
+```
+
+The storage format is handled by the agent. When needed, recipes are saved under `.nilo/recipes/` in the project.
+
+If you want to inspect available recipes directly, use `nilo recipe list`.
+
 ## Developer Notes
 
 Use `--help` for CLI details:

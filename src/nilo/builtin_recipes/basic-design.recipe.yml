@@ -1,0 +1,11 @@
+schema_version: 1
+name: basic-design
+title: Basic Design Task
+summary: Capture a focused design decision before implementation.
+instruction: |
+  Produce a focused design note for the requested change.
+acceptance:
+  - Scope is explicit.
+  - Non-goals are explicit.
+  - Human review questions are listed.
+stability: experimental

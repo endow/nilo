@@ -96,6 +96,42 @@ MCP の Task 書き込みは、最後に参照した event ID または context 
 
 `FailureLog` は、過去の失敗を人間が参照するために保存する。FailureLog から規則を自動生成したり、次回指示へ自動注入したりしない。
 
+### Recipe
+
+Recipe は、定型作業を再利用するための作業仕様であり、単なるプロンプト雛形ではない。Recipe は作業指示、完了条件、検証要求、レビュー観点、completion warning の根拠をまとめ、最終的には通常の Nilo Task を作るために使う。
+
+Recipe の読み込み層は次の 3 つで、同名なら `project > user > builtin` の順で優先する。
+
+- project recipe: `.nilo/recipes/*.recipe.yml`
+- user recipe: `%USERPROFILE%/.nilo/recipes/*.recipe.yml`
+- builtin recipe: Nilo package 内の builtin recipe
+
+Recipe 由来 Task は、作成時点で次を provenance として保存する。
+
+- recipe name
+- source layer
+- source path または builtin id
+- recipe content hash
+- rendered task fields
+- recipe snapshot
+- creation time
+
+Recipe file が後から変わっても、既存 Task の provenance は変えない。人間向け表示では recipe name と source layer を短く出し、詳細な snapshot / hash / rendered fields は監査用の machine-readable evidence として残す。
+
+`completion_contract` は warning-only であり、既存の completion / done / task complete flow を block しない。warning の absence は証拠充足の証明ではない。
+
+Recipe export/import は、project handoff のために recipe definition と recipe-derived task provenance snapshot を移送できるようにする。source recipe file が import 先に存在しない場合は、silent trust せず diagnostic として表示する。
+
+Recipe は workflow engine ではない。現在の境界では次を実装しない。
+
+- ordered step execution
+- conditional workflow semantics
+- remote install
+- marketplace discovery
+- completion blocking based on recipe contracts
+
+将来 step engine、remote install、marketplace-like distribution を検討する場合は、Evidence Before Trust を維持できるか、作成される evidence がどの git snapshot を観測したか、recipe source / content / trust boundary を人間が説明できるかを先に設計する。
+
 ### Snapshot reference
 
 検証、レビュー、完了判断は共通の snapshot reference を持つ。

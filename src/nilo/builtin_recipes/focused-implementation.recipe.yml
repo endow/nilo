@@ -1,0 +1,27 @@
+schema_version: 1
+name: focused-implementation
+title: Focused Implementation
+summary: Implement a small scoped change with explicit verification and review boundaries.
+instruction: |
+  Implement the requested change in the smallest scope that satisfies the acceptance criteria.
+acceptance:
+  - Requested behavior is implemented.
+  - Existing behavior outside the requested scope is preserved.
+  - Tests or verification evidence are recorded.
+variables:
+  change:
+    type: string
+    required: true
+verification:
+  - command: "python -m pytest -q"
+    reason: "Run the project test suite when available."
+review:
+  required: false
+  focus:
+    - behavioral regressions
+    - missing tests
+completion_contract:
+  evidence:
+    - changed files are listed
+    - verification command output is recorded
+stability: experimental

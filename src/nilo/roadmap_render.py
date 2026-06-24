@@ -49,6 +49,9 @@ def render_roadmap_assess_markdown(project: dict, assessments: list[dict]) -> st
         if assessment["related_tasks"]:
             for task in assessment["related_tasks"]:
                 lines.append(f"- {task['task_id']} [{task['status']}] {task['task_type']} {task['title']}")
+                if task.get("recipe_provenance"):
+                    recipe = task["recipe_provenance"]
+                    lines.append(f"  - recipe: {recipe['recipe_name']} ({recipe['source_layer']} layer)")
                 lines.append(f"  - latest_report: {task['latest_report_id'] or 'none'}")
                 lines.append(f"  - latest_evidence_status: {task['latest_evidence_status']}")
                 lines.append(
@@ -195,6 +198,9 @@ def render_roadmap_discuss_markdown(summary: dict) -> str:
     if summary["active_tasks"]:
         for task in summary["active_tasks"]:
             lines.append(f"- {task['id']} [{task['status']}] {task['task_type']} {task['risk_level']} {task['title']}")
+            if task.get("recipe_provenance"):
+                recipe = task["recipe_provenance"]
+                lines.append(f"  - recipe: {recipe['recipe_name']} ({recipe['source_layer']} layer)")
             lines.append(f"  - latest_verification_run: {task['latest_verification_run']}")
             lines.append(f"  - verification_working_tree: {task['verification_working_tree']}")
     else:
@@ -436,9 +442,15 @@ def human_roadmap_action_text(action: str, language: str) -> str:
 def human_roadmap_active_task_line(task: dict, language: str) -> str:
     task_state = human_roadmap_status_label(task["status"], language)
     task_type = human_roadmap_task_type_label(task["task_type"], language)
+    recipe = task.get("recipe_provenance")
+    recipe_text = ""
+    if recipe:
+        recipe_text = f" / recipe: {recipe['recipe_name']} ({recipe['source_layer']} layer)"
     if language == "ja":
+        if recipe:
+            return f"{task_type}の作業 ({task_state} / recipe: {recipe['recipe_name']} ({recipe['source_layer']} layer))"
         return f"{task_type}の作業 ({task_state})"
-    return f"{mask_internal_ids(task['title'])} ({task_state} / {task_type})"
+    return f"{mask_internal_ids(task['title'])} ({task_state} / {task_type}{recipe_text})"
 
 
 def render_human_roadmap_markdown(summary: dict, language: str = "en") -> str:

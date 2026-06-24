@@ -11,7 +11,7 @@ from ..task_logic import completion_status, projected_task_status, require_ai_co
 from ..timeutil import now_iso
 
 
-def cmd_task_create(args: argparse.Namespace) -> None:
+def cmd_task_create(args: argparse.Namespace) -> str:
     from .. import cli as c
 
     store = Store(args.db)
@@ -54,6 +54,7 @@ def cmd_task_create(args: argparse.Namespace) -> None:
                 },
             )
         print(row["id"])
+        return row["id"]
     finally:
         store.close()
 
@@ -80,12 +81,16 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         review_request = store.latest_for_task("review_requests", args.task)
         review_result = store.latest_for_task("review_results", args.task)
         review_findings = store.list_where("review_findings", "task_id=?", (args.task,))
+        recipe_provenance = store.latest_for_task("recipe_task_provenance", args.task)
         print(f"id: {task['id']}")
         print(f"status: {projected_task_status(store, task)}")
         print(f"task_type: {task['task_type']}")
         print(f"risk_level: {task['risk_level']}")
         print(f"requires_understanding_check: {bool(task['requires_understanding_check'])}")
         print(f"mode: {task.get('mode', 'normal')}")
+        if recipe_provenance:
+            print(f"recipe: {recipe_provenance['recipe_name']} ({recipe_provenance['source_layer']} layer)")
+            print("recipe_provenance: stored for audit")
         if task.get("description"):
             print("description:")
             print(task["description"])
@@ -123,6 +128,11 @@ def cmd_task_status(args: argparse.Namespace) -> None:
                 marker = "blocking" if finding["blocking"] else "nonblocking"
                 location = f" {finding['file_path']}:{finding['line']}" if finding["file_path"] else ""
                 print(f"- {finding['id']} [{finding['status']}] {finding['severity']} {marker}{location}: {finding['title']}")
+        completion_warnings = c.recipe_completion_warnings(store, args.task)
+        if completion_warnings:
+            print("completion_warnings:")
+            for warning in completion_warnings:
+                print(f"- {warning['severity']}: {warning['message']}")
         understanding = store.latest_for_task("understanding_checks", args.task)
         if understanding:
             print(f"latest_understanding_check: {understanding['id']} ({understanding['status']})")
@@ -227,6 +237,11 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
         print(f"status: {completion_status(args.actor)}")
         print(f"completed_by: {args.actor}")
         print(f"task_completion: {row['id']}")
+        completion_warnings = c.recipe_completion_warnings(store, args.task)
+        if completion_warnings:
+            print("completion_warnings:")
+            for warning in completion_warnings:
+                print(f"- {warning['severity']}: {warning['message']}")
         changed_files = c.git_changed_files(Path.cwd())
         if changed_files and args.commit:
             message = args.commit_message or f"Complete {task['title']}"

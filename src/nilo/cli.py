@@ -460,6 +460,7 @@ from .project_logic import (
     expected_test_paths_for_file,
     handson_language,
     handson_text,
+    human_recipe_provenance_label,
     human_roadmap_summary,
     human_roadmap_path_for_project,
     next_actions_for_task,
@@ -478,6 +479,10 @@ from .project_logic import (
     project_tasks_and_statuses,
     project_work_state,
     recent_project_history,
+    recipe_provenance_summary,
+    recipe_completion_warnings,
+    recipe_handoff_export_data,
+    recipe_handoff_import_data,
     related_tasks_for_commitment,
     render_handson_active_task_next_steps,
     render_handson_markdown,
@@ -502,7 +507,7 @@ from .project_logic import (
 from .cli_handlers.knowledge import cmd_rules_list, cmd_success_list
 from .cli_handlers.mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
 from .cli_handlers.overdrive import cmd_roadmap_execute, cmd_run
-from .cli_handlers.project import cmd_project_create, cmd_project_export_handson, cmd_project_status, cmd_project_summary
+from .cli_handlers.project import cmd_project_create, cmd_project_export_handson, cmd_project_export_recipes, cmd_project_import_recipes, cmd_project_status, cmd_project_summary
 from .cli_handlers.facade import (
     cmd_facade_check,
     cmd_facade_done,
@@ -533,6 +538,7 @@ from .cli_handlers.quality import (
     cmd_review_wait,
     cmd_review_withdraw,
 )
+from .cli_handlers.recipe import cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show
 from .cli_handlers.roadmap import (
     cmd_roadmap_accept,
     cmd_roadmap_adopt,
@@ -572,6 +578,7 @@ TOP_LEVEL_COMMANDS = {
     "project",
     "quality",
     "reject",
+    "recipe",
     "report",
     "review",
     "roadmap",

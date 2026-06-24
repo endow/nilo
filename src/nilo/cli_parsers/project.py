@@ -33,3 +33,13 @@ def register_project(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     project_export_handson.add_argument("--project", required=True)
     project_export_handson.add_argument("--file", required=True)
     project_export_handson.set_defaults(func=handlers.cmd_project_export_handson)
+
+    project_export_recipes = project_sub.add_parser("export-recipes")
+    project_export_recipes.add_argument("--project", required=True)
+    project_export_recipes.add_argument("--file", required=True)
+    project_export_recipes.set_defaults(func=handlers.cmd_project_export_recipes)
+
+    project_import_recipes = project_sub.add_parser("import-recipes")
+    project_import_recipes.add_argument("--project", required=True)
+    project_import_recipes.add_argument("--file", required=True)
+    project_import_recipes.set_defaults(func=handlers.cmd_project_import_recipes)

@@ -114,6 +114,7 @@ def start_overdrive_run(
         "cursor_task_id": cursor["id"] if cursor else "",
         "max_failures": max_failures,
         "failure_count": 0,
+        "summary": "ready" if cursor else "awaiting final human review",
         "summary_json": {
             "executed_tasks": [],
             "changed_files": [],
