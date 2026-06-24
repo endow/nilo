@@ -505,7 +505,7 @@ from .project_logic import (
     verification_working_tree_summary,
     write_handson_markdown,
 )
-from .cli_handlers.backup import cmd_backup
+from .cli_handlers.backup import cmd_backup, cmd_backups, cmd_restore
 from .cli_handlers.knowledge import cmd_rules_list, cmd_success_list
 from .cli_handlers.mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
 from .cli_handlers.overdrive import cmd_roadmap_execute, cmd_run
@@ -569,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
 TOP_LEVEL_COMMANDS = {
     "agent",
     "backup",
+    "backups",
     "check",
     "done",
     "doctor",
@@ -581,6 +582,7 @@ TOP_LEVEL_COMMANDS = {
     "project",
     "quality",
     "reject",
+    "restore",
     "recipe",
     "report",
     "review",
