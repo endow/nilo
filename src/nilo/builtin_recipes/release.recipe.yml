@@ -1,0 +1,47 @@
+schema_version: 1
+name: release
+title: Release {target_version}
+summary: Prepare a Nilo release with version updates, verification, and GitHub release handoff.
+instruction: |
+  Prepare the requested release version in a narrow, auditable scope.
+
+  Update all project-owned version sources for {target_version}. Check for stale
+  references to the previous release number, update release-facing documentation
+  when needed, and keep unrelated implementation changes out of the task.
+
+  Treat GitHub publication as a human gate. The agent may prepare local release
+  evidence, suggested tag/release notes, and GitHub CLI commands, but must not
+  commit, tag, push, create a GitHub release, publish a package, or use force
+  options unless the human explicitly asks for that exact action.
+acceptance:
+  - Project version sources are updated to {target_version}.
+  - Builtin recipes and release documentation remain valid after the change.
+  - Verification evidence includes the test suite or a documented reason it was not run.
+  - GitHub release next steps are prepared without crossing human-gated commit, tag, push, or publish actions.
+variables:
+  target_version:
+    type: string
+    required: true
+verification:
+  - command: "python -m unittest discover tests"
+    reason: "Run the project test suite before release handoff."
+  - command: "nilo recipe doctor --project {project_id}"
+    reason: "Confirm bundled and project recipes are valid."
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm Nilo state before reporting release readiness."
+review:
+  required: false
+  focus:
+    - version consistency
+    - release scope
+    - GitHub human gates
+completion_contract:
+  evidence:
+    - changed files are listed
+    - version check output is recorded
+    - verification command output is recorded
+    - GitHub release handoff notes are included
+tags:
+  - release
+  - github
+stability: experimental

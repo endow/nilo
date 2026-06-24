@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, TextIO
 
+from . import __version__
 from .agent_report_import import import_agent_report
 from .cli_support import make_id
 from .human_status import human_next_action_text, human_task_status
@@ -1704,7 +1705,7 @@ def handle_request(message: dict, db_path: Path | None = None) -> dict | None:
             {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "nilo", "version": "0.1.2"},
+                "serverInfo": {"name": "nilo", "version": __version__},
             },
         )
     if method == "notifications/initialized":
