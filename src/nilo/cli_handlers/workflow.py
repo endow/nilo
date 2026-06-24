@@ -25,6 +25,7 @@ from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
 from ..task_logic import outcome_status
 from ..timeutil import now_iso
+from ..update_check import check_for_update, is_disabled, update_message
 from ..upgrade import run_upgrade
 from ..verification import run_local_verification
 
@@ -251,6 +252,13 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
     code = run_upgrade(dry_run=args.dry_run, db_path=args.db)
     if code != 0:
         raise SystemExit(code)
+
+
+def cmd_update_check(args: argparse.Namespace) -> None:
+    if is_disabled():
+        print("Nilo update check skipped: disabled by NILO_NO_UPDATE_CHECK.")
+        return
+    print(update_message(check_for_update(), language="en"))
 
 
 def cmd_init(args: argparse.Namespace) -> None:

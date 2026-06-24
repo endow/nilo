@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .snapshot import current_git_snapshot, evidence_status as computed_evidence_status
+from .update_check import cached_instruction_note
 
 REPORT_FORMAT = """# 完了報告
 
@@ -220,6 +221,9 @@ def build_instruction(
             "- 自動完了を宣言しない\n"
             "- 判断が必要な点は human_review_required として報告する\n"
         )
+    update_note = cached_instruction_note()
+    if update_note:
+        update_note = "\n" + update_note
 
     body = f"""# 作業指示
 
@@ -241,6 +245,7 @@ def build_instruction(
 ## プロジェクト
 - 名前: {project["name"]}
 - 技術スタック: {", ".join(project["tech_stack"]) or "未設定"}
+{update_note}
 
 ## 作業ルール
 {chr(10).join(f"- {rule}" for rule in project["rules"]) or "- 作業ブランチを切り替えない"}

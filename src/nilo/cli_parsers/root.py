@@ -34,6 +34,8 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("--dry-run", action="store_true")
     upgrade.set_defaults(func=handlers.cmd_upgrade)
+    update_check = sub.add_parser("update-check")
+    update_check.set_defaults(func=handlers.cmd_update_check)
 
     register_run(sub, handlers)
     register_facade(sub, handlers)

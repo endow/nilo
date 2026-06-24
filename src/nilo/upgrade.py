@@ -155,6 +155,10 @@ def run_upgrade(*, dry_run: bool = False, db_path: Path | None = None, run: RunC
                 print("Dry run: no update operations would be run.")
             print("Done.")
             print(f"Nilo is up to date with {upstream}.")
+            if not dry_run:
+                from .update_check import reset_update_check_state
+
+                reset_update_check_state()
             return 0
 
         print(f"Update available: {local_rev[:12]} -> {remote_rev[:12]}")
@@ -210,6 +214,9 @@ def run_upgrade(*, dry_run: bool = False, db_path: Path | None = None, run: RunC
         print()
         print("Done.")
         print(f"Nilo was updated from {local_rev[:12]} to {remote_rev[:12]}.")
+        from .update_check import reset_update_check_state
+
+        reset_update_check_state()
         return 0
     except UpgradeError as exc:
         print(str(exc))
