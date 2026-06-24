@@ -45,6 +45,200 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(response["result"]["protocolVersion"], "2024-11-05")
         self.assertTrue(tools["result"]["tools"])
 
+    def test_mcp_default_db_uses_workspace_root_when_cwd_is_elsewhere(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            repo = base / "repo"
+            outside = base / "outside"
+            repo.mkdir()
+            outside.mkdir()
+            db = repo / ".nilo" / "nilo.db"
+            store = Store(db)
+            try:
+                store.insert(
+                    "projects",
+                    {
+                        "id": "project_test",
+                        "name": "Project Test",
+                        "tech_stack": [],
+                        "rules": [],
+                        "default_completion_criteria": [],
+                        "available_models": [],
+                        "fallback_models": [],
+                        "requires_local_execution": 0,
+                        "created_at": now_iso(),
+                    },
+                )
+            finally:
+                store.close()
+
+            previous_cwd = Path.cwd()
+            previous_workspace = os.environ.get("NILO_WORKSPACE_ROOT")
+            try:
+                os.chdir(outside)
+                os.environ["NILO_WORKSPACE_ROOT"] = str(repo)
+                result = call_tool("get_agent_work_context", {"project_id": "project_test"}, None)
+            finally:
+                os.chdir(previous_cwd)
+                if previous_workspace is None:
+                    os.environ.pop("NILO_WORKSPACE_ROOT", None)
+                else:
+                    os.environ["NILO_WORKSPACE_ROOT"] = previous_workspace
+
+        self.assertEqual(result["project_id"], "project_test")
+
+    def test_mcp_default_db_prefers_candidate_matching_requested_project(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            repo = base / "repo"
+            unrelated = base / "unrelated"
+            outside = base / "outside"
+            repo.mkdir()
+            unrelated.mkdir()
+            outside.mkdir()
+            for db, project_id in (
+                (repo / ".nilo" / "nilo.db", "project_test"),
+                (unrelated / ".nilo" / "nilo.db", "other_project"),
+            ):
+                store = Store(db)
+                try:
+                    store.insert(
+                        "projects",
+                        {
+                            "id": project_id,
+                            "name": "Project Test",
+                            "tech_stack": [],
+                            "rules": [],
+                            "default_completion_criteria": [],
+                            "available_models": [],
+                            "fallback_models": [],
+                            "requires_local_execution": 0,
+                            "created_at": now_iso(),
+                        },
+                    )
+                finally:
+                    store.close()
+
+            previous_cwd = Path.cwd()
+            previous_nilo_workspace = os.environ.get("NILO_WORKSPACE_ROOT")
+            previous_workspace = os.environ.get("WORKSPACE_ROOT")
+            try:
+                os.chdir(outside)
+                os.environ["NILO_WORKSPACE_ROOT"] = str(unrelated)
+                os.environ["WORKSPACE_ROOT"] = str(repo)
+                result = call_tool("get_agent_work_context", {"project_id": "project_test"}, None)
+            finally:
+                os.chdir(previous_cwd)
+                if previous_nilo_workspace is None:
+                    os.environ.pop("NILO_WORKSPACE_ROOT", None)
+                else:
+                    os.environ["NILO_WORKSPACE_ROOT"] = previous_nilo_workspace
+                if previous_workspace is None:
+                    os.environ.pop("WORKSPACE_ROOT", None)
+                else:
+                    os.environ["WORKSPACE_ROOT"] = previous_workspace
+
+        self.assertEqual(result["project_id"], "project_test")
+
+    def test_mcp_project_not_found_reports_db_path_without_transport_crash(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            unrelated_db = root / ".nilo" / "nilo.db"
+            store = Store(unrelated_db)
+            store.close()
+
+            previous_cwd = Path.cwd()
+            previous_workspace = os.environ.pop("NILO_WORKSPACE_ROOT", None)
+            previous_db = os.environ.pop("NILO_DB", None)
+            try:
+                os.chdir(root)
+                response = handle_request(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "get_agent_work_context",
+                            "arguments": {"project_id": "project_test"},
+                        },
+                    },
+                    None,
+                )
+            finally:
+                os.chdir(previous_cwd)
+                if previous_workspace is not None:
+                    os.environ["NILO_WORKSPACE_ROOT"] = previous_workspace
+                if previous_db is not None:
+                    os.environ["NILO_DB"] = previous_db
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        message = json.loads(result["content"][0]["text"])["error"]
+        self.assertIn("none matched the requested context", message)
+        self.assertIn("project_id=project_test", message)
+        self.assertIn(".nilo", message)
+        self.assertIn("nilo.db", message)
+
+    def test_mcp_dispatch_review_context_error_is_tool_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            store.close()
+
+            response = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "dispatch_review",
+                        "arguments": {
+                            "task_id": "task_missing",
+                            "actor": "codex",
+                            "reviewer": "claude-code",
+                        },
+                    },
+                },
+                db,
+            )
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        message = json.loads(result["content"][0]["text"])["error"]
+        self.assertIn("review dispatch failed during resolve_context", message)
+        self.assertIn("task not found: task_missing", message)
+
+    def test_mcp_dispatch_review_unexpected_error_is_tool_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            store.close()
+
+            with patch("nilo.mcp_server.dispatch_review", side_effect=RuntimeError("boom")):
+                response = handle_request(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "dispatch_review",
+                            "arguments": {
+                                "task_id": "task_missing",
+                                "actor": "codex",
+                                "reviewer": "claude-code",
+                            },
+                        },
+                    },
+                    db,
+                )
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        message = json.loads(result["content"][0]["text"])["error"]
+        self.assertIn("review dispatch failed unexpectedly: RuntimeError: boom", message)
+
     def test_two_mcp_stdio_clients_complete_review_handoff(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, TextIO
@@ -10,7 +12,7 @@ from .agent_report_import import import_agent_report
 from .cli_support import make_id
 from .human_status import human_next_action_text, human_task_status
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
-from .review_dispatcher import dispatch_review
+from .review_dispatcher import DispatchError, dispatch_review
 from .reviewer_registry import (
     ReviewerResolutionError,
     canonical_reviewer_name,
@@ -37,6 +39,18 @@ from .timeutil import iso_age_seconds, now_iso
 
 
 PROTOCOL_VERSION = "2024-11-05"
+
+MCP_WORKSPACE_ENV_VARS = (
+    "NILO_WORKSPACE_ROOT",
+    "NILO_PROJECT_ROOT",
+    "CODEX_WORKSPACE_ROOT",
+    "CODEX_CWD",
+    "WORKSPACE_ROOT",
+    "REPO_ROOT",
+    "PROJECT_ROOT",
+    "INIT_CWD",
+    "PWD",
+)
 
 
 def text_tool_result(data: Any, is_error: bool = False) -> dict:
@@ -83,6 +97,113 @@ def headroom_tool_metadata(tool_name: str) -> dict | None:
 
 def headroom_tool_metadata_list() -> list[dict]:
     return [dict(metadata) for metadata in HEADROOM_TOOL_METADATA]
+
+
+def _candidate_workspace_roots() -> list[Path]:
+    roots: list[Path] = []
+    for name in MCP_WORKSPACE_ENV_VARS:
+        value = os.environ.get(name)
+        if value:
+            roots.append(Path(value))
+    cwd = Path.cwd()
+    roots.extend([cwd, *cwd.parents])
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        marker = str(root.expanduser())
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(root)
+    return deduped
+
+
+def _mcp_context_filters(tool_name: str, arguments: dict) -> dict[str, str]:
+    filters: dict[str, str] = {}
+    project_id = arguments.get("project_id")
+    if isinstance(project_id, str) and project_id:
+        filters["project_id"] = project_id
+    task_id = arguments.get("task_id")
+    if isinstance(task_id, str) and task_id:
+        filters["task_id"] = task_id
+    if tool_name in {"get_review_prompt", "get_review_template", "import_review_result"}:
+        review_id = arguments.get("review_id")
+        if isinstance(review_id, str) and review_id:
+            filters["review_id"] = review_id
+    return filters
+
+
+def _db_contains_context(candidate: Path, filters: dict[str, str]) -> bool:
+    if not filters:
+        return True
+    uri = f"file:{candidate.resolve().as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            if "project_id" in filters:
+                row = conn.execute("SELECT 1 FROM projects WHERE id=? LIMIT 1", (filters["project_id"],)).fetchone()
+                if row is None:
+                    return False
+            if "task_id" in filters:
+                args: list[str] = [filters["task_id"]]
+                where = "id=?"
+                if "project_id" in filters:
+                    where += " AND project_id=?"
+                    args.append(filters["project_id"])
+                row = conn.execute(f"SELECT 1 FROM tasks WHERE {where} LIMIT 1", tuple(args)).fetchone()
+                if row is None:
+                    return False
+            if "review_id" in filters:
+                row = conn.execute("SELECT 1 FROM review_requests WHERE id=? LIMIT 1", (filters["review_id"],)).fetchone()
+                if row is None:
+                    return False
+            return True
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
+def resolve_mcp_db_path(db_path: Path | None, tool_name: str, arguments: dict) -> Path:
+    if db_path is not None:
+        return db_path
+    env_db = os.environ.get("NILO_DB")
+    if env_db:
+        return Path(env_db)
+    filters = _mcp_context_filters(tool_name, arguments)
+    checked: list[str] = []
+    existing: list[str] = []
+    for root in _candidate_workspace_roots():
+        candidate = root.expanduser() / ".nilo" / "nilo.db"
+        checked.append(str(candidate))
+        if not candidate.exists():
+            continue
+        existing.append(str(candidate))
+        if _db_contains_context(candidate, filters):
+            return candidate
+    if existing and filters:
+        filter_text = ", ".join(f"{key}={value}" for key, value in filters.items())
+        raise McpToolError(
+            "Nilo MCP found project database candidates, but none matched the requested context. "
+            f"context={filter_text}; cwd={Path.cwd()}; candidates={existing}. "
+            "Start the MCP server with --db <repo>/.nilo/nilo.db, set NILO_DB, "
+            "or set NILO_WORKSPACE_ROOT to the target repository."
+        )
+    raise McpToolError(
+        "Nilo MCP could not resolve a project database. "
+        f"cwd={Path.cwd()}; checked={checked}. "
+        "Start the MCP server with --db <repo>/.nilo/nilo.db, set NILO_DB, "
+        "or set NILO_WORKSPACE_ROOT to the target repository."
+    )
+
+
+def project_not_found_error(store: Store, project_id: str) -> McpToolError:
+    return McpToolError(
+        f"project not found: {project_id}; "
+        f"Nilo MCP is using db={store.path} cwd={Path.cwd()}. "
+        "If this is not the target repository database, restart MCP with "
+        "--db <repo>/.nilo/nilo.db or set NILO_DB/NILO_WORKSPACE_ROOT."
+    )
 
 
 TOOLS = [
@@ -629,7 +750,7 @@ def project_summary(store: Store, project_id: str) -> dict:
 
     project = store.get("projects", project_id)
     if not project:
-        raise McpToolError(f"project not found: {project_id}")
+        raise project_not_found_error(store, project_id)
     tasks, statuses = p.project_tasks_and_statuses(store, project_id)
     return p.project_summary_data(store, project, tasks, statuses)
 
@@ -791,7 +912,7 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
     project_id = require_string(arguments, "project_id")
     project = store.get("projects", project_id)
     if not project:
-        raise McpToolError(f"project not found: {project_id}")
+        raise project_not_found_error(store, project_id)
     tool_names = [tool["name"] for tool in TOOLS]
     exposed_human_gated = sorted(HUMAN_GATED_TOOL_NAMES.intersection(tool_names))
     summary = project_summary(store, project_id)
@@ -844,7 +965,7 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
 def prepare_reviewer(store: Store, arguments: dict) -> dict:
     project_id = require_string(arguments, "project_id")
     if not store.get("projects", project_id):
-        raise McpToolError(f"project not found: {project_id}")
+        raise project_not_found_error(store, project_id)
     return {
         "project_id": project_id,
         **reviewer_prepare_status(store, require_string(arguments, "reviewer")),
@@ -1219,7 +1340,7 @@ def mcp_create_task(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"unsupported risk: {risk}")
     project = store.get("projects", project_id)
     if not project:
-        raise McpToolError(f"project not found: {project_id}")
+        raise project_not_found_error(store, project_id)
     created_at = now_iso()
     row = {
         "id": make_id("task"),
@@ -1367,7 +1488,7 @@ def mcp_create_todo(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"unsupported todo priority: {priority}")
     project = store.get("projects", project_id)
     if not project:
-        raise McpToolError(f"project not found: {project_id}")
+        raise project_not_found_error(store, project_id)
     created_at = now_iso()
     row = {
         "id": make_id("todo"),
@@ -1394,7 +1515,7 @@ def mcp_create_todo(store: Store, arguments: dict) -> dict:
 def mcp_list_todos(store: Store, arguments: dict) -> dict:
     project_id = require_string(arguments, "project_id")
     if not store.get("projects", project_id):
-        raise McpToolError(f"project not found: {project_id}")
+        raise project_not_found_error(store, project_id)
     status = optional_string(arguments, "status")
     where = "project_id=?"
     values: tuple[Any, ...] = (project_id,)
@@ -1444,7 +1565,7 @@ def mcp_promote_todo_to_roadmap_proposal(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"todo is not promotable: {todo['status']} (allowed: {allowed})")
     project = store.get("projects", todo["project_id"])
     if not project:
-        raise McpToolError(f"project not found: {todo['project_id']}")
+        raise project_not_found_error(store, todo["project_id"])
     created_at = now_iso()
     title = optional_string(arguments, "title") or todo["title"]
     body = _roadmap_proposal_from_todo(todo, title)
@@ -1510,7 +1631,7 @@ def mcp_create_task_from_todo(store: Store, arguments: dict) -> dict:
     commitment_id = todo["roadmap_commitment_id"]
     project = store.get("projects", todo["project_id"])
     if not project:
-        raise McpToolError(f"project not found: {todo['project_id']}")
+        raise project_not_found_error(store, todo["project_id"])
     created_at = now_iso()
     task_id = make_id("task")
     task = {
@@ -1623,18 +1744,23 @@ def mcp_dispatch_review(store: Store, arguments: dict) -> dict:
     if not isinstance(auto_configure, bool):
         raise McpToolError("argument must be a boolean: auto_configure")
     config_path = optional_string(arguments, "config_path")
-    return dispatch_review(
-        store,
-        actor=require_string(arguments, "actor"),
-        reviewer=require_string(arguments, "reviewer"),
-        task_id=task_id,
-        project_id=optional_string(arguments, "project_id"),
-        reason=optional_string(arguments, "reason", "dispatched agent review") or "dispatched agent review",
-        auto_start=auto_start,
-        auto_configure=auto_configure,
-        config_path=Path(config_path) if config_path else None,
-        repo_root=Path.cwd(),
-    )
+    try:
+        return dispatch_review(
+            store,
+            actor=require_string(arguments, "actor"),
+            reviewer=require_string(arguments, "reviewer"),
+            task_id=task_id,
+            project_id=optional_string(arguments, "project_id"),
+            reason=optional_string(arguments, "reason", "dispatched agent review") or "dispatched agent review",
+            auto_start=auto_start,
+            auto_configure=auto_configure,
+            config_path=Path(config_path) if config_path else None,
+            repo_root=Path.cwd(),
+        )
+    except DispatchError as exc:
+        raise McpToolError(f"review dispatch failed during {exc.stage}: {exc.reason}") from exc
+    except Exception as exc:
+        raise McpToolError(f"review dispatch failed unexpectedly: {type(exc).__name__}: {exc}") from exc
 
 
 TOOL_HANDLERS = {
@@ -1681,7 +1807,7 @@ def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) ->
         arguments = {}
     if not isinstance(arguments, dict):
         raise McpToolError("tool arguments must be an object")
-    store = Store(db_path)
+    store = Store(resolve_mcp_db_path(db_path, name, arguments))
     try:
         return TOOL_HANDLERS[name](store, arguments)
     finally:
