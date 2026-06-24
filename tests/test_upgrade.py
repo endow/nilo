@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -135,6 +136,7 @@ class UpgradeTests(unittest.TestCase):
 
             backups = list((repo / ".nilo" / "backups").glob("nilo-*.db"))
             metas = list((repo / ".nilo" / "backups").glob("nilo-*.db.meta.json"))
+            meta = json.loads(metas[0].read_text(encoding="utf-8"))
 
         self.assertEqual(code, 0)
         self.assertTrue(runner.command_was_run(["git", "pull", "--ff-only"]))
@@ -142,6 +144,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertTrue(any(command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"] for command in runner.commands))
         self.assertEqual(len(backups), 1)
         self.assertEqual(len(metas), 1)
+        self.assertEqual(meta["reason"], "before-upgrade")
         self.assertIn("Nilo was updated from aaaaaaaaaaaa to bbbbbbbbbbbb.", output.getvalue())
 
     def test_upgrade_default_db_path_is_passed_to_migration(self) -> None:

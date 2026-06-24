@@ -193,10 +193,10 @@ Phase 1-4 では暗号化なしの backup/export/restore を完成させる。Ph
 
 ### Phase 4: 自動バックアップ接続
 
-- `nilo upgrade` の backup を `reason=before-upgrade` にする。
-- migration 前 backup を schema version 検知と接続する設計を固める。
-- restore 前 backup を Phase 2 実装として固定する。
-- reason を固定 enum として validation する。
+- `nilo upgrade` の backup を `reason=before-upgrade` にする。実装済み。
+- `Store` が既存 DB の不足カラムを検知した場合だけ、schema migration の ALTER 前に `reason=before-migration` のバックアップを作成する。新規 DB 作成や最新 schema の通常起動では作成しない。migration 前バックアップに失敗した場合は fail-closed とし、schema 変更へ進まない。
+- restore 前 backup を Phase 2 実装として固定する。実装済み。
+- reason を固定 enum として validation する。実装済み。
 
 ### Phase 5: 暗号化
 

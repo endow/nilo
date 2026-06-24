@@ -461,6 +461,52 @@ TABLE_JSON_COLUMNS = {
     "review_dispatches": {"args"},
 }
 
+MIGRATION_COLUMN_DEFINITIONS = (
+    ("tasks", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "acceptance_criteria", "TEXT NOT NULL DEFAULT '[]'"),
+    ("tasks", "parent_task_id", "TEXT"),
+    ("tasks", "split_index", "INTEGER"),
+    ("tasks", "task_type", "TEXT NOT NULL DEFAULT 'implementation'"),
+    ("tasks", "risk_level", "TEXT NOT NULL DEFAULT 'medium'"),
+    ("tasks", "requires_understanding_check", "INTEGER NOT NULL DEFAULT 0"),
+    ("tasks", "roadmap_commitment_id", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "roadmap_item_id", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "mode", "TEXT NOT NULL DEFAULT 'normal'"),
+    ("instructions", "applied_failure_pattern_ids", "TEXT NOT NULL DEFAULT '[]'"),
+    ("overdrive_runs", "summary", "TEXT NOT NULL DEFAULT ''"),
+    ("overdrive_runs", "summary_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("task_completions", "actor", "TEXT NOT NULL DEFAULT 'human'"),
+    ("roadmap_commitments", "closed_by", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_commitments", "closed_at", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_commitments", "closure_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_revisions", "source_path", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_revisions", "decided_by", "TEXT NOT NULL DEFAULT ''"),
+    ("verification_runs", "source", "TEXT NOT NULL DEFAULT 'nilo_executed'"),
+    ("verification_runs", "git_status_porcelain", "TEXT NOT NULL DEFAULT ''"),
+    ("verification_runs", "git_diff_hash", "TEXT NOT NULL DEFAULT ''"),
+    ("verification_runs", "working_tree_dirty", "INTEGER NOT NULL DEFAULT 0"),
+    ("verification_runs", "observed_paths", "TEXT NOT NULL DEFAULT '[]'"),
+    ("review_requests", "based_on_event_id", "TEXT NOT NULL DEFAULT ''"),
+    ("review_requests", "based_on_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+    ("review_results", "based_on_event_id", "TEXT NOT NULL DEFAULT ''"),
+    ("review_results", "based_on_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+    ("task_completions", "completed_by", "TEXT NOT NULL DEFAULT 'human'"),
+    ("task_completions", "completed_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+    ("task_completions", "completion_note", "TEXT NOT NULL DEFAULT ''"),
+    ("task_completions", "accepted_verification_run_ids", "TEXT NOT NULL DEFAULT '[]'"),
+    ("task_completions", "accepted_review_result_ids", "TEXT NOT NULL DEFAULT '[]'"),
+    ("task_completions", "human_decision_note", "TEXT NOT NULL DEFAULT ''"),
+    ("task_completions", "completed_with_reservations", "INTEGER NOT NULL DEFAULT 0"),
+    ("task_completions", "completed_at", "TEXT NOT NULL DEFAULT ''"),
+    ("review_requests", "withdrawn_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("review_requests", "withdrawn_actor", "TEXT NOT NULL DEFAULT ''"),
+    ("review_requests", "withdrawn_at", "TEXT NOT NULL DEFAULT ''"),
+)
+
+MIGRATION_COLUMNS: dict[str, set[str]] = {}
+for table, column, _definition in MIGRATION_COLUMN_DEFINITIONS:
+    MIGRATION_COLUMNS.setdefault(table, set()).add(column)
+
 
 def default_db_path() -> Path:
     env = os.environ.get("NILO_DB")
@@ -473,6 +519,7 @@ class Store:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        backup_before_schema_migration(self.path)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
@@ -547,45 +594,8 @@ class Store:
         return self._decode_row(row) if row else None
 
     def _migrate(self) -> None:
-        self._ensure_column("tasks", "description", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("tasks", "acceptance_criteria", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("tasks", "parent_task_id", "TEXT")
-        self._ensure_column("tasks", "split_index", "INTEGER")
-        self._ensure_column("tasks", "task_type", "TEXT NOT NULL DEFAULT 'implementation'")
-        self._ensure_column("tasks", "risk_level", "TEXT NOT NULL DEFAULT 'medium'")
-        self._ensure_column("tasks", "requires_understanding_check", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column("tasks", "roadmap_commitment_id", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("tasks", "roadmap_item_id", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("tasks", "mode", "TEXT NOT NULL DEFAULT 'normal'")
-        self._ensure_column("instructions", "applied_failure_pattern_ids", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("overdrive_runs", "summary", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("overdrive_runs", "summary_json", "TEXT NOT NULL DEFAULT '{}'")
-        self._ensure_column("task_completions", "actor", "TEXT NOT NULL DEFAULT 'human'")
-        self._ensure_column("roadmap_commitments", "closed_by", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("roadmap_commitments", "closed_at", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("roadmap_commitments", "closure_reason", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("roadmap_revisions", "source_path", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("roadmap_revisions", "decided_by", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("verification_runs", "source", "TEXT NOT NULL DEFAULT 'nilo_executed'")
-        self._ensure_column("verification_runs", "git_status_porcelain", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("verification_runs", "git_diff_hash", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("verification_runs", "working_tree_dirty", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column("verification_runs", "observed_paths", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("review_requests", "based_on_event_id", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("review_requests", "based_on_snapshot", "TEXT NOT NULL DEFAULT '{}'")
-        self._ensure_column("review_results", "based_on_event_id", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("review_results", "based_on_snapshot", "TEXT NOT NULL DEFAULT '{}'")
-        self._ensure_column("task_completions", "completed_by", "TEXT NOT NULL DEFAULT 'human'")
-        self._ensure_column("task_completions", "completed_snapshot", "TEXT NOT NULL DEFAULT '{}'")
-        self._ensure_column("task_completions", "completion_note", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("task_completions", "accepted_verification_run_ids", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("task_completions", "accepted_review_result_ids", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("task_completions", "human_decision_note", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("task_completions", "completed_with_reservations", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column("task_completions", "completed_at", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("review_requests", "withdrawn_reason", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("review_requests", "withdrawn_actor", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("review_requests", "withdrawn_at", "TEXT NOT NULL DEFAULT ''")
+        for table, column, definition in MIGRATION_COLUMN_DEFINITIONS:
+            self._ensure_column(table, column, definition)
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -615,3 +625,30 @@ class Store:
                 except json.JSONDecodeError:
                     pass
         return result
+
+
+def pending_schema_migration_columns(path: Path) -> dict[str, list[str]]:
+    if not path.exists():
+        return {}
+    conn = sqlite3.connect(path)
+    try:
+        pending: dict[str, list[str]] = {}
+        for table, required_columns in MIGRATION_COLUMNS.items():
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            if not rows:
+                continue
+            existing = {str(row[1]) for row in rows}
+            missing = sorted(required_columns - existing)
+            if missing:
+                pending[table] = missing
+        return pending
+    finally:
+        conn.close()
+
+
+def backup_before_schema_migration(path: Path) -> None:
+    if not pending_schema_migration_columns(path):
+        return
+    from .backup import create_backup
+
+    create_backup(path, reason="before-migration", cwd=Path.cwd())

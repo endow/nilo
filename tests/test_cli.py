@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from nilo.backup import BackupError
 from nilo.cli import git_changed_files, handson_language, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
 from nilo.roadmap_render import render_human_roadmap_markdown
@@ -3378,6 +3379,92 @@ non-pending reject を確認するため。
 
             self.assertEqual(revision["source_path"], "")
             self.assertEqual(revision["decided_by"], "")
+
+    def test_store_backs_up_database_before_schema_column_migration(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                """
+                CREATE TABLE roadmap_revisions (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  proposed_commitment_id TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  body_md TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  accepted_at TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO roadmap_revisions
+                (id, project_id, proposed_commitment_id, status, body_md, reason, accepted_at, created_at)
+                VALUES ('roadmap_rev_old', 'project_test', 'commitment_old', 'pending', '# Old', '', '', '2026-01-01T00:00:00+00:00')
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            store = Store(db)
+            store.close()
+
+            backups = list((root / "backups").glob("nilo-*.db"))
+            metas = list((root / "backups").glob("nilo-*.db.meta.json"))
+            meta = json.loads(metas[0].read_text(encoding="utf-8"))
+            backup_conn = sqlite3.connect(backups[0])
+            try:
+                backup_columns = [row[1] for row in backup_conn.execute("PRAGMA table_info(roadmap_revisions)").fetchall()]
+                backup_rows = backup_conn.execute("SELECT id, body_md FROM roadmap_revisions").fetchall()
+            finally:
+                backup_conn.close()
+
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(len(metas), 1)
+        self.assertEqual(meta["reason"], "before-migration")
+        self.assertNotIn("source_path", backup_columns)
+        self.assertEqual(backup_rows, [("roadmap_rev_old", "# Old")])
+
+    def test_store_does_not_create_migration_backup_for_new_or_current_schema_database(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+
+            store = Store(db)
+            store.close()
+            store = Store(db)
+            store.close()
+
+            self.assertFalse((root / "backups").exists())
+
+    def test_store_fails_closed_when_pre_migration_backup_fails(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                """
+                CREATE TABLE roadmap_revisions (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  proposed_commitment_id TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  body_md TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  accepted_at TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            with patch("nilo.backup.create_backup", side_effect=BackupError("backup unavailable")):
+                with self.assertRaisesRegex(BackupError, "backup unavailable"):
+                    Store(db)
 
     def test_store_migrates_verification_run_source_column(self) -> None:
         with TemporaryDirectory() as directory:
