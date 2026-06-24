@@ -147,7 +147,7 @@ class UpdateCheckTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             home = Path(directory) / "home"
             runner = FakeTagRunner(Path(directory))
-            with patch("nilo.update_check.Path.home", return_value=home), patch("sys.stdout", TtyStringIO()):
+            with patch.dict(os.environ, {"CI": ""}), patch("nilo.update_check.Path.home", return_value=home), patch("sys.stdout", TtyStringIO()):
                 first = auto_update_notice(run=runner)
                 second = auto_update_notice(run=runner)
                 state = load_state()
@@ -217,7 +217,7 @@ class UpdateCheckTests(unittest.TestCase):
         }
         with TemporaryDirectory() as directory:
             home = Path(directory) / "home"
-            with patch("nilo.update_check.Path.home", return_value=home), patch("nilo.update_check.repo_root_from_package", return_value=(None, "")):
+            with patch.dict(os.environ, {"CI": ""}), patch("nilo.update_check.Path.home", return_value=home), patch("nilo.update_check.repo_root_from_package", return_value=(None, "")):
                 save_state(
                     {
                         "lastCheckedAt": "2026-06-24T12:00:00+00:00",
