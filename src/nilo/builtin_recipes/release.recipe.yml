@@ -9,14 +9,20 @@ instruction: |
   references to the previous release number, update release-facing documentation
   when needed, and keep unrelated implementation changes out of the task.
 
-  Treat GitHub publication as a human gate. The agent may prepare local release
-  evidence, suggested tag/release notes, and GitHub CLI commands, but must not
-  commit, tag, push, create a GitHub release, or use force options unless the
-  human explicitly asks for that exact action.
+  Prepare local release evidence, a suggested tag, GitHub CLI commands, and a
+  release notes draft for human handoff. The release notes draft must include a
+  Japanese section first and an English section second, using the headings
+  "リリースノート（日本語）" and "Release Notes (English)" without labeling the
+  sections as proposals. Here, draft means pre-human-gate handoff content, not
+  tentative wording inside the release notes. Treat GitHub publication as a
+  human gate: the agent must not commit, tag, push, create a GitHub release, or
+  use force options unless the human explicitly asks for that exact action.
 acceptance:
   - Project version sources are updated to {target_version}.
   - Builtin recipes and release documentation remain valid after the change.
   - Verification evidence includes the test suite or a documented reason it was not run.
+  - Release notes draft covers notable changes, verification, and upgrade/install notes when relevant.
+  - Release notes draft is written in Japanese first and English second for GitHub release handoff.
   - GitHub release next steps are prepared without crossing human-gated commit, tag, push, or release creation actions.
 variables:
   target_version:
@@ -40,6 +46,7 @@ completion_contract:
     - changed files are listed
     - version check output is recorded
     - verification command output is recorded
+    - release notes draft text is included with Japanese first and English second
     - GitHub release handoff notes are included
 tags:
   - release
