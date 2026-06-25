@@ -11,13 +11,13 @@ instruction: |
 
   Treat GitHub publication as a human gate. The agent may prepare local release
   evidence, suggested tag/release notes, and GitHub CLI commands, but must not
-  commit, tag, push, create a GitHub release, publish a package, or use force
-  options unless the human explicitly asks for that exact action.
+  commit, tag, push, create a GitHub release, or use force options unless the
+  human explicitly asks for that exact action.
 acceptance:
   - Project version sources are updated to {target_version}.
   - Builtin recipes and release documentation remain valid after the change.
   - Verification evidence includes the test suite or a documented reason it was not run.
-  - GitHub release next steps are prepared without crossing human-gated commit, tag, push, or publish actions.
+  - GitHub release next steps are prepared without crossing human-gated commit, tag, push, or release creation actions.
 variables:
   target_version:
     type: string
