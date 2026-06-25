@@ -537,6 +537,43 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertIsNot(tool_by_name["import_review_result"]["metadata"], HEADROOM_TOOL_METADATA[0])
 
+    def test_tools_list_exposes_review_handoff_tools_for_review_context(self) -> None:
+        response = handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {"context": "review_handoff"},
+            }
+        )
+
+        self.assertIsNotNone(response)
+        tools = response["result"]["tools"]
+        names = {tool["name"] for tool in tools}
+        self.assertTrue(
+            {
+                "get_status",
+                "get_task_status",
+                "record_verification",
+                "request_review",
+                "import_review_result",
+            }.issubset(names)
+        )
+        self.assertTrue(
+            {
+                "register_reviewer",
+                "claim_next_review",
+                "request_task_review",
+                "dispatch_review",
+                "get_review_prompt",
+                "get_review_template",
+                "get_review_status",
+                "mark_stale_review_requests",
+            }.issubset(names)
+        )
+        self.assertEqual(response["result"]["default_tool_count"], 5)
+        self.assertEqual(response["result"]["review_handoff_tool_count"], 8)
+
     def test_get_agent_work_context_returns_next_step_and_write_token(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

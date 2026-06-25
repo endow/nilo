@@ -156,51 +156,6 @@ status: {evidence_status}
 """
 
 
-def build_rules_derive_prompt(project: dict, failures: list[dict]) -> str:
-    if failures:
-        failure_lines = "\n".join(
-            (
-                f"- id: {failure['id']}\n"
-                f"  task_id: {failure['task_id']}\n"
-                f"  category: {failure['category']}\n"
-                f"  severity: {failure['severity']}\n"
-                f"  message: {failure['message']}"
-            )
-            for failure in failures
-        )
-    else:
-        failure_lines = "- 失敗履歴なし"
-    return f"""# DerivedRule 生成指示
-
-## プロジェクト
-{project["name"]} ({project["id"]})
-
-## FailureLog
-{failure_lines}
-
-## 方針
-- コード変更は禁止
-- FailureLog を次回以降の作業指示に入れる短い行動規則へ集約する
-- 事実にない内容を補わない
-- 過剰に一般化せず、同じ失敗を防ぐための具体的な規則にする
-- tag は #testing, #git, #evidence, #lint, #typecheck, #architecture, #review, #general から必要最小限を選ぶ
-- severity は low / medium / high のいずれかにする
-- confidence は 0.1 から 1.0 の数値にする
-
-## 出力形式
-# DerivedRules
-
-## Rule
-source_failures: failure_id_1, failure_id_2
-rule: 次回の作業で守る短い行動規則
-tags: #evidence, #testing
-severity: medium
-confidence: 0.6
-
-必要な数だけ ## Rule ブロックを繰り返す。
-"""
-
-
 def build_instruction(
     project: dict,
     task: dict,

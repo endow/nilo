@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import sqlite3
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -10,6 +11,14 @@ from unittest.mock import patch
 from nilo.cli import main
 from nilo.store import Store
 from nilo.timeutil import now_iso
+
+LEGACY_LEARNING_TABLES = {
+    "derived_rules",
+    "active_instruction_rules",
+    "failure_patterns",
+    "task_failure_pattern_matches",
+    "success_patterns",
+}
 
 
 REPORT = """# 完了報告
@@ -42,6 +51,14 @@ passed
 
 
 class FailurePatternPurgeTests(unittest.TestCase):
+    def table_names(self, db: Path) -> set[str]:
+        conn = sqlite3.connect(db)
+        try:
+            rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            return {str(row[0]) for row in rows}
+        finally:
+            conn.close()
+
     def test_claude_review_instruction_does_not_inject_recurrence_prevention(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
@@ -72,14 +89,11 @@ class FailurePatternPurgeTests(unittest.TestCase):
             self.assertNotIn("## 参考にする成功パターン", body)
 
             store = Store(db)
-            matches = store.list_where("task_failure_pattern_matches", "task_id=?", ("task_review",))
-            patterns = store.list_where("failure_patterns")
             instruction = store.latest_for_task("instructions", "task_review")
             store.close()
-            self.assertEqual(matches, [])
-            self.assertEqual(patterns, [])
             self.assertEqual(instruction["applied_rule_ids"], [])
-            self.assertEqual(instruction["applied_failure_pattern_ids"], [])
+            self.assertNotIn("applied_failure_pattern_ids", instruction)
+            self.assertTrue(LEGACY_LEARNING_TABLES.isdisjoint(self.table_names(db)))
 
     def test_report_import_keeps_failure_logs_without_pattern_rows(self) -> None:
         with TemporaryDirectory() as directory:
@@ -109,21 +123,78 @@ class FailurePatternPurgeTests(unittest.TestCase):
 
             store = Store(db)
             failures = store.list_where("failure_logs", "task_id=?", ("task_review",))
-            matches = store.list_where("task_failure_pattern_matches", "task_id=?", ("task_review",))
-            patterns = store.list_where("failure_patterns")
             store.close()
             self.assertTrue(failures)
-            self.assertEqual(matches, [])
-            self.assertEqual(patterns, [])
+            self.assertTrue(LEGACY_LEARNING_TABLES.isdisjoint(self.table_names(db)))
 
-    def test_pattern_schema_tables_remain_available(self) -> None:
+    def test_learning_schema_tables_are_not_created_for_new_store(self) -> None:
         with TemporaryDirectory() as directory:
-            store = Store(Path(directory) / "nilo.db")
+            db = Path(directory) / "nilo.db"
+            store = Store(db)
             try:
-                self.assertEqual(store.list_where("failure_patterns"), [])
-                self.assertEqual(store.list_where("task_failure_pattern_matches"), [])
+                self.assertEqual(store.list_where("failure_logs"), [])
             finally:
                 store.close()
+            self.assertTrue(LEGACY_LEARNING_TABLES.isdisjoint(self.table_names(db)))
+
+    def test_store_initializes_when_legacy_learning_tables_remain(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute("CREATE TABLE derived_rules (id TEXT PRIMARY KEY, project_id TEXT NOT NULL)")
+                conn.execute("CREATE TABLE active_instruction_rules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL)")
+                conn.execute("CREATE TABLE failure_patterns (id TEXT PRIMARY KEY, title TEXT NOT NULL)")
+                conn.execute("CREATE TABLE task_failure_pattern_matches (id TEXT PRIMARY KEY, task_id TEXT NOT NULL)")
+                conn.execute("CREATE TABLE success_patterns (id TEXT PRIMARY KEY, project_id TEXT NOT NULL)")
+                conn.commit()
+            finally:
+                conn.close()
+
+            store = Store(db)
+            try:
+                self.assertEqual(store.list_where("failure_logs"), [])
+            finally:
+                store.close()
+
+    def test_legacy_instruction_failure_pattern_ids_decode_as_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            store = Store(db)
+            try:
+                store.insert(
+                    "instructions",
+                    {
+                        "id": "instruction_legacy",
+                        "task_id": "task_review",
+                        "applied_rule_ids": [],
+                        "degradation_mode": "normal",
+                        "body_md": "body",
+                        "report_format_md": "format",
+                        "created_at": now_iso(),
+                    },
+                )
+            finally:
+                store.close()
+
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute("ALTER TABLE instructions ADD COLUMN applied_failure_pattern_ids TEXT NOT NULL DEFAULT '[]'")
+                conn.execute(
+                    "UPDATE instructions SET applied_failure_pattern_ids=? WHERE id=?",
+                    ('["pattern_legacy"]', "instruction_legacy"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            store = Store(db)
+            try:
+                instruction = store.get("instructions", "instruction_legacy")
+            finally:
+                store.close()
+
+            self.assertEqual(instruction["applied_failure_pattern_ids"], ["pattern_legacy"])
 
     def test_completion_is_blocked_by_missing_current_verification_only(self) -> None:
         with TemporaryDirectory() as directory:

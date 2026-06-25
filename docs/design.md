@@ -104,7 +104,7 @@ Task の現在状態は関連記録から射影する。CLI と MCP は同じ DB
 
 MCP の Task 書き込みは、最後に参照した event ID または context token を照合し、古い状態からの更新を拒否する。
 
-`FailureLog` は、過去の失敗を人間が参照するために保存する。FailureLog から規則を自動生成したり、次回指示へ自動注入したりしない。
+`FailureLog` は、過去の失敗を人間が参照するために保存する。FailureLog から規則を自動生成したり、次回指示へ自動注入したりしない。Nilo の完了判断の根拠は、現在の snapshot に紐づく VerificationRun、ReviewResult / ReviewFinding、TaskCompletion などの一次事実である。
 
 ### Recipe
 

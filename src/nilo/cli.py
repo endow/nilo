@@ -12,7 +12,7 @@ from .design_residue import parse_design_residue
 from .failure import deterministic_id
 from .gitmeta import git_output, head_commit
 from .guard import evaluate_evidence
-from .instruction import build_autoscore_prompt, build_instruction, build_review_prompt, build_rules_derive_prompt, build_understanding_prompt
+from .instruction import build_autoscore_prompt, build_instruction, build_review_prompt, build_understanding_prompt
 from .project_model import default_project_row, project_row_from_args
 from .quality import parse_quality_review
 from .quality_logic import (
@@ -304,11 +304,17 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 
 このプロジェクトでは Nilo を AI 作業の状態管理装置として使う。
 
-- 完了宣言前に `nilo status --ai --project {project_id}` を確認する。
+Normal work:
+- 作業開始と現在地確認は `nilo status --ai --project {project_id}` を使う。
+- `nilo next --project {project_id}` の先頭 action だけに従う。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
-- 検証後は `nilo check` または MCP record_verification で verification を記録する。
+- 検証後は `nilo check` で verification を記録する。
 - 最終完了判断、commit、force、roadmap close は人間が行う。
+
+Review handoff:
+- 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
+- MCP は通常入口ではない。必要な連携場面でだけ使う。
 
 詳細は `nilo help ai` を参照する。
 {NILO_BLOCK_END}
@@ -418,7 +424,6 @@ from .project_logic import (
     write_handson_markdown,
 )
 from .cli_handlers.backup import cmd_backup, cmd_backups, cmd_backups_prune, cmd_restore
-from .cli_handlers.knowledge import cmd_rules_list, cmd_success_list
 from .cli_handlers.mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
 from .cli_handlers.overdrive import cmd_roadmap_execute, cmd_run
 from .cli_handlers.project import cmd_project_create, cmd_project_export_handson, cmd_project_export_recipes, cmd_project_import_recipes, cmd_project_status, cmd_project_summary
@@ -512,11 +517,9 @@ TOP_LEVEL_COMMANDS = {
     "report",
     "review",
     "roadmap",
-    "rules",
     "run",
     "start",
     "status",
-    "success",
     "task",
     "todo",
     "understanding",

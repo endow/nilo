@@ -47,7 +47,6 @@ CREATE TABLE IF NOT EXISTS instructions (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
   applied_rule_ids TEXT NOT NULL,
-  applied_failure_pattern_ids TEXT NOT NULL DEFAULT '[]',
   degradation_mode TEXT NOT NULL,
   body_md TEXT NOT NULL,
   report_format_md TEXT NOT NULL,
@@ -105,54 +104,6 @@ CREATE TABLE IF NOT EXISTS failure_logs (
   category TEXT NOT NULL,
   message TEXT NOT NULL,
   severity TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS derived_rules (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  source_failure_ids TEXT NOT NULL,
-  source TEXT NOT NULL,
-  auto_activated INTEGER NOT NULL,
-  manually_disabled INTEGER NOT NULL,
-  rule_text TEXT NOT NULL,
-  tags TEXT NOT NULL,
-  severity TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  recurrence_count INTEGER NOT NULL,
-  success_count INTEGER NOT NULL,
-  last_seen_at TEXT NOT NULL,
-  state TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS active_instruction_rules (
-  id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL,
-  instruction_id TEXT NOT NULL,
-  derived_rule_id TEXT NOT NULL,
-  selection_score TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS failure_patterns (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  severity TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  trigger_phrases TEXT NOT NULL,
-  failure_summary TEXT NOT NULL,
-  required_behavior TEXT NOT NULL,
-  preflight_checks TEXT NOT NULL,
-  completion_evidence TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS task_failure_pattern_matches (
-  id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL,
-  failure_pattern_id TEXT NOT NULL,
-  match_reason TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 
@@ -288,20 +239,6 @@ CREATE TABLE IF NOT EXISTS quality_score_schemas (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS success_patterns (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  source_task_ids TEXT NOT NULL,
-  pattern_text TEXT NOT NULL,
-  tags TEXT NOT NULL,
-  applicable_task_types TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  success_count INTEGER NOT NULL,
-  last_used_at TEXT NOT NULL,
-  state TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS understanding_checks (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
@@ -423,7 +360,6 @@ JSON_COLUMNS = {
     "available_models",
     "fallback_models",
     "applied_rule_ids",
-    "applied_failure_pattern_ids",
     "changed_files",
     "issues",
     "metadata",
@@ -432,20 +368,10 @@ JSON_COLUMNS = {
     "completed_snapshot",
     "accepted_verification_run_ids",
     "accepted_review_result_ids",
-    "source_failure_ids",
-    "tags",
-    "selection_score",
-    "scope",
-    "trigger_phrases",
-    "required_behavior",
-    "preflight_checks",
-    "completion_evidence",
     "capabilities",
     "concerns",
     "scores",
     "required_scores",
-    "source_task_ids",
-    "applicable_task_types",
     "acceptance_criteria",
     "success_criteria",
     "non_goals",
@@ -458,6 +384,7 @@ JSON_COLUMNS = {
 }
 
 TABLE_JSON_COLUMNS = {
+    "instructions": {"applied_failure_pattern_ids"},
     "review_dispatches": {"args"},
 }
 
@@ -472,7 +399,6 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("tasks", "roadmap_commitment_id", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "roadmap_item_id", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'normal'"),
-    ("instructions", "applied_failure_pattern_ids", "TEXT NOT NULL DEFAULT '[]'"),
     ("overdrive_runs", "summary", "TEXT NOT NULL DEFAULT ''"),
     ("overdrive_runs", "summary_json", "TEXT NOT NULL DEFAULT '{}'"),
     ("task_completions", "actor", "TEXT NOT NULL DEFAULT 'human'"),

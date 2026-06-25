@@ -575,9 +575,10 @@ def claude_instruction(project_id: str, task: dict, review_request: dict, dirty_
         lines.append("レビュー対象は現在の未コミット差分です。")
     lines.extend(
         [
-            f"まず get_agent_work_context(project_id=\"{project_id}\") で状態を確認して。",
-            "get_review_prompt で文脈を取得し、レビュー結果を import_review_result で Nilo に戻して。",
-            "報告や検証ログを書き戻す必要がある場合は submit_agent_report / record_test_result を使って。",
+            "まず register_reviewer で実 reviewer worker として availability を更新してから、claim_next_review で対象 review を claim して。",
+            "claim 結果に含まれる prompt/template を使い、レビュー結果を import_review_result で Nilo に戻して。",
+            f"状態確認が必要な場合は get_status(project_id=\"{project_id}\") または get_task_status を使って。",
+            "MCP 経由で検証ログを書き戻す必要がある場合は record_verification を使って。",
             "コード変更はしないで。",
         ]
     )

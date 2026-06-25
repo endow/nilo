@@ -619,9 +619,33 @@ DEFAULT_TOOL_NAMES = {
     "get_task_status",
 }
 
+REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES = {
+    "register_reviewer",
+    "claim_next_review",
+    "request_task_review",
+    "dispatch_review",
+    "get_review_prompt",
+    "get_review_template",
+    "get_review_status",
+    "mark_stale_review_requests",
+}
+
 
 def default_tools() -> list[dict]:
     return [tool for tool in TOOLS if tool["name"] in DEFAULT_TOOL_NAMES]
+
+
+def review_handoff_tools() -> list[dict]:
+    return [tool for tool in TOOLS if tool["name"] in REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES]
+
+
+def tools_for_list_params(params: dict | None) -> list[dict]:
+    params = params or {}
+    context = params.get("context")
+    if context in {"review", "review_handoff", "reviewer", "agent_handoff"}:
+        names = DEFAULT_TOOL_NAMES.union(REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES)
+        return [tool for tool in TOOLS if tool["name"] in names]
+    return default_tools()
 
 
 HUMAN_GATED_TOOL_NAMES = {
@@ -969,6 +993,9 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
     if not project:
         raise project_not_found_error(store, project_id)
     tool_names = [tool["name"] for tool in TOOLS]
+    default_tool_names = [tool["name"] for tool in default_tools()]
+    review_handoff_tool_names = [tool["name"] for tool in review_handoff_tools()]
+    review_context_tool_names = sorted(DEFAULT_TOOL_NAMES.union(REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES))
     exposed_human_gated = sorted(HUMAN_GATED_TOOL_NAMES.intersection(tool_names))
     summary = project_summary(store, project_id)
     reviewers = []
@@ -995,19 +1022,35 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
         "project_readable": True,
         "tool_count": len(tool_names),
         "tool_names": tool_names,
+        "default_tool_count": len(default_tool_names),
+        "default_tool_names": default_tool_names,
+        "review_handoff_tool_count": len(review_handoff_tool_names),
+        "review_handoff_tool_names": review_handoff_tool_names,
+        "review_context_tool_count": len(review_context_tool_names),
+        "review_context_tool_names": review_context_tool_names,
         "exposed_human_gated_tools": exposed_human_gated,
         "expected_safe_tools_present": all(
             name in tool_names
             for name in [
-                "get_agent_work_context",
-                "get_next_step",
-                "get_project_status",
+                "get_status",
                 "get_task_status",
-                "submit_agent_report",
-                "record_test_result",
+                "record_verification",
+                "request_review",
+                "import_review_result",
+            ]
+        ),
+        "review_handoff_tools_present": all(
+            name in review_context_tool_names
+            for name in [
+                "register_reviewer",
+                "claim_next_review",
                 "request_task_review",
-                "import_agent_report",
-                "record_verification_run",
+                "dispatch_review",
+                "get_review_prompt",
+                "get_review_template",
+                "import_review_result",
+                "get_review_status",
+                "mark_stale_review_requests",
             ]
         ),
         "reviewers": reviewers,
@@ -1897,7 +1940,17 @@ def handle_request(message: dict, db_path: Path | None = None) -> dict | None:
     if method == "notifications/initialized":
         return None
     if method == "tools/list":
-        return success_response(request_id, {"tools": default_tools(), "advanced_tool_count": len(TOOLS) - len(default_tools())})
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        listed_tools = tools_for_list_params(params)
+        return success_response(
+            request_id,
+            {
+                "tools": listed_tools,
+                "default_tool_count": len(default_tools()),
+                "advanced_tool_count": len(TOOLS) - len(default_tools()),
+                "review_handoff_tool_count": len(review_handoff_tools()),
+            },
+        )
     if method == "tools/call":
         params = message.get("params") or {}
         name = params.get("name")

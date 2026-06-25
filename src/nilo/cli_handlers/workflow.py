@@ -249,9 +249,15 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
                 stale_evidence_count += 1
             unresolved_review_count += len(unresolved_review_findings(store, task["id"]))
         default_tools = mcp_server.default_tools()
+        review_handoff_tools = mcp_server.review_handoff_tools()
         print("ai_context:")
         print(f"- instruction_chars: {len(runtime_body)}")
         print(f"- mcp_default_tool_count: {len(default_tools)}")
+        print(f"- mcp_review_handoff_tool_count: {len(review_handoff_tools)}")
+        print(
+            "- mcp_review_handoff_tools: "
+            + ", ".join(tool["name"] for tool in review_handoff_tools)
+        )
         print(f"- long_tool_descriptions: {len(long_descriptions)}")
         for item in long_descriptions[:5]:
             print(f"  - {item['name']}: {item['length']}")
@@ -266,12 +272,14 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
     print(
         "\n".join(
             [
-                "Nilo AI context rules:",
-                "- Before declaring completion, check `nilo status --ai`.",
+                "Nilo AI normal work:",
+                "- Start with `nilo status --ai`.",
+                "- Follow the first action shown by `nilo next`.",
                 "- Do not treat stale, missing, or failed evidence as complete.",
                 "- Do not treat unresolved review findings as complete.",
-                "- After verification, record it with `nilo check` or MCP record_verification.",
+                "- After verification, record it with `nilo check`.",
                 "- Final completion acceptance remains a human decision.",
+                "- MCP is not the normal entrypoint; use available Nilo MCP tools only for review handoff, reviewer workers, or MCP-based evidence recording.",
                 "",
                 "Useful commands:",
                 "- nilo status --ai",

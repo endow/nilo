@@ -6,7 +6,6 @@ from types import ModuleType
 
 from .backup import register_backup
 from .facade import register_facade
-from .knowledge import register_rules, register_success
 from .mcp import register_mcp
 from .overdrive import register_run
 from .project import register_project
@@ -62,7 +61,5 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     register_quality(sub, handlers)
     register_review(sub, handlers)
     register_verification(sub, handlers)
-    register_success(sub, handlers)
-    register_rules(sub, handlers)
     register_mcp(sub, handlers)
     return parser
