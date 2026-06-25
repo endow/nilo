@@ -325,7 +325,7 @@ Nilo includes a few starter recipes, such as:
 - write a design note
 - update documentation
 - make a small implementation change
-- update a release version and prepare the GitHub release handoff
+- update a release version, bilingual release notes, and the GitHub release handoff
 
 Recipes save you from explaining the same work setup every time. They are not a mechanism for letting AI run everything automatically. Work created from a recipe still ends with a human deciding whether to accept it after reading the verification results and report.
 
