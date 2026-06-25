@@ -118,6 +118,8 @@ python -m unittest discover tests
 nilo status --project nilo
 ```
 
+When recording verification during a Nilo task, use `nilo check "python -m unittest discover tests" --project nilo --timeout 300` to avoid short AI runner defaults.
+
 ## Update Nilo
 
 If Nilo was installed from a git checkout, update it with:
@@ -370,7 +372,15 @@ nilo roadmap --help
 Run tests with:
 
 ```bash
-python -m unittest discover tests
+nilo check "python -m unittest discover tests" --project nilo --timeout 300
+```
+
+To run a focused slice of `tests.test_cli`, use the helper runner. It is outside unittest discovery, so it does not add duplicate tests to the full suite.
+
+```bash
+python tests/run_cli_group.py review
+python tests/run_cli_group.py verification
+python tests/run_cli_group.py roadmap
 ```
 
 For design details, see [docs/design.md](docs/design.md).

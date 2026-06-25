@@ -29,8 +29,8 @@ variables:
     type: string
     required: true
 verification:
-  - command: "python -m unittest discover tests"
-    reason: "Run the project test suite before release handoff."
+  - command: "nilo check \"python -m unittest discover tests\" --project {project_id} --timeout 300"
+    reason: "Run and record the project test suite before release handoff with a full-suite timeout."
   - command: "nilo recipe doctor --project {project_id}"
     reason: "Confirm bundled and project recipes are valid."
   - command: "nilo status --project {project_id}"

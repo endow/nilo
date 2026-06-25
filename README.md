@@ -125,7 +125,7 @@ python -m unittest discover tests
 nilo status --project nilo
 ```
 
-`python -m unittest discover tests` はテストスイートの確認、`nilo status --project nilo` は Nilo の状態 DB を読めるかの確認です。
+`python -m unittest discover tests` はテストスイートの確認、`nilo status --project nilo` は Nilo の状態 DB を読めるかの確認です。Nilo タスク中に検証記録を残す場合は、AI ランナーの短い既定 timeout を避けるため `nilo check "python -m unittest discover tests" --project nilo --timeout 300` を使ってください。
 
 ## Nilo を更新する
 
@@ -476,7 +476,15 @@ nilo roadmap --help
 テストを実行します。
 
 ```bash
-python -m unittest discover tests
+nilo check "python -m unittest discover tests" --project nilo --timeout 300
+```
+
+`tests.test_cli` の一部だけを確認したい場合は、discover 対象外の補助 runner で機能別に実行できます。
+
+```bash
+python tests/run_cli_group.py review
+python tests/run_cli_group.py verification
+python tests/run_cli_group.py roadmap
 ```
 
 設計の詳細は [docs/design.md](docs/design.md) を参照してください。

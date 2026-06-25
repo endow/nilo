@@ -428,8 +428,8 @@ class ReviewDispatcherTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
-            write_reviewer_script(root, "import time\ntime.sleep(2)\n")
-            config = write_config(root, args=["reviewer.py", "{prompt_file}"], timeout_seconds=0.1)
+            write_reviewer_script(root, "import time\ntime.sleep(10)\n")
+            config = write_config(root, args=["reviewer.py", "{prompt_file}"], timeout_seconds=0.02)
             store = Store(db)
             try:
                 create_project_and_task(store)

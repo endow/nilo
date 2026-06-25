@@ -7659,8 +7659,8 @@ close 済み commitment を表示できるようにした。
             previous_cwd = Path.cwd()
             try:
                 os.chdir(root)
-                write_fake_dispatch_reviewer_script(root, "import time\ntime.sleep(2)\n")
-                write_dispatch_reviewer_config(root, ["claude-code"], timeout_seconds=0.1)
+                write_fake_dispatch_reviewer_script(root, "import time\ntime.sleep(10)\n")
+                write_dispatch_reviewer_config(root, ["claude-code"], timeout_seconds=0.02)
                 with redirect_stdout(io.StringIO()):
                     main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                     main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "timeout"])
@@ -8675,7 +8675,7 @@ close 済み commitment を表示できるようにした。
             root = Path(directory)
             db = root / "nilo.db"
             script = root / "sleep.py"
-            script.write_text("import time\ntime.sleep(1)\n", encoding="utf-8")
+            script.write_text("import time\ntime.sleep(10)\n", encoding="utf-8")
 
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
@@ -8704,7 +8704,7 @@ close 済み commitment を表示できるようにした。
                         "--command",
                         f'"{sys.executable}" "{script}"',
                         "--timeout",
-                        "0.1",
+                        "0.02",
                     ]
                 )
 
