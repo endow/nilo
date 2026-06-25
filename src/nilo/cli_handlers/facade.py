@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from ..ai_context import project_ai_context, render_ai_context_text
 from ..failure import deterministic_id
 from ..store import Store
 from ..timeutil import now_iso
@@ -79,6 +81,16 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
     project_id = default_project_id(args)
     store = Store(args.db)
     try:
+        if getattr(args, "ai", False) or getattr(args, "json", False):
+            try:
+                data = project_ai_context(store, project_id)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            if getattr(args, "json", False):
+                print(json.dumps(data, ensure_ascii=False, indent=2))
+            else:
+                print(render_ai_context_text(data))
+            return
         summary = summary_for_project(store, project_id)
         if not getattr(args, "verbose", False):
             project = store.get("projects", project_id)

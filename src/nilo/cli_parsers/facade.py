@@ -18,6 +18,8 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     status = sub.add_parser("status")
     add_project_option(status)
     status.add_argument("--verbose", action="store_true")
+    status.add_argument("--ai", action="store_true")
+    status.add_argument("--json", action="store_true")
     status.set_defaults(func=handlers.cmd_facade_status)
 
     next_step = sub.add_parser("next")

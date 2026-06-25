@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+from ..ai_context import evidence_ai_context, review_ai_context, task_ai_context
 from ..cli_support import make_id
 from ..failure import deterministic_id
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
@@ -73,6 +75,26 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
+        if getattr(args, "ai", False):
+            data = task_ai_context(store, args.task)
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(data, ensure_ascii=False, indent=2))
+            else:
+                task_summary = data["task"]
+                print(f"task: {task_summary['id']} [{task_summary['state']}] {task_summary['title']}")
+                print(f"evidence: {data['evidence']['status']}")
+                print(f"unresolved_review_count: {data['review']['unresolved_count']}")
+                print(f"completion: {'allowed' if data['completion']['allowed'] else 'blocked'}")
+                print("blocking_reasons:")
+                if data["completion"]["blocking_reasons"]:
+                    for reason in data["completion"]["blocking_reasons"]:
+                        print(f"- {reason}")
+                else:
+                    print("- none")
+                print("next_required_actions:")
+                for action in data["next_required_actions"] or ["none"]:
+                    print(f"- {action}")
+            return
         verification_run = store.latest_for_task("verification_runs", args.task)
         current_snapshot = current_git_snapshot(Path.cwd())
         instruction = store.latest_for_task("instructions", args.task)
@@ -140,6 +162,48 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         if completion:
             print(f"completed_reason: {completion['reason']}")
             print(f"completed_with_reservations: {bool(completion.get('completed_with_reservations'))}")
+    finally:
+        store.close()
+
+
+def cmd_evidence_show(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        if not store.get("tasks", args.task):
+            raise SystemExit(f"task not found: {args.task}")
+        data = evidence_ai_context(store, args.task)
+        if args.format == "json":
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return
+        print(f"task_id: {args.task}")
+        print(f"evidence: {data['status']}")
+        print(f"verification_run: {data['verification_run_id'] or 'none'}")
+        print(f"exit_code: {data['verification_exit_code']}")
+        print(f"timed_out: {data['verification_timed_out']}")
+    finally:
+        store.close()
+
+
+def cmd_review_show(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        if not store.get("tasks", args.task):
+            raise SystemExit(f"task not found: {args.task}")
+        data = review_ai_context(store, args.task)
+        if args.format == "json":
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return
+        print(f"task_id: {args.task}")
+        print(f"unresolved_review_count: {data['unresolved_count']}")
+        print(f"unresolved_blocking_count: {data['unresolved_blocking_count']}")
+        print("unresolved_findings:")
+        if data["unresolved_findings"]:
+            for finding in data["unresolved_findings"]:
+                marker = "blocking" if finding["blocking"] else "nonblocking"
+                location = f" {finding['file_path']}:{finding['line']}" if finding["file_path"] else ""
+                print(f"- {finding['id']} {finding['severity']} {marker}{location}: {finding['title']}")
+        else:
+            print("- none")
     finally:
         store.close()
 

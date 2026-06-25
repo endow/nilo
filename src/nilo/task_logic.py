@@ -45,10 +45,14 @@ def unresolved_blocking_review_findings(store, task_id: str) -> list[dict]:
     )
 
 
+def unresolved_review_findings(store, task_id: str) -> list[dict]:
+    return store.list_where("review_findings", "task_id=? AND status='unresolved'", (task_id,))
+
+
 def require_ai_completion_evidence(store, task_id: str) -> None:
-    blocking = unresolved_blocking_review_findings(store, task_id)
-    if blocking:
-        ids = ", ".join(item["id"] for item in blocking[:5])
+    unresolved = unresolved_review_findings(store, task_id)
+    if unresolved:
+        ids = ", ".join(item["id"] for item in unresolved[:5])
         raise SystemExit(f"AI completion blocked by unresolved review findings: {ids}")
     if ai_completion_has_evidence(store, task_id):
         return

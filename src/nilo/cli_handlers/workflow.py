@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from ..ai_context import project_ai_context, render_ai_context_text
 from ..cli import (
     AGENT_TARGET_FILES,
     LEGACY_AGENT_TARGET_FILES,
@@ -21,9 +22,9 @@ from ..gitmeta import git_output, head_commit
 from ..guard import evaluate_evidence
 from ..instruction import build_instruction, build_understanding_prompt
 from ..project_model import default_project_row
-from ..snapshot import compact_snapshot, current_git_snapshot
+from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status
 from ..store import Store
-from ..task_logic import outcome_status
+from ..task_logic import outcome_status, unresolved_review_findings
 from ..timeutil import now_iso
 from ..update_check import check_for_update, is_disabled, update_message
 from ..upgrade import run_upgrade
@@ -221,6 +222,67 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             print(f"warning: {warning}")
     finally:
         store.close()
+
+
+def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
+    from .. import mcp_server
+
+    project_id = args.project or Path.cwd().name
+    store = Store(args.db)
+    try:
+        project = store.get("projects", project_id)
+        if not project:
+            raise SystemExit(f"project not found: {project_id}")
+        runtime_body = build_agent_instruction_block(project, "all")
+        status_body = render_ai_context_text(project_ai_context(store, project_id))
+        long_descriptions = [
+            {"name": tool["name"], "length": len(tool.get("description", ""))}
+            for tool in mcp_server.TOOLS
+            if len(tool.get("description", "")) > 160
+        ]
+        stale_evidence_count = 0
+        unresolved_review_count = 0
+        current_snapshot = current_git_snapshot(Path.cwd())
+        for task in store.list_where("tasks", "project_id=?", (project_id,)):
+            verification_run = store.latest_for_task("verification_runs", task["id"])
+            if evidence_status(verification_run, current_snapshot) == "stale":
+                stale_evidence_count += 1
+            unresolved_review_count += len(unresolved_review_findings(store, task["id"]))
+        default_tools = mcp_server.default_tools()
+        print("ai_context:")
+        print(f"- instruction_chars: {len(runtime_body)}")
+        print(f"- mcp_default_tool_count: {len(default_tools)}")
+        print(f"- long_tool_descriptions: {len(long_descriptions)}")
+        for item in long_descriptions[:5]:
+            print(f"  - {item['name']}: {item['length']}")
+        print(f"- status_ai_chars: {len(status_body)}")
+        print(f"- stale_evidence_count: {stale_evidence_count}")
+        print(f"- unresolved_review_count: {unresolved_review_count}")
+    finally:
+        store.close()
+
+
+def cmd_help_ai(args: argparse.Namespace) -> None:
+    print(
+        "\n".join(
+            [
+                "Nilo AI context rules:",
+                "- Before declaring completion, check `nilo status --ai`.",
+                "- Do not treat stale, missing, or failed evidence as complete.",
+                "- Do not treat unresolved review findings as complete.",
+                "- After verification, record it with `nilo check` or MCP record_verification.",
+                "- Final completion acceptance remains a human decision.",
+                "",
+                "Useful commands:",
+                "- nilo status --ai",
+                "- nilo status --ai --json",
+                "- nilo task show --task <task_id> --ai",
+                "- nilo review show --task <task_id> --ai",
+                "- nilo evidence show --task <task_id> --ai",
+                "- nilo doctor ai-context",
+            ]
+        )
+    )
 
 
 def cmd_migrate(args: argparse.Namespace) -> None:

@@ -9,6 +9,7 @@ from typing import Any, TextIO
 
 from . import __version__
 from .agent_report_import import import_agent_report
+from .ai_context import project_ai_context
 from .cli_support import make_id
 from .human_status import human_next_action_text, human_task_status
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
@@ -93,10 +94,6 @@ def headroom_tool_metadata(tool_name: str) -> dict | None:
         if metadata["tool"] == tool_name:
             return dict(metadata)
     return None
-
-
-def headroom_tool_metadata_list() -> list[dict]:
-    return [dict(metadata) for metadata in HEADROOM_TOOL_METADATA]
 
 
 def _candidate_workspace_roots() -> list[Path]:
@@ -207,6 +204,44 @@ def project_not_found_error(store: Store, project_id: str) -> McpToolError:
 
 
 TOOLS = [
+    {
+        "name": "get_status",
+        "description": "Return compact AI status for a project.",
+        "inputSchema": json_schema({"project_id": {"type": "string"}}, ["project_id"]),
+    },
+    {
+        "name": "record_verification",
+        "description": "Record verification; pass context_token or last_seen_event_id.",
+        "inputSchema": json_schema(
+            {
+                "task_id": {"type": "string"},
+                "context_token": {
+                    "type": "string",
+                    "description": "Task write_context_token from get_status or get_task_status.",
+                },
+                "last_seen_event_id": {
+                    "type": "string",
+                    "description": "Latest task event id from get_status or get_task_status.",
+                },
+                "command": {"type": "string"},
+                "cwd": {"type": "string"},
+                "stdout": {"type": "string"},
+                "stderr": {"type": "string"},
+                "exit_code": {"type": ["integer", "null"]},
+                "timed_out": {"type": "boolean"},
+                "timeout_seconds": {"type": "number"},
+                "git_head": {"type": ["string", "null"]},
+                "git_diff_hash": {"type": "string"},
+                "working_tree_dirty": {"type": "boolean"},
+                "git_status_porcelain": {"type": "string"},
+                "observed_paths": {"type": "array", "items": {"type": "string"}},
+                "metadata": {"type": "object"},
+                "started_at": {"type": "string"},
+                "finished_at": {"type": "string"},
+            },
+            ["task_id", "command", "cwd", "stdout", "stderr", "exit_code", "timed_out"],
+        ),
+    },
     {
         "name": "get_agent_work_context",
         "description": "Return the agent-oriented project work context, safe next step, human gates, and task write context tokens.",
@@ -385,7 +420,7 @@ TOOLS = [
     },
     {
         "name": "request_review",
-        "description": "Create a review request for a task after checking the caller's last observed task event.",
+        "description": "Create a review request for a task.",
         "inputSchema": json_schema(
             {
                 "task_id": {"type": "string"},
@@ -574,6 +609,19 @@ TOOLS = [
         ),
     },
 ]
+
+
+DEFAULT_TOOL_NAMES = {
+    "get_status",
+    "record_verification",
+    "request_review",
+    "import_review_result",
+    "get_task_status",
+}
+
+
+def default_tools() -> list[dict]:
+    return [tool for tool in TOOLS if tool["name"] in DEFAULT_TOOL_NAMES]
 
 
 HUMAN_GATED_TOOL_NAMES = {
@@ -887,6 +935,13 @@ def get_project_status(store: Store, arguments: dict) -> dict:
     }
 
 
+def get_status(store: Store, arguments: dict) -> dict:
+    project_id = require_string(arguments, "project_id")
+    if not store.get("projects", project_id):
+        raise project_not_found_error(store, project_id)
+    return project_ai_context(store, project_id)
+
+
 def get_project_summary(store: Store, arguments: dict) -> dict:
     return project_summary(store, require_string(arguments, "project_id"))
 
@@ -1014,11 +1069,14 @@ def get_task_status(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"task not found: {task_id}")
     latest = latest_for_task_tables(store, task_id)
     status = projected_task_status(store, task)
+    latest_event = store.latest_task_status_event(task_id)
     return {
         "task": task,
         "status": status,
         "human_status": human_task_status(status, task, latest),
-        "latest_task_status_event": store.latest_task_status_event(task_id),
+        "latest_task_status_event": latest_event,
+        "write_context_token": task_context_token(task_id, latest_event),
+        "latest_task_status_event_id": latest_event["event_id"] if latest_event else "",
         "latest": latest,
     }
 
@@ -1764,6 +1822,8 @@ def mcp_dispatch_review(store: Store, arguments: dict) -> dict:
 
 
 TOOL_HANDLERS = {
+    "get_status": get_status,
+    "record_verification": mcp_record_verification_run,
     "get_agent_work_context": get_agent_work_context,
     "get_next_step": get_next_step,
     "mcp_doctor": mcp_doctor,
@@ -1837,7 +1897,7 @@ def handle_request(message: dict, db_path: Path | None = None) -> dict | None:
     if method == "notifications/initialized":
         return None
     if method == "tools/list":
-        return success_response(request_id, {"tools": TOOLS, "tool_metadata": headroom_tool_metadata_list()})
+        return success_response(request_id, {"tools": default_tools(), "advanced_tool_count": len(TOOLS) - len(default_tools())})
     if method == "tools/call":
         params = message.get("params") or {}
         name = params.get("name")

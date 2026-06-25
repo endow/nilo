@@ -41,7 +41,15 @@ def register_task(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
 
     task_status = task_sub.add_parser("status")
     task_status.add_argument("--task", required=True)
+    task_status.add_argument("--ai", action="store_true")
+    task_status.add_argument("--format", choices=["text", "json"], default="text")
     task_status.set_defaults(func=handlers.cmd_task_status)
+
+    task_show = task_sub.add_parser("show")
+    task_show.add_argument("--task", required=True)
+    task_show.add_argument("--ai", action="store_true", default=True)
+    task_show.add_argument("--format", choices=["text", "json"], default="text")
+    task_show.set_defaults(func=handlers.cmd_task_status)
 
     task_update = task_sub.add_parser("update")
     task_update.add_argument("--task", required=True)

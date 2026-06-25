@@ -503,67 +503,29 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("call_tool", result.stdout)
 
-    def test_tools_list_exposes_read_only_tools(self) -> None:
+    def test_tools_list_exposes_default_ai_tools(self) -> None:
         response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
         self.assertIsNotNone(response)
         tools = response["result"]["tools"]
         names = {tool["name"] for tool in tools}
-        self.assertIn("get_agent_work_context", names)
-        self.assertIn("get_next_step", names)
-        self.assertIn("mcp_doctor", names)
-        self.assertIn("submit_agent_report", names)
-        self.assertIn("record_test_result", names)
-        self.assertIn("request_task_review", names)
-        self.assertIn("dispatch_review", names)
-        self.assertIn("register_reviewer", names)
-        self.assertIn("claim_next_review", names)
-        self.assertIn("mark_stale_review_requests", names)
-        self.assertIn("get_project_status", names)
-        self.assertIn("get_roadmap_status", names)
-        self.assertIn("discuss_roadmap", names)
-        self.assertIn("get_instruction", names)
-        self.assertIn("assess_roadmap", names)
-        self.assertIn("list_recent_history", names)
-        self.assertIn("request_review", names)
-        self.assertIn("get_review_prompt", names)
-        self.assertIn("get_review_template", names)
-        self.assertIn("import_review_result", names)
-        self.assertIn("update_review_finding", names)
-        self.assertIn("create_task", names)
-        self.assertIn("import_agent_report", names)
-        self.assertIn("record_verification_run", names)
-        self.assertIn("create_todo", names)
-        self.assertIn("list_todos", names)
-        self.assertIn("triage_todo", names)
-        self.assertIn("promote_todo_to_roadmap_proposal", names)
-        self.assertIn("create_task_from_todo", names)
+        self.assertEqual(
+            names,
+            {
+                "get_status",
+                "get_task_status",
+                "record_verification",
+                "request_review",
+                "import_review_result",
+            },
+        )
+        self.assertGreater(response["result"]["advanced_tool_count"], 0)
+        descriptions = {tool["name"]: tool["description"] for tool in tools}
+        self.assertLessEqual(max(len(description) for description in descriptions.values()), 80)
         self.assertNotIn("complete_task", names)
         self.assertNotIn("close_roadmap", names)
         self.assertNotIn("close_roadmap_commitment", names)
         self.assertNotIn("commit_changes", names)
-        descriptions = {tool["name"]: tool["description"] for tool in tools}
-        self.assertIn("Low-level API", descriptions["request_task_review"])
-        self.assertIn("Do not use this for normal AI-to-AI review instructions", descriptions["request_task_review"])
-        self.assertIn("High-level API for normal AI-to-AI review instructions", descriptions["dispatch_review"])
-        self.assertIn("starts the configured reviewer process when auto_start=true", descriptions["dispatch_review"])
-        self.assertIn("imports the ReviewResult", descriptions["dispatch_review"])
-        self.assertIn("review request is completed", descriptions["dispatch_review"])
-        self.assertEqual(
-            response["result"]["tool_metadata"],
-            [
-                {
-                    "tool": "nilo_import_review_result",
-                    "compressible": False,
-                    "reason": "primary evidence / write payload",
-                },
-                {
-                    "tool": "nilo_get_test_log",
-                    "compressible": True,
-                    "reason": "large diagnostic output; raw artifact is stored separately",
-                },
-            ],
-        )
         tool_by_name = {tool["name"]: tool for tool in tools}
         self.assertEqual(
             tool_by_name["import_review_result"]["metadata"],
@@ -574,7 +536,6 @@ class McpServerTests(unittest.TestCase):
             },
         )
         self.assertIsNot(tool_by_name["import_review_result"]["metadata"], HEADROOM_TOOL_METADATA[0])
-        self.assertIsNot(response["result"]["tool_metadata"][0], HEADROOM_TOOL_METADATA[0])
 
     def test_get_agent_work_context_returns_next_step_and_write_token(self) -> None:
         with TemporaryDirectory() as directory:
@@ -599,6 +560,37 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["write_context_token"], result["active_tasks"][0]["write_context_token"])
         self.assertTrue(result["write_context_token"].startswith("task:"))
         self.assertIn("complete_task", result["human_gates"])
+
+    def test_default_status_tools_expose_verification_context_token(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "Context token task"])
+
+                status = call_tool("get_status", {"project_id": "project_test"}, db)
+                task_status = call_tool("get_task_status", {"task_id": "task_test"}, db)
+            finally:
+                os.chdir(previous_cwd)
+
+        current = status["current_task"]
+        self.assertEqual(current["task"]["id"], "task_test")
+        self.assertTrue(current["write_context_token"].startswith("task:task_test:"))
+        self.assertEqual(current["write_context_token"], task_status["write_context_token"])
+        self.assertEqual(current["latest_task_status_event_id"], task_status["latest_task_status_event_id"])
+
+    def test_get_status_reports_missing_project_as_mcp_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+
+            with self.assertRaises(McpToolError) as raised:
+                call_tool("get_status", {"project_id": "missing_project"}, db)
+
+        self.assertIn("project not found: missing_project", str(raised.exception))
 
     def test_get_next_step_marks_behavior_changing_completion_as_human_gated(self) -> None:
         with TemporaryDirectory() as directory:
