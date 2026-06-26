@@ -200,4 +200,9 @@ def human_next_action_text(action: str) -> str:
         return "保留中のロードマップ更新を採用するか人間が判断してください。"
     if action.startswith("create a task for open design residue:"):
         return "未解決の設計残差についてタスクを作成してください。"
+    if action.startswith("possible large work; use `nilo roadmap discuss`"):
+        return (
+            "大きな作業の可能性: この task は roadmap 未整理のまま直接実装すると危険です。"
+            "先に `nilo roadmap discuss` を使い、roadmap commitment と task-plan に分解してください。"
+        )
     return action

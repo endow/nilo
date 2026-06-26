@@ -316,6 +316,12 @@ Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
 - MCP は通常入口ではない。必要な連携場面でだけ使う。
 
+大きな作業の扱い:
+- 実装前に、その指示が小さい作業か大きい作業かを判定する。
+- 小さく明確な作業だけ、通常 task として進める。
+- 複数ファイル、DB schema、CLI、AI向け出力、docs/tests、安全性に関わる作業は先に roadmap に通す。
+- 大きな作業は `nilo roadmap discuss`、人間の `nilo roadmap accept`、`nilo roadmap task-plan` の順で分解してから進める。
+
 質問抑制:
 - Nilo の出力や状態から安全に一意推定できる不足値は人間に質問しない。
 - release recipe の `target_version` は現在バージョンと最新 git tag が一致する場合、または SemVer tag が無く現在バージョンから一意に決まる場合、次 patch を採用して進める。
@@ -418,6 +424,7 @@ from .project_logic import (
     roadmap_commitment_assessment,
     roadmap_proposal_path_for_commitment,
     roadmap_task_evidence,
+    task_next_actions,
     task_status_counts,
     unexecuted_verifications_for_task,
     unresolved_blocking_review_findings,

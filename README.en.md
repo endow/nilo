@@ -192,6 +192,20 @@ Update the README. Check Nilo's state before you start.
 
 The agent should check the current state, create or continue a task, read the instructions, run verification, and report back through Nilo.
 
+### Route Large Work Through Roadmap
+
+Small changes can proceed as normal tasks.
+
+Large work should go through roadmap first: multi-module changes, schema/migration changes, CLI behavior changes, AI-facing output changes, or work that requires docs and tests together.
+
+```bash
+nilo roadmap discuss
+nilo roadmap accept
+nilo roadmap task-plan
+```
+
+Roadmap keeps large AI work from turning into one unchecked implementation step.
+
 ## Human Workflow
 
 Humans usually do not need to know the command set. The normal interface is natural language:

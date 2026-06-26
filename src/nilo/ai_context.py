@@ -36,7 +36,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
     latest_event = store.latest_task_status_event(task_id)
     latest_event_id = latest_event["event_id"] if latest_event else ""
     unexecuted = p.unexecuted_verifications_for_task(status, verification_run)
-    next_actions = p.next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"])
+    next_actions = p.task_next_actions(task, status, verification_run, unexecuted)
     failures = list_failure_logs(store, task_id=task_id, status="open", limit=5)
     blocking_reasons: list[str] = []
     if evidence != "current":
@@ -171,6 +171,9 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
     lines.append(f"{field_label('next_required_actions')}:")
     actions = data.get("next_required_actions") or []
     lines.extend(f"- {human_next_action_text(action)}" for action in actions) if actions else lines.append("- なし")
+    lines.append("作業規模の判定:")
+    lines.append("- 小さく明確な修正は通常 task として進める。")
+    lines.append("- 複数モジュール、DB schema、CLI、AI向け出力、docs/tests を含む作業は roadmap を先に使う。")
     return "\n".join(lines)
 
 

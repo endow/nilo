@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import locale
+import re
 from pathlib import Path
 
 from .design_residue import parse_design_residue
@@ -14,6 +15,62 @@ from .timeutil import iso_age_seconds, now_iso
 
 
 REVIEW_CLAIM_STALE_AFTER_SECONDS = 900
+ROADMAP_GUIDANCE_ACTION = (
+    "possible large work; use `nilo roadmap discuss` before continuing direct implementation, "
+    "then split accepted roadmap commitment with `nilo roadmap task-plan`"
+)
+LARGE_WORK_STRONG_KEYWORDS = (
+    "schema",
+    "migration",
+    "database",
+    "cli",
+    "--ai",
+    "release",
+    "backup",
+    "upgrade",
+    "roadmap",
+    "recipe",
+    "mcp",
+    "スキーマ",
+    "マイグレーション",
+    "データベース",
+    "コマンド",
+    "状態表示",
+    "次の作業",
+    "AI向け",
+    "リリース",
+    "バックアップ",
+    "アップグレード",
+    "ロードマップ",
+    "レシピ",
+)
+LARGE_WORK_WEAK_KEYWORDS = (
+    "readme",
+    "docs",
+    "test",
+    "tests",
+    "command",
+    "status",
+    "next",
+    "review",
+    "failure",
+    "ドキュメント",
+    "テスト",
+    "レビュー",
+    "失敗ログ",
+)
+LARGE_WORK_GUIDANCE_STATUSES = {"planned", "instruction_generated"}
+
+
+def contains_large_work_keyword(haystack: str, keywords: tuple[str, ...]) -> bool:
+    for keyword in keywords:
+        lowered = keyword.lower()
+        if lowered.isascii() and lowered.replace("-", "").replace("_", "").isalnum():
+            if re.search(rf"(?<![A-Za-z0-9_-]){re.escape(lowered)}(?![A-Za-z0-9_-])", haystack):
+                return True
+        elif lowered in haystack:
+            return True
+    return False
 
 
 def git_commit_log(cwd: Path, base_commit: str, latest_head: str) -> list[dict]:
@@ -552,6 +609,43 @@ def project_roadmap_position(
     return "roadmap not configured; no open design residue detected"
 
 
+def task_looks_like_large_work(task: dict) -> bool:
+    if task.get("roadmap_commitment_id"):
+        return False
+
+    acceptance = task.get("acceptance_criteria") or []
+    description = task.get("description") or ""
+    haystack = "\n".join([task.get("title") or "", description, "\n".join(acceptance)]).lower()
+    strong_keyword = contains_large_work_keyword(haystack, LARGE_WORK_STRONG_KEYWORDS)
+    weak_keyword = contains_large_work_keyword(haystack, LARGE_WORK_WEAK_KEYWORDS)
+
+    if task.get("risk_level") == "high" or task.get("requires_understanding_check"):
+        return True
+    if len(acceptance) >= 3 or len(description) >= 400:
+        return True
+    if strong_keyword:
+        return True
+    return weak_keyword and (len(acceptance) >= 2 or len(description) >= 160)
+
+
+def large_work_next_actions(task: dict, status: str) -> list[str]:
+    if status not in LARGE_WORK_GUIDANCE_STATUSES:
+        return []
+    return [ROADMAP_GUIDANCE_ACTION] if task_looks_like_large_work(task) else []
+
+
+def task_next_actions(
+    task: dict,
+    status: str,
+    verification_run: dict | None,
+    unexecuted: list[str],
+) -> list[str]:
+    return [
+        *large_work_next_actions(task, status),
+        *next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"]),
+    ]
+
+
 def project_level_next_actions(
     store: Store,
     tasks: list[dict],
@@ -582,7 +676,7 @@ def project_level_next_actions(
             unexecuted = unexecuted_verifications_for_task(status, verification_run)
             actions.append(
                 f"{task['id']}: "
-                f"{next_actions_for_task(status, verification_run, unexecuted, task['id'], task['task_type'])[0]}"
+                f"{task_next_actions(task, status, verification_run, unexecuted)[0]}"
             )
         return actions
     if pending_revisions:
@@ -1463,7 +1557,7 @@ def print_human_project_status(store: Store, project: dict, active_tasks: list[d
         if blocking:
             next_lines.append("次はその指摘を確認して、修正するか、理由を記録して受け入れれば完了に進めます。")
         else:
-            next_lines.append(human_next_action_text(next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"])[0]))
+            next_lines.append(human_next_action_text(task_next_actions(task, status, verification_run, unexecuted)[0]))
 
     print(f"{field_label('evidence')}:")
     print("- 上記の各タスク行を確認してください。")

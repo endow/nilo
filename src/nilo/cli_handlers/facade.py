@@ -75,7 +75,7 @@ def print_facade_next_for_task(store: Store, task_id: str) -> None:
     if pending_review:
         print(f"- {human_next_action_text(p.next_action_for_review_request(store, pending_review))}")
         return
-    for action in c.next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"]):
+    for action in p.task_next_actions(task, status, verification_run, unexecuted):
         print(f"- {human_next_action_text(action)}")
 
 

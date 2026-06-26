@@ -1214,7 +1214,12 @@ variables:
                 status_with_report = io.StringIO()
                 with redirect_stdout(status_with_report):
                     main(["--db", str(db), "status", "--ai"])
-                self.assertIn("証跡: 提出あり (present)", status_with_report.getvalue())
+                status_body = status_with_report.getvalue()
+                self.assertIn("証跡: 提出あり (present)", status_body)
+                self.assertIn("作業規模の判定:", status_body)
+                self.assertIn("複数モジュール", status_body)
+                self.assertIn("CLI", status_body)
+                self.assertIn("roadmap", status_body)
 
                 for command in (
                     ["task", "show", "--task", "task_ai", "--ai"],
@@ -1235,6 +1240,10 @@ variables:
                 self.assertIn("Start with `nilo status --ai`", help_body)
                 self.assertIn("Follow the first action shown by `nilo next`", help_body)
                 self.assertIn("record it with `nilo check`", help_body)
+                self.assertIn("Work size:", help_body)
+                self.assertIn("Large work must be routed through roadmap first.", help_body)
+                self.assertIn("nilo roadmap discuss", help_body)
+                self.assertIn("nilo roadmap task-plan", help_body)
                 self.assertIn("MCP is not the normal entrypoint", help_body)
                 self.assertNotIn("MCP lazy loading", help_body)
                 self.assertNotIn("MCP が使えなければ CLI", help_body)
@@ -1967,11 +1976,14 @@ variables:
             self.assertIn("unresolved review finding がある場合は完了扱いしない", body)
             self.assertIn("nilo check", body)
             self.assertIn("MCP は通常入口ではない", body)
+            self.assertIn("大きな作業の扱い", body)
+            self.assertIn("nilo roadmap discuss", body)
+            self.assertIn("nilo roadmap task-plan", body)
             self.assertNotIn("MCP lazy loading", body)
             self.assertNotIn("MCP が使えなければ CLI", body)
             self.assertIn("最終完了判断、commit、force、roadmap close は人間が行う", body)
             self.assertIn("nilo help ai", body)
-            self.assertLess(len(body), 1200)
+            self.assertLess(len(body), 1600)
             self.assertNotIn("## 全コマンド一覧", body)
             self.assertNotIn("nilo project export-handson --project project_test --file HANDOFF.md", body)
             self.assertNotIn("nilo task create --project project_test", body)
@@ -2010,6 +2022,7 @@ variables:
             self.assertIn("unresolved review finding がある場合は完了扱いしない", body)
             self.assertIn("nilo check", body)
             self.assertIn("Review handoff", body)
+            self.assertIn("大きな作業の扱い", body)
             self.assertIn("commit、force、roadmap close は人間が行う", body)
             self.assertIn("roadmap close", body)
             present = [command for command in verbose_reference_only_commands if command in body]
@@ -2605,6 +2618,160 @@ variables:
             store = Store(db)
             self.assertIsNone(store.latest_for_task("task_completions", "task_verified"))
             store.close()
+
+    def test_next_guides_high_risk_task_through_roadmap_without_blocking_completion(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_large",
+                        "--title",
+                        "Change status --ai output",
+                        "--description",
+                        "Update CLI output, README, docs, and tests.",
+                        "--acceptance",
+                        "status --ai is updated",
+                        "--acceptance",
+                        "nilo next is updated",
+                        "--acceptance",
+                        "tests cover the behavior",
+                        "--risk",
+                        "high",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("大きな作業の可能性", body)
+            self.assertIn("nilo roadmap discuss", body)
+            self.assertIn("task-plan", body)
+
+            report = Path(directory) / "report.md"
+            report.write_text(REPORT, encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "report", "import", "--task", "task_large", "--file", str(report)])
+
+            after_report_output = io.StringIO()
+            with redirect_stdout(after_report_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            after_report_body = after_report_output.getvalue()
+            self.assertIn("検証コマンドを実行して結果を記録してください。", after_report_body)
+            self.assertNotIn("大きな作業の可能性", after_report_body)
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "task", "complete", "--task", "task_large", "--reason", "human accepted", "--actor", "human"])
+            store = Store(db)
+            try:
+                self.assertIsNotNone(store.latest_for_task("task_completions", "task_large"))
+            finally:
+                store.close()
+
+    def test_next_does_not_over_route_small_readme_typo_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_small",
+                        "--title",
+                        "README typo fix",
+                        "--acceptance",
+                        "Typo is fixed",
+                        "--risk",
+                        "low",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("作業指示を生成してください。", body)
+            self.assertNotIn("roadmap discuss", body)
+            self.assertNotIn("大きな作業の可能性", body)
+
+    def test_next_large_work_keywords_do_not_match_substrings(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_substring",
+                        "--title",
+                        "Fix client latest contest label",
+                        "--acceptance",
+                        "Label is fixed",
+                        "--risk",
+                        "low",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("作業指示を生成してください。", body)
+            self.assertNotIn("roadmap discuss", body)
+            self.assertNotIn("大きな作業の可能性", body)
+
+    def test_next_common_nilo_terms_do_not_route_small_tasks_by_themselves(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_status_typo",
+                        "--title",
+                        "Fix status output typo",
+                        "--acceptance",
+                        "Typo is fixed",
+                        "--risk",
+                        "low",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("作業指示を生成してください。", body)
+            self.assertNotIn("roadmap discuss", body)
+            self.assertNotIn("大きな作業の可能性", body)
 
     def test_project_status_allows_clean_verification_task_completion_without_human_prompt(self) -> None:
         with TemporaryDirectory() as directory:

@@ -69,7 +69,7 @@ def cmd_project_status(args: argparse.Namespace) -> None:
                 for finding in blocking:
                     print(f"  - {finding['id']}")
             print("  next_actions:")
-            for action in c.next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"]):
+            for action in c.task_next_actions(task, status, verification_run, unexecuted):
                 print(f"  - {action}")
             print("  unexecuted_verifications:")
             if unexecuted:
