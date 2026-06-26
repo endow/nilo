@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from nilo.ai_context import render_ai_context_text
 from nilo.cli import main
 from nilo.mcp_identity import identity_matches_expected, mcp_identity
 from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, handle_request
@@ -770,6 +771,61 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("call_tool", result.stdout)
+
+    def test_taskization_tool_descriptions_steer_explicit_task_requests_to_tasks(self) -> None:
+        response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"context": "advanced"}})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+
+        todo_description = tools["create_todo"]["description"]
+        task_description = tools["create_task"]["description"]
+        from_todo_description = tools["create_task_from_todo"]["description"]
+
+        self.assertIn("Do NOT use this when the user explicitly asks to taskize work", todo_description)
+        self.assertIn("create a Task", todo_description)
+        self.assertIn("タスク化して", todo_description)
+        self.assertIn("Create an executable Nilo Task", task_description)
+        self.assertIn("taskize work", task_description)
+        self.assertIn("タスク化して", task_description)
+        self.assertIn("commitment_id is optional", task_description)
+        self.assertNotIn("commitment_id", tools["create_task"]["inputSchema"]["required"])
+        self.assertIn("Use create_task for new concrete work", from_todo_description)
+        self.assertIn("converting an already-created Todo", from_todo_description)
+
+    def test_ai_context_includes_taskization_vocabulary_rules(self) -> None:
+        body = render_ai_context_text(
+            {
+                "project_id": "project_test",
+                "project_name": "Project Test",
+                "current_task": None,
+                "next_required_actions": [],
+                "failure_summary": {},
+            }
+        )
+
+        self.assertIn("語彙ルール", body)
+        self.assertIn("「これをタスク化して」「Taskにして」「作業タスクを作って」", body)
+        self.assertIn("Todo ではなく Task 作成を優先する", body)
+        self.assertIn("create_todo=受付だけ", body)
+        self.assertIn("補完できないほど曖昧な場合だけ Todo", body)
+
+        active_body = render_ai_context_text(
+            {
+                "project_id": "project_test",
+                "project_name": "Project Test",
+                "current_task": {
+                    "task": {"id": "task_test", "title": "Active", "state": "planned"},
+                    "git": {"git_head": "", "git_diff_hash": "", "dirty": False},
+                    "evidence": {"status": "missing"},
+                    "review": {"unresolved_count": 0},
+                    "completion": {"allowed": False, "blocking_reasons": ["evidence_missing"]},
+                },
+                "next_required_actions": [],
+                "failure_summary": {},
+            }
+        )
+        self.assertIn("タスク化=Task 作成、Todo=受付だけ", active_body)
+        self.assertIn("ロードマップ承認待ちの応答ルール", active_body)
+        self.assertIn("作業計画の確認・承認・Task 化", active_body)
 
     def test_tools_list_exposes_default_ai_tools(self) -> None:
         response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

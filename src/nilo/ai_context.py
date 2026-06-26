@@ -175,13 +175,24 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
     lines.append("- 小さく明確な修正は通常 task として進める。")
     lines.append("- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。")
     lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を先に使う。")
+    lines.append("語彙ルール:")
+    if current:
+        lines.append("- タスク化=Task 作成、Todo=受付だけ。")
+    else:
+        lines.append("- ユーザーが「これをタスク化して」「Taskにして」「作業タスクを作って」と言った場合は、Todo ではなく Task 作成を優先する。")
+        lines.append("- create_task=新規具体作業、create_task_from_todo=既存 Todo 変換、create_todo=受付だけ。")
+        lines.append("- Todo は後で見る、メモ、候補、未実行、曖昧な受付に使う。")
+        lines.append("- type / risk / acceptance は意図が明確なら補完し、補完できないほど曖昧な場合だけ Todo に入れる。")
     lines.append("ロードマップ承認待ちの応答ルール:")
-    lines.append("- pending Roadmap / RoadmapProposal / RoadmapRevision をユーザーに内部用語だけで説明しない。")
-    lines.append("- まず「作業が大きいので、先に作業計画を作った」と説明する。")
-    lines.append("- 次に、計画の中身を人間が判断できる形で要約または全文表示する。")
-    lines.append("- 「これで進めてよければ承認してください」と明示する。")
-    lines.append("- 承認後は「この計画をもとに Task 化します」と説明する。")
-    lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
+    if current:
+        lines.append("- 大きい作業は内部用語だけで説明せず、作業計画の確認・承認・Task 化を案内する。")
+    else:
+        lines.append("- pending Roadmap / RoadmapProposal / RoadmapRevision をユーザーに内部用語だけで説明しない。")
+        lines.append("- まず「作業が大きいので、先に作業計画を作った」と説明する。")
+        lines.append("- 次に、計画の中身を人間が判断できる形で要約または全文表示する。")
+        lines.append("- 「これで進めてよければ承認してください」と明示する。")
+        lines.append("- 承認後は「この計画をもとに Task 化します」と説明する。")
+        lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
     return "\n".join(lines)
 
 

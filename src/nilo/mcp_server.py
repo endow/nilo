@@ -546,7 +546,13 @@ TOOLS = [
     },
     {
         "name": "create_task",
-        "description": "Create a task under an accepted RoadmapCommitment.",
+        "description": (
+            "Create an executable Nilo Task. Use this when the user explicitly asks to taskize work, create a Task, "
+            'start a concrete implementation/design/research/documentation task, or says phrases like "タスク化して", '
+            '"Taskにして", "作業タスクを作って". If the user intent is clear, infer reasonable type, risk, description, '
+            "and acceptance criteria instead of creating a Todo. commitment_id is optional reference metadata, not a "
+            "permission requirement."
+        ),
         "inputSchema": json_schema(
             {
                 "project_id": {"type": "string"},
@@ -558,7 +564,7 @@ TOOLS = [
                 "acceptance": {"type": "array", "items": {"type": "string"}},
                 "roadmap_item_id": {"type": "string"},
             },
-            ["project_id", "title", "type", "risk", "commitment_id", "description", "acceptance"],
+            ["project_id", "title", "type", "risk", "description", "acceptance"],
         ),
     },
     {
@@ -601,7 +607,12 @@ TOOLS = [
     },
     {
         "name": "create_todo",
-        "description": "Create a Todo intake item without granting execution permission.",
+        "description": (
+            "Create a Todo intake item for ideas, deferred requests, discovered issues, follow-ups, or ambiguous work. "
+            "A Todo is only intake and does not grant execution permission. Do NOT use this when the user explicitly "
+            'asks to taskize work, create a Task, start a concrete task, or says phrases like "タスク化して", '
+            '"Taskにして", "作業タスクを作って".'
+        ),
         "inputSchema": json_schema(
             {
                 "project_id": {"type": "string"},
@@ -653,7 +664,10 @@ TOOLS = [
     },
     {
         "name": "create_task_from_todo",
-        "description": "Create a Task from a ready or ad_hoc_approved Todo.",
+        "description": (
+            "Create a Task from an existing ready or ad_hoc_approved Todo. Use create_task for new concrete work that "
+            "the user directly asks to taskize; use create_task_from_todo only when converting an already-created Todo."
+        ),
         "inputSchema": json_schema(
             {
                 "todo_id": {"type": "string"},
@@ -711,7 +725,10 @@ def review_handoff_tools() -> list[dict]:
     return [tool for tool in TOOLS if tool["name"] in REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES]
 
 
-def tools_for_list_params(_params: dict | None) -> list[dict]:
+def tools_for_list_params(params: dict | None) -> list[dict]:
+    params = params or {}
+    if params.get("context") in {"advanced", "all"}:
+        return TOOLS
     return default_tools()
 
 
