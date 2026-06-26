@@ -10,6 +10,12 @@ from ..ai_context import project_ai_context, render_ai_context_text
 from ..display_labels import field_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
+from ..project_boundary import (
+    ProjectBoundaryError,
+    assert_self_development_allowed,
+    boundary_warning_lines,
+    resolve_project_boundary,
+)
 from ..store import Store
 from ..timeutil import now_iso
 from .task import cmd_task_complete, cmd_task_create
@@ -81,6 +87,7 @@ def print_facade_next_for_task(store: Store, task_id: str) -> None:
 
 def cmd_facade_status(args: argparse.Namespace) -> None:
     project_id = default_project_id(args)
+    boundary = resolve_project_boundary(db_path=args.db)
     store = Store(args.db)
     try:
         if getattr(args, "ai", False) or getattr(args, "json", False):
@@ -88,11 +95,22 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
                 data = project_ai_context(store, project_id)
             except ValueError as exc:
                 raise SystemExit(str(exc)) from exc
+            data["project_boundary"] = boundary.to_dict()
             if getattr(args, "json", False):
                 print(json.dumps(data, ensure_ascii=False, indent=2))
             else:
-                print(render_ai_context_text(data))
+                if boundary.should_print_text():
+                    print("\n".join(boundary.text_lines()))
+                    for warning in boundary_warning_lines(boundary):
+                        print(warning)
+                    print()
+                print(render_ai_context_text({key: value for key, value in data.items() if key != "project_boundary"}))
             return
+        if boundary.should_print_text():
+            for line in boundary.text_lines():
+                print(line)
+            for warning in boundary_warning_lines(boundary):
+                print(warning)
         summary = summary_for_project(store, project_id)
         if not getattr(args, "verbose", False):
             project = store.get("projects", project_id)
@@ -131,8 +149,15 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
 
 def cmd_facade_next(args: argparse.Namespace) -> None:
     project_id = default_project_id(args)
+    boundary = resolve_project_boundary(db_path=args.db)
     store = Store(args.db)
     try:
+        if boundary.should_print_text():
+            for line in boundary.text_lines():
+                print(line)
+            for warning in boundary_warning_lines(boundary):
+                print(warning)
+            print()
         if getattr(args, "task", None):
             print_facade_next_for_task(store, args.task)
             return
@@ -154,6 +179,12 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
 
 def cmd_facade_start(args: argparse.Namespace) -> None:
     project_id = default_project_id(args)
+    boundary = resolve_project_boundary(db_path=args.db)
+    if getattr(args, "self_development", False):
+        try:
+            assert_self_development_allowed(boundary)
+        except ProjectBoundaryError as exc:
+            raise SystemExit(str(exc)) from exc
     store = Store(args.db)
     try:
         project = store.get("projects", project_id)

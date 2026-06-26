@@ -129,7 +129,7 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
 
 
 def render_ai_context_text(data: dict[str, Any]) -> str:
-    lines = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
+    lines: list[str] = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
     current = data.get("current_task")
     if not current:
         lines.append(f"{field_label('status')}: {ai_value_label('no_active_task')}")

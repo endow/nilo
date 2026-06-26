@@ -13,6 +13,13 @@ from .ai_context import project_ai_context
 from .cli_support import make_id
 from .human_status import human_next_action_text, human_task_status
 from .mcp_identity import identity_matches_expected, mcp_identity, repository_mismatch_response
+from .project_boundary import (
+    ProjectBoundaryError,
+    boundary_warning_lines,
+    record_nilo_issue_for_task,
+    require_write_fence,
+    resolve_project_boundary,
+)
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from .review_dispatcher import DispatchError, dispatch_review
 from .reviewer_registry import (
@@ -658,6 +665,20 @@ TOOLS = [
 ]
 
 
+WRITE_FENCE_TOOL_NAMES = {
+    "record_verification",
+    "submit_agent_report",
+    "record_test_result",
+    "request_task_review",
+    "dispatch_review",
+    "request_review",
+    "import_review_result",
+    "update_review_finding",
+    "import_agent_report",
+    "record_verification_run",
+}
+
+
 DEFAULT_TOOL_NAMES = {
     "get_status",
     "record_verification",
@@ -870,6 +891,12 @@ def project_summary(store: Store, project_id: str) -> dict:
     return p.project_summary_data(store, project, tasks, statuses)
 
 
+def mcp_arguments_boundary(arguments: dict, store: Store) -> Any:
+    context = arguments.get("__nilo_workspace_context") or {}
+    root = Path(context.get("project_root") or context.get("git_root") or Path.cwd())
+    return resolve_project_boundary(root, db_path=store.path)
+
+
 def classify_next_step(summary: dict) -> dict:
     active_tasks = summary["active_tasks"]
     if active_tasks:
@@ -986,9 +1013,11 @@ def refreshed_task_context(store: Store, task_id: str) -> dict:
 
 def get_project_status(store: Store, arguments: dict) -> dict:
     summary = project_summary(store, require_string(arguments, "project_id"))
+    boundary = mcp_arguments_boundary(arguments, store)
     return {
         "project_id": summary["project_id"],
         "project_name": summary["project_name"],
+        "project_boundary": boundary.to_dict(),
         "roadmap_position": summary["roadmap_position"],
         "work_state": summary["work_state"],
         "human_work_state": summary["work_state"],
@@ -1006,7 +1035,8 @@ def get_status(store: Store, arguments: dict) -> dict:
     project_id = require_string(arguments, "project_id")
     if not store.get("projects", project_id):
         raise project_not_found_error(store, project_id)
-    return project_ai_context(store, project_id)
+    boundary = mcp_arguments_boundary(arguments, store)
+    return {**project_ai_context(store, project_id), "project_boundary": boundary.to_dict()}
 
 
 def get_project_summary(store: Store, arguments: dict) -> dict:
@@ -1015,13 +1045,16 @@ def get_project_summary(store: Store, arguments: dict) -> dict:
 
 def get_agent_work_context(store: Store, arguments: dict) -> dict:
     summary = project_summary(store, require_string(arguments, "project_id"))
-    return agent_work_context_from_summary(store, summary)
+    boundary = mcp_arguments_boundary(arguments, store)
+    return {**agent_work_context_from_summary(store, summary), "project_boundary": boundary.to_dict()}
 
 
 def get_next_step(store: Store, arguments: dict) -> dict:
     summary = project_summary(store, require_string(arguments, "project_id"))
+    boundary = mcp_arguments_boundary(arguments, store)
     return {
         "project_id": summary["project_id"],
+        "project_boundary": boundary.to_dict(),
         "roadmap_position": summary["roadmap_position"],
         "work_state": summary["work_state"],
         "human_work_state": summary["work_state"],
@@ -1962,6 +1995,22 @@ TOOL_HANDLERS = {
 }
 
 
+def maybe_record_mcp_boundary_failure(
+    store: Store,
+    arguments: dict,
+    tool_name: str,
+    error: ProjectBoundaryError,
+    boundary: Any,
+) -> None:
+    task_id = arguments.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        return
+    task = store.get("tasks", task_id)
+    if not task:
+        return
+    record_nilo_issue_for_task(store, task["project_id"], task_id, f"mcp {tool_name}", error, boundary)
+
+
 def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) -> dict:
     if name not in TOOL_HANDLERS:
         raise McpToolError(f"unknown tool: {name}")
@@ -1980,11 +2029,27 @@ def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) ->
         identity_root = Path(context.get("project_root") or context.get("git_root") or Path.cwd())
         identity = mcp_identity(identity_root, store.path, source=context.get("source", ""))
         identity = {**identity, **context, "db_path": str(store.path.resolve())}
+        boundary = resolve_project_boundary(identity_root, db_path=store.path)
+        identity["project_boundary"] = boundary.to_dict()
+        identity["project_boundary_warnings"] = boundary_warning_lines(boundary)
         expected_project = optional_string(arguments, "expected_project")
         expected_git_root = optional_string(arguments, "expected_git_root")
         matches, _reasons = identity_matches_expected(identity, expected_project, expected_git_root)
         if not matches:
             return repository_mismatch_response(identity, expected_project, expected_git_root)
+        if name in WRITE_FENCE_TOOL_NAMES:
+            try:
+                require_write_fence(boundary)
+            except ProjectBoundaryError as exc:
+                maybe_record_mcp_boundary_failure(store, arguments, name, exc, boundary)
+                return {
+                    "ok": False,
+                    "error": exc.code,
+                    "message": str(exc),
+                    "project_boundary": boundary.to_dict(),
+                    "write_fence": exc.details,
+                    "identity": identity,
+                }
         handler_arguments = {**arguments, "__nilo_workspace_context": context}
         result = TOOL_HANDLERS[name](store, handler_arguments)
         if isinstance(result, dict) and "identity" not in result:

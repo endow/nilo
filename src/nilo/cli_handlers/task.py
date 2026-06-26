@@ -9,6 +9,7 @@ from ..cli_support import make_id
 from ..display_labels import ai_value_label, bool_label, category_label, field_label, severity_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
+from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
 from ..task_logic import completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
@@ -287,6 +288,12 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             raise SystemExit(f"task not found: {args.task}")
         if args.actor == "ai":
             require_ai_completion_evidence(store, args.task)
+        boundary = resolve_project_boundary(db_path=args.db)
+        try:
+            require_write_fence(boundary)
+        except ProjectBoundaryError as exc:
+            record_nilo_issue_for_task(store, task["project_id"], task["id"], "task complete", exc, boundary)
+            raise SystemExit(str(exc)) from exc
         now = now_iso()
         snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
         latest_verification = store.latest_for_task("verification_runs", args.task)

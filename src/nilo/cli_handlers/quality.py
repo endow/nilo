@@ -18,6 +18,7 @@ from ..quality_logic import (
     validate_known_scores,
     validate_required_scores,
 )
+from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from ..review_dispatcher import dispatch_review, doctor_reviewer_config, init_reviewer_config, quick_review
 from ..reviewer_registry import ReviewerResolutionError, resolve_reviewer, resolve_review_request_target, reviewer_is_registered_available
@@ -703,6 +704,12 @@ def cmd_review_result_import(args: argparse.Namespace) -> None:
             body = sys.stdin.read()
         if not body.strip():
             raise SystemExit("review body is empty")
+        boundary = resolve_project_boundary(db_path=args.db)
+        try:
+            require_write_fence(boundary)
+        except ProjectBoundaryError as exc:
+            record_nilo_issue_for_task(store, task["project_id"], task["id"], "review import", exc, boundary)
+            raise SystemExit(str(exc)) from exc
         verdict, summary, findings = parse_review_result(body)
         created_at = now_iso()
         result = {

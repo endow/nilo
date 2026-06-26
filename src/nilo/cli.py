@@ -298,11 +298,17 @@ def parse_roadmap_proposal(markdown: str) -> dict:
 
 
 def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
+    from .project_boundary import project_boundary_prompt, resolve_project_boundary
+
     project_id = project["id"]
+    boundary = resolve_project_boundary()
+    boundary_prompt = project_boundary_prompt(boundary)
     return f"""{NILO_BLOCK_BEGIN}
 ## Nilo 必須プロトコル
 
 このプロジェクトでは Nilo を AI 作業の状態管理装置として使う。
+
+{boundary_prompt}
 
 Normal work:
 - 作業開始と現在地確認は `nilo status --ai --project {project_id}` を使う。

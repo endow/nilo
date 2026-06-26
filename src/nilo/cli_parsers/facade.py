@@ -36,6 +36,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     start.add_argument("--mode", choices=["normal", "overdrive"], default="normal")
     start.add_argument("--type", dest="task_type", choices=TASK_TYPES, default="implementation")
     start.add_argument("--risk", choices=["low", "medium", "high"], default="medium")
+    start.add_argument("--self-development", action="store_true")
     start.set_defaults(func=handlers.cmd_facade_start)
 
     check = sub.add_parser("check")

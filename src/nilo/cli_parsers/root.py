@@ -26,6 +26,7 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init")
+    init.add_argument("--repair-project-binding", action="store_true")
     init.set_defaults(func=handlers.cmd_init)
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--fix-local-instructions", action="store_true")

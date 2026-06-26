@@ -24,6 +24,13 @@ from ..gitmeta import git_output, head_commit
 from ..guard import evaluate_evidence
 from ..instruction import build_instruction, build_understanding_prompt
 from ..project_model import default_project_row
+from ..project_boundary import (
+    ProjectBoundaryError,
+    project_boundary_prompt,
+    record_nilo_issue_for_task,
+    require_write_fence,
+    resolve_project_boundary,
+)
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status
 from ..store import Store
 from ..task_logic import outcome_status, unresolved_review_findings
@@ -383,6 +390,7 @@ def cmd_update_check(args: argparse.Namespace) -> None:
 
 def cmd_init(args: argparse.Namespace) -> None:
     project_id = Path.cwd().name
+    boundary = resolve_project_boundary(create_missing=True, repair=bool(getattr(args, "repair_project_binding", False)))
     store = Store(args.db)
     try:
         project = store.get("projects", project_id)
@@ -392,6 +400,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             project = default_project_row(project_id, now_iso())
             store.insert("projects", project)
             print(f"created project: {project_id}")
+        print(f"project binding: {boundary.binding_path}")
         install_agent_blocks(project, list(AGENT_TARGET_FILES))
         print_legacy_agent_block_guidance(legacy_agent_block_files())
     finally:
@@ -413,7 +422,9 @@ def cmd_instruct(args: argparse.Namespace) -> None:
         store.update("tasks", task["id"], {"base_commit": head_commit(Path.cwd())})
         task = store.get("tasks", task["id"])
 
+        boundary = resolve_project_boundary(db_path=args.db)
         body, report_format = build_instruction(project, task)
+        body = f"{project_boundary_prompt(boundary)}\n\n{body}"
         created_at = now_iso()
         instruction = {
             "id": make_id("instruction"),
@@ -443,6 +454,12 @@ def cmd_report_import(args: argparse.Namespace) -> None:
         if not markdown.strip():
             raise SystemExit("report body is empty")
 
+        boundary = resolve_project_boundary(db_path=args.db)
+        try:
+            require_write_fence(boundary)
+        except ProjectBoundaryError as exc:
+            record_nilo_issue_for_task(store, task["project_id"], task["id"], "report import", exc, boundary)
+            raise SystemExit(str(exc)) from exc
         result = import_agent_report(store, task, markdown, args.agent, Path.cwd(), evaluate_evidence)
         check = result["evidence_status"]
 
@@ -536,6 +553,13 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
         latest_review = store.latest_for_task("review_results", args.task)
         concerns = args.concern or []
         decision = args.decision
+        if decision in ("accepted", "accepted_with_concerns"):
+            boundary = resolve_project_boundary(db_path=args.db)
+            try:
+                require_write_fence(boundary)
+            except ProjectBoundaryError as exc:
+                record_nilo_issue_for_task(store, task["project_id"], task["id"], f"outcome {decision}", exc, boundary)
+                raise SystemExit(str(exc)) from exc
         snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
         accepted = decision in ("accepted", "accepted_with_concerns")
         row = {
@@ -586,6 +610,12 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
         if not task:
             raise SystemExit(f"task not found: {args.task}")
         result = run_local_verification(args.command, Path.cwd(), args.timeout)
+        boundary = resolve_project_boundary(db_path=args.db)
+        try:
+            require_write_fence(boundary)
+        except ProjectBoundaryError as exc:
+            record_nilo_issue_for_task(store, task["project_id"], task["id"], args.command, exc, boundary)
+            raise SystemExit(str(exc)) from exc
         row = {
             "id": make_id("verification"),
             "task_id": args.task,
