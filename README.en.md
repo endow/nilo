@@ -304,6 +304,35 @@ nilo next
 
 Callable does not mean correct for the current repository.
 
+### MCP multi-workspace
+
+By default, Nilo MCP uses the `.nilo/nilo.db` under the repository where the MCP server was started.
+
+When working on multiple repositories at the same time, pass `project_root` or a registered `workspace` to the MCP tool call.
+
+```json
+{
+  "project_root": "/path/to/Chiffon"
+}
+```
+
+You can also register a workspace:
+
+```bash
+nilo workspace add Chiffon --root /path/to/Chiffon
+nilo workspace list
+```
+
+Then pass the workspace name:
+
+```json
+{
+  "workspace": "Chiffon"
+}
+```
+
+MCP responses include an identity object. Check that `repository_name` and `db_path` match the target repository.
+
 `nilo init` writes runtime instructions to local files rather than tracked files such as `CLAUDE.md` or `AGENTS.md`:
 
 - Claude Code: `CLAUDE.local.md`

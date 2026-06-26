@@ -38,6 +38,7 @@ from .snapshot import compact_snapshot, current_git_snapshot, snapshot_columns
 from .store import Store
 from .task_logic import projected_task_status
 from .timeutil import iso_age_seconds, now_iso
+from .workspace_resolver import WorkspaceResolutionError, list_workspace_entries, resolve_workspace_context
 
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -68,8 +69,18 @@ def text_tool_result(data: Any, is_error: bool = False) -> dict:
 
 
 def json_schema(properties: dict[str, dict], required: list[str]) -> dict:
+    # Reserved across all MCP tools because workspace routing is handled before
+    # tool-specific argument dispatch.
     properties = {
         **properties,
+        "project_root": {
+            "type": "string",
+            "description": "Optional repository root. When provided, Nilo uses <project_root>/.nilo/nilo.db instead of the MCP server cwd database.",
+        },
+        "workspace": {
+            "type": "string",
+            "description": "Optional registered workspace name. When provided, Nilo resolves the workspace root and uses <root>/.nilo/nilo.db.",
+        },
         "expected_project": {
             "type": "string",
             "description": "Optional repository guard. This is the expected repository/project identity, usually the repository directory name. If set, reject the call unless MCP identity project_id or repository_name matches.",
@@ -174,8 +185,6 @@ def _db_contains_context(candidate: Path, filters: dict[str, str]) -> bool:
 
 
 def resolve_mcp_db_path(db_path: Path | None, tool_name: str, arguments: dict) -> Path:
-    if db_path is not None:
-        return db_path
     env_db = os.environ.get("NILO_DB")
     if env_db:
         return Path(env_db)
@@ -204,6 +213,27 @@ def resolve_mcp_db_path(db_path: Path | None, tool_name: str, arguments: dict) -
         "Start the MCP server with --db <repo>/.nilo/nilo.db, set NILO_DB, "
         "or set NILO_WORKSPACE_ROOT to the target repository."
     )
+
+
+def resolve_mcp_workspace_context(db_path: Path | None, tool_name: str, arguments: dict) -> dict[str, str]:
+    project_root = arguments.get("project_root")
+    if project_root is not None and not isinstance(project_root, str):
+        raise McpToolError("argument must be a string: project_root")
+    workspace = arguments.get("workspace")
+    if workspace is not None and not isinstance(workspace, str):
+        raise McpToolError("argument must be a string: workspace")
+    if project_root or workspace or db_path is not None:
+        return resolve_workspace_context(
+            project_root=project_root or None,
+            workspace=workspace or None,
+            db_path=db_path,
+            default_cwd=Path.cwd(),
+        )
+    resolved_db = resolve_mcp_db_path(db_path, tool_name, arguments)
+    context = resolve_workspace_context(db_path=resolved_db, default_cwd=Path.cwd())
+    context["source"] = "nilo_db" if os.environ.get("NILO_DB") else "server_cwd"
+    context["db_path"] = str(resolved_db.resolve())
+    return context
 
 
 def project_not_found_error(store: Store, project_id: str) -> McpToolError:
@@ -1035,7 +1065,6 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
         )
     return {
         "ok": not exposed_human_gated,
-        "identity": mcp_identity(Path.cwd(), store.path),
         "project_id": project_id,
         "project_readable": True,
         "tool_count": len(tool_names),
@@ -1075,6 +1104,11 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
         "claude_code_reviewer": reviewer_prepare_status(store, "claude-code"),
         "work_state": summary["work_state"],
         "roadmap_position": summary["roadmap_position"],
+        "registered_workspaces": list_workspace_entries(),
+        "multi_workspace_usage": [
+            "pass project_root to use a specific repository",
+            "pass workspace to use a registered workspace",
+        ],
     }
 
 
@@ -1204,7 +1238,8 @@ def mcp_request_review(store: Store, arguments: dict) -> dict:
         next_action = reviewer_unavailable_next_action(store, to_actor)
         raise McpToolError(f"{exc}; next_action: {next_action}") from None
     created_at = now_iso()
-    snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
+    workspace_root = Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd()))
+    snapshot = compact_snapshot(current_git_snapshot(workspace_root))
     row = {
         "id": make_id("review"),
         "task_id": task_id,
@@ -1289,13 +1324,14 @@ def claim_next_review(store: Store, arguments: dict) -> dict:
     task = store.get("tasks", request["task_id"])
     report = store.latest_for_task("agent_reports", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
+    workspace_root = Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd()))
     return {
         "reviewer": reviewer,
         "claimed": True,
         "review_request": request,
         "task_id": task["id"],
         "review_id": request["id"],
-        "prompt_md": build_review_context(task, request, report, None, verification_run, Path.cwd()),
+        "prompt_md": build_review_context(task, request, report, None, verification_run, workspace_root),
         "template_md": build_review_result_template(request),
         "latest_event": store.latest_task_status_event(task["id"]),
     }
@@ -1882,7 +1918,7 @@ def mcp_dispatch_review(store: Store, arguments: dict) -> dict:
             auto_start=auto_start,
             auto_configure=auto_configure,
             config_path=Path(config_path) if config_path else None,
-            repo_root=Path.cwd(),
+            repo_root=Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd())),
         )
     except DispatchError as exc:
         raise McpToolError(f"review dispatch failed during {exc.stage}: {exc.reason}") from exc
@@ -1937,15 +1973,24 @@ def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) ->
         arguments = {}
     if not isinstance(arguments, dict):
         raise McpToolError("tool arguments must be an object")
-    store = Store(resolve_mcp_db_path(db_path, name, arguments))
     try:
-        identity = mcp_identity(Path.cwd(), store.path)
+        context = resolve_mcp_workspace_context(db_path, name, arguments)
+    except WorkspaceResolutionError as exc:
+        if exc.error != "workspace_not_found":
+            raise McpToolError(str(exc)) from exc
+        return exc.response()
+    store = Store(Path(context["db_path"]))
+    try:
+        identity_root = Path(context.get("project_root") or context.get("git_root") or Path.cwd())
+        identity = mcp_identity(identity_root, store.path, source=context.get("source", ""))
+        identity = {**identity, **context, "db_path": str(store.path.resolve())}
         expected_project = optional_string(arguments, "expected_project")
         expected_git_root = optional_string(arguments, "expected_git_root")
         matches, _reasons = identity_matches_expected(identity, expected_project, expected_git_root)
         if not matches:
             return repository_mismatch_response(identity, expected_project, expected_git_root)
-        result = TOOL_HANDLERS[name](store, arguments)
+        handler_arguments = {**arguments, "__nilo_workspace_context": context}
+        result = TOOL_HANDLERS[name](store, handler_arguments)
         if isinstance(result, dict) and "identity" not in result:
             result = {**result, "identity": identity}
         return result

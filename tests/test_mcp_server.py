@@ -18,9 +18,36 @@ from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, han
 from nilo.review_dispatcher import find_executable
 from nilo.store import JSON_COLUMNS, Store
 from nilo.timeutil import now_iso
+from nilo.workspace_resolver import resolve_workspace_context
 
 
 class McpServerTests(unittest.TestCase):
+    def init_git_repo(self, root: Path) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init"], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+
+    def create_project_db(self, root: Path, project_id: str) -> Path:
+        db = root / ".nilo" / "nilo.db"
+        store = Store(db)
+        try:
+            store.insert(
+                "projects",
+                {
+                    "id": project_id,
+                    "name": project_id,
+                    "tech_stack": [],
+                    "rules": [],
+                    "default_completion_criteria": [],
+                    "available_models": [],
+                    "fallback_models": [],
+                    "requires_local_execution": 0,
+                    "created_at": now_iso(),
+                },
+            )
+        finally:
+            store.close()
+        return db
+
     def test_mcp_identity_returns_current_repository_identity(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "repo_identity"
@@ -44,6 +71,183 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(identity["repository_name"], "repo_identity")
         self.assertEqual(identity["project_id"], "repo_identity")
         self.assertIn("git_head", identity)
+
+    def test_resolve_workspace_context_project_root_uses_repo_db(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory) / "Chiffon"
+            self.init_git_repo(repo)
+
+            context = resolve_workspace_context(project_root=str(repo), default_cwd=Path(directory))
+
+        self.assertEqual(context["repository_name"], "Chiffon")
+        self.assertEqual(context["source"], "project_root")
+        self.assertEqual(context["git_root"], str(repo.resolve()))
+        self.assertEqual(context["db_path"], str((repo / ".nilo" / "nilo.db").resolve()))
+
+    def test_project_root_identity_does_not_fake_git_root_for_non_git_directory(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "not_git"
+            root.mkdir()
+            result = call_tool("mcp_ping", {"project_root": str(root)}, None)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["identity"]["repository_name"], "not_git")
+        self.assertEqual(result["identity"]["project_root"], str(root.resolve()))
+        self.assertEqual(result["identity"]["git_root"], "")
+        self.assertEqual(result["identity"]["source"], "project_root")
+
+    def test_mcp_project_root_overrides_nilo_db(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            repo_a = base / "repoA"
+            repo_b = base / "repoB"
+            self.init_git_repo(repo_a)
+            self.init_git_repo(repo_b)
+            db_a = self.create_project_db(repo_a, "repoA")
+            self.create_project_db(repo_b, "repoB")
+
+            previous_cwd = Path.cwd()
+            previous_db = os.environ.get("NILO_DB")
+            try:
+                os.chdir(repo_a)
+                os.environ["NILO_DB"] = str(db_a)
+                result = call_tool("mcp_ping", {"project_root": str(repo_b)}, None)
+            finally:
+                os.chdir(previous_cwd)
+                if previous_db is None:
+                    os.environ.pop("NILO_DB", None)
+                else:
+                    os.environ["NILO_DB"] = previous_db
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["identity"]["repository_name"], "repoB")
+        self.assertEqual(result["identity"]["source"], "project_root")
+        self.assertEqual(result["identity"]["db_path"], str((repo_b / ".nilo" / "nilo.db").resolve()))
+
+    def test_mcp_project_root_missing_returns_tool_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            response = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "mcp_ping",
+                        "arguments": {"project_root": str(Path(directory) / "missing")},
+                    },
+                },
+                None,
+            )
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        message = json.loads(result["content"][0]["text"])["error"]
+        self.assertIn("project_root not found", message)
+
+    def test_workspace_cli_add_list_show_remove(self) -> None:
+        with TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            repo = Path(directory) / "Chiffon"
+            self.init_git_repo(repo)
+            db = self.create_project_db(repo, "Chiffon")
+            with patch("nilo.workspace_resolver.Path.home", return_value=home):
+                with redirect_stdout(io.StringIO()):
+                    main(["workspace", "add", "Chiffon", "--root", str(repo)])
+                list_output = io.StringIO()
+                with redirect_stdout(list_output):
+                    main(["workspace", "list"])
+                show_output = io.StringIO()
+                with redirect_stdout(show_output):
+                    main(["workspace", "show", "Chiffon"])
+                with redirect_stdout(io.StringIO()):
+                    main(["workspace", "remove", "Chiffon"])
+                after_output = io.StringIO()
+                with redirect_stdout(after_output):
+                    main(["workspace", "list"])
+                db_still_exists = db.exists()
+
+        self.assertIn("Chiffon", list_output.getvalue())
+        self.assertIn(str(db.resolve()), show_output.getvalue())
+        self.assertIn("- none", after_output.getvalue())
+        self.assertTrue(db_still_exists)
+
+    def test_mcp_workspace_resolves_registered_root(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            home = base / "home"
+            repo_a = base / "repoA"
+            repo_b = base / "repoB"
+            self.init_git_repo(repo_a)
+            self.init_git_repo(repo_b)
+            self.create_project_db(repo_a, "repoA")
+            self.create_project_db(repo_b, "repoB")
+            with patch("nilo.workspace_resolver.Path.home", return_value=home):
+                with redirect_stdout(io.StringIO()):
+                    main(["workspace", "add", "Chiffon", "--root", str(repo_b)])
+                previous_cwd = Path.cwd()
+                try:
+                    os.chdir(repo_a)
+                    result = call_tool("mcp_ping", {"workspace": "Chiffon"}, None)
+                finally:
+                    os.chdir(previous_cwd)
+
+        self.assertEqual(result["identity"]["repository_name"], "repoB")
+        self.assertEqual(result["identity"]["source"], "workspace")
+        self.assertEqual(result["identity"]["db_path"], str((repo_b / ".nilo" / "nilo.db").resolve()))
+
+    def test_project_root_takes_precedence_over_workspace(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            home = base / "home"
+            repo_b = base / "repoB"
+            repo_c = base / "repoC"
+            self.init_git_repo(repo_b)
+            self.init_git_repo(repo_c)
+            self.create_project_db(repo_b, "repoB")
+            self.create_project_db(repo_c, "repoC")
+            with patch("nilo.workspace_resolver.Path.home", return_value=home):
+                with redirect_stdout(io.StringIO()):
+                    main(["workspace", "add", "Chiffon", "--root", str(repo_b)])
+                result = call_tool("mcp_ping", {"workspace": "Chiffon", "project_root": str(repo_c)}, None)
+
+        self.assertEqual(result["identity"]["repository_name"], "repoC")
+        self.assertEqual(result["identity"]["source"], "project_root")
+
+    def test_workspace_not_found_returns_registered_list(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            home = base / "home"
+            repo_nilo = base / "nilo"
+            repo_mgtool = base / "mgtool"
+            self.init_git_repo(repo_nilo)
+            self.init_git_repo(repo_mgtool)
+            with patch("nilo.workspace_resolver.Path.home", return_value=home):
+                with redirect_stdout(io.StringIO()):
+                    main(["workspace", "add", "nilo", "--root", str(repo_nilo)])
+                    main(["workspace", "add", "mgtool", "--root", str(repo_mgtool)])
+                result = call_tool("mcp_ping", {"workspace": "Chiffon"}, None)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "workspace_not_found")
+        self.assertEqual(result["registered_workspaces"], ["mgtool", "nilo"])
+
+    def test_guard_checks_resolved_project_root_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            repo_a = base / "repoA"
+            repo_b = base / "Chiffon"
+            self.init_git_repo(repo_a)
+            self.init_git_repo(repo_b)
+            self.create_project_db(repo_b, "Chiffon")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(repo_a)
+                result = call_tool("mcp_ping", {"project_root": str(repo_b), "expected_project": "Chiffon"}, None)
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["identity"]["repository_name"], "Chiffon")
 
     def test_identity_matches_expected_returns_true_for_matching_project(self) -> None:
         ok, reasons = identity_matches_expected({"project_id": "Other", "repository_name": "Chiffon", "git_root": ""}, expected_project="Chiffon")

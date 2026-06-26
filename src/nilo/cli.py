@@ -321,7 +321,11 @@ MCP identity guard:
 - MCP を使う前に identity の repository / project / git_root / db_path が現在作業中のリポジトリと一致しているか確認する。
 - `expected_project` は通常 repository directory name を渡す repository identity guard であり、DB 内の任意 project id ではない。
 - 不一致時の `repository_mismatch` は通常 status payload を返さない。
-- 一致しない場合はその MCP を使わず、人間に質問せず CLI fallback を使う。
+- 複数 repository を同時に扱う場合、MCP を暗黙の DB で呼ばず `project_root` または `workspace` を指定する。
+- 優先順位は `project_root`、`workspace`、MCP server の default cwd。
+- 対象 root が分かっているなら、人間に質問せず `project_root` を指定して再試行する。
+- MCP response の identity を確認し、resolved repository / db_path が対象 repository と一致しない結果は使わない。
+- 一致しない場合はその MCP 結果を使わず、人間に質問せず CLI fallback を使う。
 - fallback: 対象 repository の作業ディレクトリで `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
 
 大きな作業の扱い:
@@ -507,6 +511,7 @@ from .cli_handlers.todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cm
 from .cli_handlers.workflow import cmd_agent_install, cmd_doctor, cmd_init, cmd_instruct, cmd_migrate, cmd_outcome_record, cmd_report_import, cmd_understanding_approve, cmd_understanding_import, cmd_understanding_prepare, cmd_verification_run
 from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_help_ai
 from .cli_handlers.workflow import cmd_update_check, cmd_upgrade
+from .cli_handlers.workspace import cmd_workspace_add, cmd_workspace_list, cmd_workspace_remove, cmd_workspace_show
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -548,6 +553,7 @@ TOP_LEVEL_COMMANDS = {
     "update-check",
     "upgrade",
     "verification",
+    "workspace",
 }
 
 

@@ -154,6 +154,36 @@ nilo next
 
 MCP が callable であることと、現在の repository に対して正しいことは別です。
 
+### MCP multi-workspace
+
+Nilo MCP は、既定では MCP server を起動した repository の `.nilo/nilo.db` を使います。
+
+複数 repository を同時に扱う場合は、MCP tool の呼び出しに `project_root` または `workspace` を指定できます。
+
+```json
+{
+  "project_root": "/path/to/Chiffon"
+}
+```
+
+または、workspace を登録します。
+
+```bash
+nilo workspace add Chiffon --root /path/to/Chiffon
+nilo workspace list
+```
+
+登録後は、MCP tool に workspace 名を渡せます。
+
+```json
+{
+  "workspace": "Chiffon"
+}
+```
+
+MCP response には identity が含まれます。
+`repository_name` / `db_path` が対象 repository と一致していることを確認してください。
+
 ## レシピ
 
 レシピは、よくある作業を同じやり方で始めるための仕組みです。

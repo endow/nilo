@@ -15,6 +15,7 @@ from .recipe import register_recipe
 from .roadmap import register_roadmap
 from .task import register_task
 from .todo import register_todo
+from .workspace import register_workspace
 from .workflow import register_agent, register_instruct, register_outcome, register_report, register_review, register_understanding, register_verification
 
 
@@ -64,4 +65,5 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     register_review(sub, handlers)
     register_verification(sub, handlers)
     register_mcp(sub, handlers)
+    register_workspace(sub, handlers)
     return parser

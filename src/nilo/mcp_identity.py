@@ -6,15 +6,16 @@ from pathlib import Path
 from .gitmeta import git_output
 
 
-def mcp_identity(cwd: Path, db_path: Path | None = None) -> dict:
+def mcp_identity(cwd: Path, db_path: Path | None = None, *, source: str = "") -> dict:
     resolved_cwd = cwd.resolve()
     git_root, git_head = _git_root_and_head(resolved_cwd)
     repository_root = Path(git_root) if git_root else resolved_cwd
     actual_db_path = db_path if db_path is not None else _default_db_path_for_cwd(resolved_cwd)
     working_tree_dirty = _working_tree_dirty(resolved_cwd, bool(git_root))
     project_id = repository_root.name
-    return {
+    identity = {
         "cwd": str(resolved_cwd),
+        "project_root": str(repository_root.resolve()),
         "git_root": git_root,
         "db_path": str(actual_db_path.resolve()),
         "project_id": project_id,
@@ -23,6 +24,9 @@ def mcp_identity(cwd: Path, db_path: Path | None = None) -> dict:
         "git_head": git_head,
         "working_tree_dirty": working_tree_dirty,
     }
+    if source:
+        identity["source"] = source
+    return identity
 
 
 def identity_matches_expected(identity: dict, expected_project: str = "", expected_git_root: str = "") -> tuple[bool, list[str]]:
