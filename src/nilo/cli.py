@@ -436,6 +436,7 @@ from .cli_handlers.facade import (
     cmd_facade_start,
     cmd_facade_status,
 )
+from .cli_handlers.failure import cmd_failure_ignore, cmd_failure_list, cmd_failure_resolve, cmd_failure_show, cmd_failure_summary
 from .cli_handlers.quality import (
     cmd_quality_autoscore_import,
     cmd_quality_autoscore_prepare,
@@ -502,6 +503,7 @@ TOP_LEVEL_COMMANDS = {
     "done",
     "doctor",
     "evidence",
+    "failure",
     "help",
     "init",
     "instruct",

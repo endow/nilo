@@ -8312,6 +8312,11 @@ close 済み commitment を表示できるようにした。
             self.assertIn("update_history:", status_body)
             self.assertIn("codex: unresolved -> addressed; テストを追加して修正済み", status_body)
 
+            task_status_output = io.StringIO()
+            with redirect_stdout(task_status_output):
+                main(["--db", str(db), "task", "show", "--task", "task_test", "--ai"])
+            self.assertNotIn("[review_changes_requested]", task_status_output.getvalue())
+
             with redirect_stdout(io.StringIO()), patch(
                 "nilo.task_logic.current_git_snapshot",
                 return_value={"git_head": "abc123", "git_diff_hash": "", "working_tree_dirty": False},

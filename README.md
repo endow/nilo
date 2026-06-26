@@ -80,6 +80,23 @@ Nilo が残す主なものは次の通りです。
 
 失敗ログも一次事実として保存しますが、Nilo は現時点で、失敗ログから学習済みルールや成功パターンを自動生成して次回の作業指示へ注入する仕組みを中核機能にしません。判断根拠は、現在の snapshot に紐づく検証、レビュー、人間の完了判断です。
 
+### 失敗ログ
+
+Nilo は、AI 作業で起きた証跡不足・メタデータ不一致・人間の差し戻しを `failure_logs` に記録します。
+
+失敗ログは自動ルールではありません。  
+Nilo は失敗ログから instruction を生成したり、AI に新しい要件として注入したりしません。
+
+失敗ログは、次に作業する人間や AI が「前回どこで詰まったか」を確認するための台帳です。
+
+```bash
+nilo failure list
+nilo failure summary
+nilo failure show <failure_id>
+nilo failure resolve <failure_id> --note "fixed"
+nilo failure ignore <failure_id> --note "external issue"
+```
+
 ## Nilo が守る境界
 
 Nilo は、悪意ある利用者や DB への直接書き込みを防ぐセキュリティ境界ではありません。

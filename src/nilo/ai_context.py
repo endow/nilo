@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .failure import compact_failure_message, list_failure_logs, summarize_failure_logs
 from .snapshot import current_git_snapshot, evidence_status
 from .store import Store
 from .task_logic import is_task_completed_status, projected_task_status, unresolved_review_findings
@@ -34,6 +35,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
     latest_event_id = latest_event["event_id"] if latest_event else ""
     unexecuted = p.unexecuted_verifications_for_task(status, verification_run)
     next_actions = p.next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"])
+    failures = list_failure_logs(store, task_id=task_id, status="open", limit=5)
     blocking_reasons: list[str] = []
     if evidence != "current":
         blocking_reasons.append(f"evidence_{evidence}")
@@ -72,6 +74,17 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
         "write_context_token": f"task:{task_id}:{latest_event_id}" if latest_event_id else "",
         "latest_task_status_event_id": latest_event_id,
         "next_required_actions": next_actions[:3],
+        "failure_logs": [
+            {
+                "id": failure["id"],
+                "severity": failure["severity"],
+                "category": failure["category"],
+                "message": compact_failure_message(failure["message"]),
+                "created_at": failure["created_at"],
+            }
+            for failure in failures
+        ],
+        "failure_logs_note": "Failure logs are observations, not mandatory rules. Use them to avoid repeating obvious mistakes, but do not invent new requirements from them.",
     }
 
 
@@ -88,6 +101,7 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
     design_residue = p.project_design_residue()
     commitments = p.accepted_roadmap_commitments(store, project_id)
     pending_revisions = p.pending_roadmap_revisions(store, project_id)
+    failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
     return {
         "project_id": project_id,
         "project_name": project["name"],
@@ -97,6 +111,18 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
             if current
             else p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
         ),
+        "failure_summary": {
+            "open_failures": failure_summary["open_failure_count"],
+            "high_open_failures": failure_summary["high_open_failure_count"],
+            "latest_open_failure": (
+                {
+                    "task_id": failure_summary["latest_open_failure"]["task_id"],
+                    "category": failure_summary["latest_open_failure"]["category"],
+                }
+                if failure_summary["latest_open_failure"]
+                else None
+            ),
+        },
     }
 
 
@@ -123,6 +149,21 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
         if completion["blocking_reasons"]:
             lines.append("blocking_reasons:")
             lines.extend(f"- {reason}" for reason in completion["blocking_reasons"])
+        if current.get("failure_logs"):
+            lines.append("failure_logs:")
+            for failure in current["failure_logs"]:
+                lines.append(f"- [{failure['severity']}] {failure['category']}")
+                lines.append(f"  {failure['message']}")
+            lines.append(current["failure_logs_note"])
+    failure_summary = data.get("failure_summary", {})
+    if failure_summary:
+        lines.append("failure_summary:")
+        lines.append(f"- open_failures: {failure_summary.get('open_failures', 0)}")
+        lines.append(f"- high_open_failures: {failure_summary.get('high_open_failures', 0)}")
+        latest = failure_summary.get("latest_open_failure")
+        if latest:
+            lines.append(f"- latest_open_failure: {latest['task_id']} {latest['category']}")
+        lines.append(f"Use `nilo failure list --project {data['project_id']}` for details.")
     lines.append("next_required_actions:")
     actions = data.get("next_required_actions") or []
     lines.extend(f"- {action}" for action in actions) if actions else lines.append("- none")

@@ -91,6 +91,12 @@ def cmd_task_status(args: argparse.Namespace) -> None:
                         print(f"- {reason}")
                 else:
                     print("- none")
+                if data.get("failure_logs"):
+                    print("failure_logs:")
+                    for failure in data["failure_logs"]:
+                        print(f"- [{failure['severity']}] {failure['category']}")
+                        print(f"  {failure['message']}")
+                    print(data["failure_logs_note"])
                 print("next_required_actions:")
                 for action in data["next_required_actions"] or ["none"]:
                     print(f"- {action}")

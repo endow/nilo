@@ -18,6 +18,7 @@ from ..cli import (
 )
 from ..agent_report_import import import_agent_report
 from ..cli_support import make_id, read_text_or_exit
+from ..failure import record_failure_log, summarize_failure_logs
 from ..gitmeta import git_output, head_commit
 from ..guard import evaluate_evidence
 from ..instruction import build_instruction, build_understanding_prompt
@@ -234,7 +235,19 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
         if not project:
             raise SystemExit(f"project not found: {project_id}")
         runtime_body = build_agent_instruction_block(project, "all")
-        status_body = render_ai_context_text(project_ai_context(store, project_id))
+        ai_context = project_ai_context(store, project_id)
+        status_body = render_ai_context_text(ai_context)
+        failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
+        failure_summary_lines = [
+            "failure_summary:",
+            f"- open_failures: {failure_summary['open_failure_count']}",
+            f"- high_open_failures: {failure_summary['high_open_failure_count']}",
+        ]
+        latest_failure = failure_summary["latest_open_failure"]
+        if latest_failure:
+            failure_summary_lines.append(f"- latest_open_failure: {latest_failure['task_id']} {latest_failure['category']}")
+        failure_summary_lines.append(f"Use `nilo failure list --project {project_id}` for details.")
+        failure_summary_chars = len("\n".join(failure_summary_lines))
         long_descriptions = [
             {"name": tool["name"], "length": len(tool.get("description", ""))}
             for tool in mcp_server.TOOLS
@@ -262,6 +275,9 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
         for item in long_descriptions[:5]:
             print(f"  - {item['name']}: {item['length']}")
         print(f"- status_ai_chars: {len(status_body)}")
+        print(f"- open_failure_count: {failure_summary['open_failure_count']}")
+        print(f"- high_open_failure_count: {failure_summary['high_open_failure_count']}")
+        print(f"- failure_summary_chars: {failure_summary_chars}")
         print(f"- stale_evidence_count: {stale_evidence_count}")
         print(f"- unresolved_review_count: {unresolved_review_count}")
     finally:
@@ -378,20 +394,6 @@ def cmd_instruct(args: argparse.Namespace) -> None:
         print(body)
     finally:
         store.close()
-
-
-def record_failure_and_rule(store: Store, project_id: str, task_id: str, report_id: str, category: str, message: str, severity: str) -> None:
-    failure = {
-        "id": make_id("failure"),
-        "project_id": project_id,
-        "task_id": task_id,
-        "report_id": report_id,
-        "category": category,
-        "message": message,
-        "severity": severity,
-        "created_at": now_iso(),
-    }
-    store.insert("failure_logs", failure)
 
 
 def cmd_report_import(args: argparse.Namespace) -> None:
@@ -521,14 +523,20 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
             store.insert("task_completions", row)
         if decision in ("rejected", "rework_required"):
             severity = "high" if decision == "rejected" else "medium"
-            record_failure_and_rule(
+            related_id = latest_report["id"] if latest_report else ""
+            record_failure_log(
                 store,
                 task["project_id"],
                 task["id"],
-                latest_report["id"] if latest_report else "",
+                related_id,
                 f"human_{decision}",
                 args.reason,
                 severity,
+                source="outcome_record",
+                actor="human",
+                related_id=related_id,
+                snapshot=snapshot,
+                status="open",
             )
         print(f"status: {outcome_status(decision)}")
         if accepted:
@@ -552,7 +560,7 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
         }
         store.insert("verification_runs", row)
         for issue in result["metadata"]["secret_issues"]:
-            record_failure_and_rule(
+            record_failure_log(
                 store,
                 task["project_id"],
                 task["id"],
@@ -560,6 +568,11 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
                 "secret_detected",
                 issue,
                 "high",
+                source="verification_run",
+                actor="nilo",
+                related_id=row["id"],
+                snapshot=compact_snapshot(current_git_snapshot(Path.cwd())),
+                status="open",
             )
         print(f"verification_run: {row['id']}")
         print(f"exit_code: {row['exit_code']}")

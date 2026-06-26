@@ -73,6 +73,15 @@ Nilo records things such as:
 
 Verification and review results are tied to a specific code state. If the code changes after a check, Nilo can distinguish older evidence as `stale` instead of treating it as evidence for the current tree.
 
+### Failure logs
+
+Nilo records missing evidence, metadata mismatches, and human rejections in `failure_logs`.
+
+Failure logs are observations, not automatic rules.  
+Nilo does not turn them into generated instructions or hidden requirements.
+
+They are a ledger for humans and future agents to understand where previous work failed.
+
 ## The Boundary Nilo Enforces
 
 Nilo is not a security boundary that prevents malicious users or direct writes to the database.

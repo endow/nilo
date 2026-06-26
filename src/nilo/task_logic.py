@@ -21,6 +21,11 @@ def projected_task_status(store, task: dict) -> str:
     latest = store.latest_task_status_event(task["id"])
     if not latest:
         return task["status"]
+    if latest["source"] == "review_finding_update" and not unresolved_review_findings(store, task["id"]):
+        latest_review = store.latest_for_task("review_results", task["id"])
+        if latest_review and latest_review["verdict"] == "approved":
+            return "review_approved"
+        return "review_commented"
     return latest["status"]
 
 

@@ -3,25 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from .cli_support import make_id
+from .failure import record_failure_log
 from .guard import evaluate_evidence
 from .report import claimed_status, extract_changed_files
 from .secret import mask_secrets
+from .snapshot import compact_snapshot, current_git_snapshot
 from .store import Store
 from .timeutil import now_iso
-
-
-def record_failure_and_rule(store: Store, project_id: str, task_id: str, report_id: str, category: str, message: str, severity: str) -> None:
-    failure = {
-        "id": make_id("failure"),
-        "project_id": project_id,
-        "task_id": task_id,
-        "report_id": report_id,
-        "category": category,
-        "message": message,
-        "severity": severity,
-        "created_at": now_iso(),
-    }
-    store.insert("failure_logs", failure)
 
 
 def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd: Path, evaluate_func=evaluate_evidence) -> dict:
@@ -42,6 +30,7 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
     store.insert("agent_reports", report)
 
     status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd)
+    snapshot = compact_snapshot(current_git_snapshot(cwd))
     display_status = "present" if status == "evidence_submitted" else "failed"
     check = {
         "id": "",
@@ -62,6 +51,19 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
             else:
                 category = "evidence_missing"
             severity = "high" if category in ("metadata_mismatch", "secret_detected") else "medium"
-            record_failure_and_rule(store, task["project_id"], task["id"], report["id"], category, issue, severity)
+            record_failure_log(
+                store,
+                task["project_id"],
+                task["id"],
+                report["id"],
+                category,
+                issue,
+                severity,
+                source="report_import",
+                actor="nilo",
+                related_id=report["id"],
+                snapshot=snapshot,
+                status="open",
+            )
 
     return {"report": report, "evidence_status": check, "evidence_check": check}

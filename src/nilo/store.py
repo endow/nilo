@@ -104,6 +104,14 @@ CREATE TABLE IF NOT EXISTS failure_logs (
   category TEXT NOT NULL,
   message TEXT NOT NULL,
   severity TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT '',
+  related_id TEXT NOT NULL DEFAULT '',
+  snapshot TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'open',
+  resolved_at TEXT NOT NULL DEFAULT '',
+  resolved_by TEXT NOT NULL DEFAULT '',
+  resolution_note TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 
@@ -381,6 +389,7 @@ JSON_COLUMNS = {
     "summary_json",
     "rendered_fields",
     "recipe_snapshot",
+    "snapshot",
 }
 
 TABLE_JSON_COLUMNS = {
@@ -427,6 +436,14 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("review_requests", "withdrawn_reason", "TEXT NOT NULL DEFAULT ''"),
     ("review_requests", "withdrawn_actor", "TEXT NOT NULL DEFAULT ''"),
     ("review_requests", "withdrawn_at", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "source", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "actor", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "related_id", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+    ("failure_logs", "status", "TEXT NOT NULL DEFAULT 'open'"),
+    ("failure_logs", "resolved_at", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "resolved_by", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "resolution_note", "TEXT NOT NULL DEFAULT ''"),
 )
 
 MIGRATION_COLUMNS: dict[str, set[str]] = {}
@@ -527,7 +544,12 @@ class Store:
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
         if any(row["name"] == column for row in rows):
             return
-        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        try:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+            return
         self.conn.commit()
 
     @staticmethod
