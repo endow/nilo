@@ -685,16 +685,20 @@ def project_level_next_actions(
     if commitments:
         assessment = roadmap_commitment_assessment(store, commitments[0], tasks, statuses)
         if assessment["status"] == "task_plan_required":
-            return ["no active task; ask the user for the next concrete task within the current roadmap"]
+            return [no_active_task_action("ask the user for the next concrete task within the current roadmap")]
         if assessment["status"] != "evidence_present":
-            return [f"no active task; roadmap evidence needs internal review ({assessment['unresolved_reason']})"]
+            return [no_active_task_action(f"roadmap evidence needs internal review ({assessment['unresolved_reason']})")]
         if assessment["closure_ready"]:
-            return ["no active task; current roadmap scope is satisfied, ask the user for the next direction"]
-        return ["no active task; ask the user for the next concrete task"]
+            return [no_active_task_action("current roadmap scope is satisfied, ask the user for the next direction")]
+        return [no_active_task_action("ask the user for the next concrete task")]
     open_residue = [item for item in design_residue if item["status"] != "resolved"]
     if open_residue:
         return [f"create a task for open design residue: {open_residue[0]['summary']}"]
-    return ["no active task; ask the user for the next concrete task or design direction"]
+    return [no_active_task_action("ask the user for the next concrete task or design direction")]
+
+
+def no_active_task_action(next_step: str) -> str:
+    return f"no active task; create or select a Nilo task before implementation; {next_step}"
 
 
 def todo_status_counts(store: Store, project_id: str) -> dict[str, int]:
@@ -1669,6 +1673,8 @@ def render_handson_next_action(action: str, language: str) -> str:
     if action.startswith("edit the roadmap proposal, import it, then accept with nilo roadmap accept "):
         command = action.split("accept with ", 1)[1]
         return f"作成したロードマップ案を編集し、import 後に `{command}` で次の RoadmapCommitment として承認する"
+    if action.startswith("no active task; create or select a Nilo task before implementation"):
+        return "作業中のタスクはありません。次に扱う具体的な作業を人間が決める"
     residue_prefix = "create a task for open design residue: "
     if action.startswith(residue_prefix):
         return f"未解決の設計残差についてタスクを作成する: {action.removeprefix(residue_prefix)}"

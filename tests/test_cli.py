@@ -2950,9 +2950,13 @@ variables:
                     main(["--db", str(db), "project", "status", "--project", "project_test", "--verbose"])
 
             status_body = status_output.getvalue()
+            expected_guardrail = (
+                "no active task; create or select a Nilo task before implementation; "
+                "ask the user for the next concrete task or design direction"
+            )
             self.assertIn("roadmap_position: roadmap not configured; no open design residue detected", status_body)
             self.assertIn("next_actions:", status_body)
-            self.assertIn("no active task; ask the user for the next concrete task or design direction", status_body)
+            self.assertIn(expected_guardrail, status_body)
             self.assertNotIn("nilo roadmap discuss --project project_test", status_body)
             self.assertNotIn("nilo roadmap import --project project_test", status_body)
             self.assertNotIn("nilo roadmap accept", status_body)
@@ -2967,16 +2971,21 @@ variables:
 
             summary = json.loads(summary_output.getvalue())
             self.assertIn("next_actions", summary)
-            self.assertEqual(summary["next_actions"], ["no active task; ask the user for the next concrete task or design direction"])
+            self.assertEqual(summary["next_actions"], [expected_guardrail])
             self.assertEqual(summary["roadmap_agent_next_actions"][0]["action_id"], "wait_for_user_direction")
             self.assertNotIn("nilo roadmap", summary["roadmap_agent_next_actions"][0]["command_hint"])
+
+            human_status_output = io.StringIO()
+            with redirect_stdout(human_status_output):
+                main(["--db", str(db), "project", "status", "--project", "project_test"])
+            self.assertIn("作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。", human_status_output.getvalue())
 
             with redirect_stdout(io.StringIO()), patch("nilo.project_logic.handson_language", return_value="ja"):
                 main(["--db", str(db), "project", "export-handson", "--project", "project_test", "--file", str(handoff)])
 
             handoff_body = handoff.read_text(encoding="utf-8")
             self.assertIn("## 次のステップ", handoff_body)
-            self.assertIn("no active task; ask the user for the next concrete task or design direction", handoff_body)
+            self.assertIn("作業中のタスクはありません。次に扱う具体的な作業を人間が決める", handoff_body)
             self.assertNotIn("nilo roadmap discuss --project project_test", handoff_body)
             self.assertNotIn("nilo roadmap import --project project_test", handoff_body)
             self.assertNotIn("nilo roadmap accept", handoff_body)
@@ -4197,7 +4206,11 @@ project status からロードマップ現在地を読めるようにする。
             self.assertEqual(summary["roadmap_agent_next_actions"][0]["status"], "allowed")
             self.assertNotIn("nilo roadmap", summary["roadmap_agent_next_actions"][0]["command_hint"])
             self.assertIn("wait_for_user_direction", [item["action_id"] for item in summary["roadmap_agent_next_actions"]])
-            self.assertEqual(summary["next_actions"], ["no active task; current roadmap scope is satisfied, ask the user for the next direction"])
+            expected_guardrail = (
+                "no active task; create or select a Nilo task before implementation; "
+                "current roadmap scope is satisfied, ask the user for the next direction"
+            )
+            self.assertEqual(summary["next_actions"], [expected_guardrail])
             self.assertNotIn("close commitment", summary["next_actions"][0])
             self.assertNotIn("--actor ai", summary["next_actions"][0])
             self.assertNotIn(commitment_id, summary["next_actions"][0])
@@ -4217,7 +4230,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn("roadmap_agent_next_actions:", text_summary_body)
             self.assertNotIn("action_id: close_roadmap_commitment", text_summary_body)
             self.assertNotIn("--actor ai", text_summary_body)
-            self.assertIn("no active task; current roadmap scope is satisfied, ask the user for the next direction", text_summary_body)
+            self.assertIn(expected_guardrail, text_summary_body)
 
             status_output = io.StringIO()
             with redirect_stdout(status_output):
@@ -4233,7 +4246,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn("close commitment", status_body)
             self.assertNotIn("--actor ai", status_body)
             self.assertNotIn(commitment_id, status_body)
-            self.assertIn("no active task; current roadmap scope is satisfied, ask the user for the next direction", status_body)
+            self.assertIn(expected_guardrail, status_body)
             self.assertNotIn("run nilo roadmap assess --project project_test for final human review", status_body)
 
             roadmap_status_output = io.StringIO()
@@ -4283,7 +4296,11 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn("action_id: create_tasks_from_commitment", body)
             self.assertNotIn(f"nilo roadmap task-plan --commitment {commitment_id}", body)
             self.assertNotIn(f"create tasks from accepted commitment {commitment_id}", body)
-            self.assertIn("no active task; ask the user for the next concrete task within the current roadmap", body)
+            self.assertIn(
+                "no active task; create or select a Nilo task before implementation; "
+                "ask the user for the next concrete task within the current roadmap",
+                body,
+            )
 
     def test_roadmap_close_marks_closure_ready_commitment_closed(self) -> None:
         with TemporaryDirectory() as directory:

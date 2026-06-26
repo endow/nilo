@@ -190,6 +190,8 @@ def human_next_action_text(action: str) -> str:
         return "検証コマンドを実行して結果を記録してください。"
     if action.startswith("wait for a real MCP reviewer worker to claim review"):
         return "レビュー担当が依頼を受け取り、レビュー結果を取り込むのを待ってください。"
+    if action.startswith("no active task; create or select a Nilo task before implementation"):
+        return "作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。"
     if action.startswith("no active task; ask the user for the next concrete task"):
         return "作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。"
     if action.startswith("no active task; current roadmap scope is satisfied"):
