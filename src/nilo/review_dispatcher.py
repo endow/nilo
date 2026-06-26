@@ -95,18 +95,48 @@ def find_executable(command: str, env: dict[str, str] | None = None) -> str | No
     if not command.strip():
         return None
     candidate = Path(command)
-    if candidate.parent != Path(".") or candidate.is_absolute():
-        if candidate.exists():
-            return str(candidate)
-        if sys.platform == "win32" and not candidate.suffix:
+    if sys.platform == "win32":
+        candidate_suffix = candidate.suffix.casefold()
+        if candidate.parent != Path(".") or candidate.is_absolute():
+            if candidate_suffix in WINDOWS_EXECUTABLE_EXTENSIONS:
+                return str(candidate) if candidate.exists() else None
+            if candidate_suffix:
+                return None
             for suffix in WINDOWS_EXECUTABLE_EXTENSIONS:
                 suffixed = candidate.with_name(candidate.name + suffix)
                 if suffixed.exists():
                     return str(suffixed)
+            return None
+
+        path = (env or os.environ).get("PATH")
+        search_dirs = (path or "").split(os.pathsep)
+        lower_command = command.casefold()
+        if lower_command.endswith(WINDOWS_EXECUTABLE_EXTENSIONS):
+            for directory in search_dirs:
+                if not directory:
+                    continue
+                direct = Path(directory) / command
+                if direct.exists():
+                    return str(direct)
+            return None
+        if Path(command).suffix:
+            return None
+        for directory in search_dirs:
+            if not directory:
+                continue
+            for suffix in WINDOWS_EXECUTABLE_EXTENSIONS:
+                executable = Path(directory) / f"{command}{suffix}"
+                if executable.exists():
+                    return str(executable)
+        return None
+
+    if candidate.parent != Path(".") or candidate.is_absolute():
+        if candidate.exists():
+            return str(candidate)
         return None
     path = (env or os.environ).get("PATH")
     search_dirs = (path or "").split(os.pathsep)
-    suffixes = WINDOWS_EXECUTABLE_EXTENSIONS if sys.platform == "win32" else WINDOWS_EXECUTABLE_EXTENSIONS[:2]
+    suffixes = WINDOWS_EXECUTABLE_EXTENSIONS[:2]
     lower_command = command.casefold()
     for directory in search_dirs:
         if not directory:
@@ -363,6 +393,11 @@ def doctor_reviewer_config(path: Path, reviewers: list[str] | None = None) -> di
                 if config.kind in {"openai_compatible", "local_llm"}:
                     command_name = config.kind
                     executable = endpoint
+                else:
+                    command_name = config.command
+                    env = os.environ.copy()
+                    env.update(config.env)
+                    executable = find_executable(config.command, env)
             except DispatchError as exc:
                 config_error = exc.reason
         else:
@@ -372,6 +407,7 @@ def doctor_reviewer_config(path: Path, reviewers: list[str] | None = None) -> di
                 "reviewer": canonical,
                 "command": command_name,
                 "executable": executable or "",
+                "resolved_executable": executable or "",
                 "command_found": executable is not None,
                 "configured": configured,
                 "kind": kind or "agent",
@@ -785,6 +821,13 @@ def run_reviewer_process(config: ReviewerConfig, cwd: Path, env: dict[str, str],
             f"command not found: {resolved.command[0]}",
             {"type": "fix_reviewer_command", "reviewer": config.name},
             stderr=f"{resolved.command[0]}: {exc}",
+        ) from None
+    except OSError as exc:
+        raise DispatchError(
+            "reviewer_process_start",
+            f"reviewer process could not be started: {exc}",
+            {"type": "fix_reviewer_command", "reviewer": config.name, "command": resolved.preview},
+            stderr=str(exc),
         ) from None
     except subprocess.TimeoutExpired as exc:
         raise DispatchError(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import unittest
@@ -10,7 +11,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.mcp_server import call_tool
-from nilo.review_dispatcher import dispatch_review, find_executable, safe_default_config
+from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
+from nilo.review_dispatcher import dispatch_review, find_executable, run_reviewer_process, safe_default_config
 from nilo.reviewer_registry import reviewer_is_registered_available
 from nilo.store import Store
 from nilo.timeutil import now_iso
@@ -197,6 +199,35 @@ class ReviewDispatcherTests(unittest.TestCase):
         reviewer = result["reviewers"][0]
         self.assertEqual(reviewer["backend_kind"], "openai_compatible")
         self.assertEqual(reviewer["capabilities"], ["review_diff", "summarize", "propose_tests"])
+
+    def test_doctor_reviewer_config_reports_resolved_executable(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            shim = bin_dir / "claude.cmd"
+            shim.write_text("@echo off\r\n", encoding="utf-8")
+            config = root / "reviewers.toml"
+            config.write_text(
+                "[reviewers.claude-code]\n"
+                'kind = "agent"\n'
+                'command = "claude"\n'
+                'args = ["{prompt_file}"]\n',
+                encoding="utf-8",
+            )
+            from nilo.review_dispatcher import doctor_reviewer_config
+
+            with (
+                patch("nilo.review_dispatcher.sys.platform", "win32"),
+                patch.dict("os.environ", {"PATH": str(bin_dir)}),
+            ):
+                result = doctor_reviewer_config(config, ["claude-code"])
+
+        reviewer = result["reviewers"][0]
+        self.assertEqual(reviewer["command"], "claude")
+        self.assertEqual(Path(reviewer["resolved_executable"]).name.casefold(), "claude.cmd")
+        self.assertEqual(reviewer["executable"], reviewer["resolved_executable"])
+        self.assertTrue(reviewer["command_found"])
 
     def test_dispatch_openai_compatible_local_reviewer_preserves_limitations(self) -> None:
         response = {
@@ -398,6 +429,73 @@ class ReviewDispatcherTests(unittest.TestCase):
                 resolved = find_executable("claude", {"PATH": str(bin_dir)})
 
         self.assertEqual(Path(resolved or "").name.casefold(), "claude.cmd")
+
+    def test_find_executable_prefers_cmd_on_windows(self) -> None:
+        with TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            (bin_dir / "claude").write_text("#!/bin/sh\n", encoding="utf-8")
+            (bin_dir / "claude.cmd").write_text("@echo off\r\n", encoding="utf-8")
+
+            with patch("nilo.review_dispatcher.sys.platform", "win32"):
+                resolved = find_executable("claude", {"PATH": str(bin_dir)})
+
+        self.assertEqual(Path(resolved or "").name.casefold(), "claude.cmd")
+
+    def test_find_executable_does_not_return_extensionless_on_windows(self) -> None:
+        with TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            (bin_dir / "claude").write_text("#!/bin/sh\n", encoding="utf-8")
+
+            with patch("nilo.review_dispatcher.sys.platform", "win32"):
+                resolved = find_executable("claude", {"PATH": str(bin_dir)})
+
+        self.assertIsNone(resolved)
+
+    def test_find_executable_prefers_codex_cmd_on_windows(self) -> None:
+        with TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            (bin_dir / "codex").write_text("#!/bin/sh\n", encoding="utf-8")
+            (bin_dir / "codex.cmd").write_text("@echo off\r\n", encoding="utf-8")
+
+            with patch("nilo.review_dispatcher.sys.platform", "win32"):
+                resolved = find_executable("codex", {"PATH": str(bin_dir)})
+
+        self.assertEqual(Path(resolved or "").name.casefold(), "codex.cmd")
+
+    def test_run_reviewer_process_converts_oserror_to_dispatch_error(self) -> None:
+        config = ReviewerConfig(
+            name="claude-code",
+            kind="agent",
+            command="claude",
+            args=[],
+            working_directory="{repo_root}",
+            auto_start=True,
+            timeout_seconds=10,
+            startup_timeout_seconds=30,
+            heartbeat_interval_seconds=30,
+            result_format="markdown_review",
+            dispatch_capable=True,
+            capabilities=["review_diff"],
+            env={},
+            persist_prompt_file=True,
+        )
+        resolved = ResolvedCommand(
+            command=["C:\\bin\\claude", "-p"],
+            executable="C:\\bin\\claude",
+            preview="C:\\bin\\claude -p",
+        )
+
+        with patch(
+            "nilo.review_dispatcher.subprocess.run",
+            side_effect=OSError("[WinError 193] %1 is not a valid Win32 application"),
+        ):
+            with self.assertRaises(DispatchError) as raised:
+                run_reviewer_process(config, Path.cwd(), {}, resolved)
+
+        self.assertEqual(raised.exception.stage, "reviewer_process_start")
+        self.assertEqual(raised.exception.next_action["type"], "fix_reviewer_command")
+        self.assertEqual(raised.exception.next_action["reviewer"], "claude-code")
+        self.assertIn("WinError 193", raised.exception.stderr)
 
     def test_command_not_found_records_command_resolution_failure(self) -> None:
         with TemporaryDirectory() as directory:
