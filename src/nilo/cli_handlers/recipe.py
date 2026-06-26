@@ -8,9 +8,10 @@ from typing import Any
 
 from ..cli_support import make_id
 from ..failure import deterministic_id
-from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json, resolve_next_patch_version
+from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json
 from ..store import Store
 from ..timeutil import now_iso
+from ..version_advisor import advise_version_bump
 
 
 def cmd_recipe_list(args: argparse.Namespace) -> None:
@@ -173,9 +174,9 @@ def _recipe_variables(source: RecipeSource, project_id: str, raw_vars: list[str]
         elif name in values:
             values[name] = _coerce_variable(name, str(values[name]), spec)
         elif source.name == "release" and name == "target_version":
-            resolution = resolve_next_patch_version(project_root)
+            resolution = advise_version_bump(project_root)
             if resolution.get("resolved"):
-                values[name] = _coerce_variable(name, str(resolution["value"]), spec)
+                values[name] = _coerce_variable(name, str(resolution["recommended_version"]), spec)
                 messages.extend(_release_target_version_resolved_messages(resolution))
             elif spec.get("required"):
                 raise SystemExit(_release_target_version_unresolved_message(resolution))
@@ -191,30 +192,59 @@ def _recipe_variables(source: RecipeSource, project_id: str, raw_vars: list[str]
 
 def _release_target_version_resolved_messages(resolution: dict[str, Any]) -> list[str]:
     latest_tag = resolution.get("latest_tag") or "なし"
-    return [
+    messages = [
         "target_version が未指定です。",
         f"現在バージョン: {resolution.get('current_version', '')}",
         f"最新タグ: {latest_tag}",
-        f"推定 target_version: {resolution['value']}",
-        f"理由: {resolution.get('reason', '')}",
-        "この値を使って release レシピを続行します。",
+        f"候補: patch {resolution.get('patch_candidate', '')}, minor {resolution.get('minor_candidate', '')}",
+        f"推奨: {resolution.get('recommended_version', '')} ({resolution.get('recommended_bump_type', '')})",
+        "理由:",
     ]
+    for reason in resolution.get("reasons", []):
+        messages.append(f"- {reason}")
+    messages.extend([
+        "この値を使って release レシピを続行します。",
+    ])
+    return messages
 
 
 def _release_target_version_unresolved_message(resolution: dict[str, Any]) -> str:
     current = resolution.get("current_version") or "不明"
     latest = resolution.get("latest_tag") or "なし"
     example_base = current if current != "不明" else "0.1.9"
-    example = bump_patch(example_base) or "0.1.10"
-    return (
-        "target_version を自動推定できませんでした。\n"
-        f"現在バージョン: {current}\n"
-        f"最新タグ: {latest}\n"
-        f"理由: {resolution.get('reason', 'unknown')}\n\n"
-        "target_version を明示して再実行してください。\n"
-        "例:\n"
-        f"nilo recipe run release --project nilo --var target_version={example}"
+    patch_candidate = resolution.get("patch_candidate") or bump_patch(example_base) or "0.1.10"
+    minor_candidate = resolution.get("minor_candidate") or ""
+    recommended_version = resolution.get("recommended_version") or patch_candidate
+    bump_type = resolution.get("recommended_bump_type") or "patch"
+    lines = [
+        "target_version が未指定です。",
+        "target_version を自動採用できませんでした。",
+        f"現在バージョン: {current}",
+        f"最新タグ: {latest}",
+        "",
+    ]
+    if minor_candidate:
+        lines.extend(["候補:", f"- patch: {patch_candidate}", f"- minor: {minor_candidate}", ""])
+    lines.extend([f"推奨: {recommended_version} ({bump_type})", "", "理由:"])
+    reasons = resolution.get("reasons") or [resolution.get("reason", "unknown")]
+    for reason in reasons:
+        lines.append(f"- {reason}")
+    warnings = resolution.get("warnings") or []
+    if warnings:
+        lines.extend(["", "警告:"])
+        for warning in warnings:
+            lines.append(f"- {warning}")
+    lines.extend(
+        [
+            "",
+            "推奨で進める場合:",
+            f"nilo recipe run release --project nilo --var target_version={recommended_version}",
+            "",
+            "patch で進める場合:",
+            f"nilo recipe run release --project nilo --var target_version={patch_candidate}",
+        ]
     )
+    return "\n".join(lines)
 
 def _coerce_variable(name: str, value: str, spec: dict[str, Any]) -> Any:
     var_type = spec.get("type", "string")

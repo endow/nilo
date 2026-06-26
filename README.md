@@ -159,6 +159,29 @@ README 更新用のレシピで進めて。
 
 必要な場合だけ、レシピはプロジェクト内の `.nilo/recipes/` に保存されます。
 
+### release recipe のバージョン提案
+
+release recipe は、`target_version` が未指定の場合、現在バージョンと最新 git tag から次の候補を出します。
+
+小さな修正だけなら patch version を候補にします。
+
+```bash
+0.1.9 -> 0.1.10
+```
+
+CLI 追加、DB schema / migration、recipe 変更、AI向け出力、roadmap / review / failure log など主要機能に関わる変更がある場合は、minor version を推奨します。
+
+```bash
+0.1.9 -> 0.2.0
+```
+
+minor が推奨される場合、Nilo は理由と再実行コマンドを表示します。
+明示的に `target_version` を指定した場合、その値は上書きされません。
+
+```bash
+nilo recipe run release --project nilo --var target_version=0.2.0
+```
+
 ## オーバードライブモード
 
 オーバードライブモードは、受け入れ済みのロードマップ項目に沿って、AI エージェントの作業を連続して進めるためのモードです。

@@ -17,12 +17,12 @@ from unittest.mock import patch
 from nilo.backup import BackupError
 from nilo.cli import git_changed_files, handson_language, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
-from nilo.recipe import resolve_next_patch_version
 from nilo.roadmap_render import render_human_roadmap_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
+from nilo.version_advisor import advise_version_bump
 
 LEGACY_LEARNING_TABLES = {
     "derived_rules",
@@ -102,7 +102,7 @@ class CliTests(unittest.TestCase):
     def init_git_with_tags(self, root: Path, tags: list[str]) -> None:
         subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         root.joinpath("tracked.txt").write_text("tracked\n", encoding="utf-8")
-        subprocess.run(["git", "add", "tracked.txt"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         subprocess.run(
             ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"],
             cwd=root,
@@ -113,6 +113,20 @@ class CliTests(unittest.TestCase):
         )
         for tag in tags:
             subprocess.run(["git", "tag", tag], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def commit_file_change(self, root: Path, path: str, body: str, message: str) -> None:
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+        subprocess.run(["git", "add", path], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", message],
+            cwd=root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
     def test_recipe_list_resolves_project_user_builtin_precedence(self) -> None:
         with TemporaryDirectory() as directory:
@@ -943,11 +957,11 @@ variables:
             body = output.getvalue()
             self.assertIn("現在バージョン: 0.1.9", body)
             self.assertIn("最新タグ: v0.1.9", body)
-            self.assertIn("推定 target_version: 0.1.10", body)
+            self.assertIn("推奨: 0.1.10 (patch)", body)
             self.assertIn("title: Release 0.1.10", body)
             self.assertNotIn("どの target_version", body)
 
-    def test_release_recipe_infers_target_version_without_semver_tag(self) -> None:
+    def test_release_recipe_requires_explicit_target_version_without_semver_tag(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self.write_pyproject_version(root, "0.1.9")
@@ -955,17 +969,15 @@ variables:
             previous_cwd = Path.cwd()
             try:
                 os.chdir(root)
-                output = io.StringIO()
-                with redirect_stdout(output):
+                with self.assertRaises(SystemExit) as raised:
                     main(["recipe", "run", "release", "--project", root.name, "--dry-run"])
             finally:
                 os.chdir(previous_cwd)
 
-            body = output.getvalue()
+            body = str(raised.exception)
             self.assertIn("最新タグ: なし", body)
-            self.assertIn("推定 target_version: 0.1.10", body)
-            self.assertIn("理由: no semver tag found; based on current version", body)
-            self.assertIn("この値を使って release レシピを続行します。", body)
+            self.assertIn("推奨: 0.1.10 (patch)", body)
+            self.assertIn("nilo recipe run release --project nilo --var target_version=0.1.10", body)
 
     def test_release_recipe_requires_explicit_target_version_when_current_and_tag_mismatch(self) -> None:
         with TemporaryDirectory() as directory:
@@ -981,33 +993,10 @@ variables:
                 os.chdir(previous_cwd)
 
             body = str(raised.exception)
-            self.assertIn("target_version を自動推定できませんでした。", body)
-            self.assertIn("理由: current version 0.1.9 does not match latest tag v0.1.8", body)
-            self.assertIn("target_version を明示して再実行してください。", body)
+            self.assertIn("target_version を自動採用できませんでした。", body)
+            self.assertIn("current version and latest tag do not match", body)
             self.assertIn("nilo recipe run release --project nilo --var target_version=0.1.10", body)
             self.assertNotIn("どの target_version", body)
-
-    def test_release_next_patch_resolver_rejects_existing_next_tag(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.write_pyproject_version(root, "0.1.9")
-            with patch("nilo.recipe.read_latest_semver_tag", return_value="v0.1.9"), patch("nilo.recipe.existing_release_tag", return_value="v0.1.10"):
-                result = resolve_next_patch_version(root)
-
-            self.assertFalse(result["resolved"])
-            self.assertEqual(result["reason"], "tag already exists: v0.1.10")
-
-    def test_release_next_patch_resolver_rejects_existing_bare_next_tag(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.write_pyproject_version(root, "0.1.9")
-            self.init_git_with_tags(root, ["v0.1.9", "0.1.10"])
-
-            with patch("nilo.recipe.read_latest_semver_tag", return_value="v0.1.9"):
-                result = resolve_next_patch_version(root)
-
-            self.assertFalse(result["resolved"])
-            self.assertEqual(result["reason"], "tag already exists: 0.1.10")
 
     def test_release_recipe_explicit_target_version_is_not_overwritten(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1025,7 +1014,130 @@ variables:
 
             body = output.getvalue()
             self.assertIn("title: Release 0.2.0", body)
-            self.assertNotIn("推定 target_version", body)
+            self.assertNotIn("推奨:", body)
+
+    def test_version_advisor_patch_only_change_recommends_patch(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "tests/test_upgrade.py", "def test_upgrade():\n    pass\n", "fix upgrade test")
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["patch_candidate"], "0.1.10")
+            self.assertEqual(advice["minor_candidate"], "0.2.0")
+            self.assertEqual(advice["recommended_version"], "0.1.10")
+            self.assertEqual(advice["recommended_bump_type"], "patch")
+            self.assertIn(advice["confidence"], {"high", "medium"})
+
+    def test_version_advisor_cli_change_recommends_minor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "src/nilo/cli_parsers/failure.py", "def register():\n    pass\n", "add failure cli")
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["recommended_version"], "0.2.0")
+            self.assertEqual(advice["recommended_bump_type"], "minor")
+            self.assertTrue(any("CLI" in reason for reason in advice["reasons"]))
+
+    def test_version_advisor_db_schema_change_recommends_minor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "src/nilo/store.py", "SQL = 'ALTER TABLE tasks ADD COLUMN x TEXT'\n", "add migration")
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["recommended_bump_type"], "minor")
+            self.assertTrue(any("DB schema" in reason for reason in advice["reasons"]))
+
+    def test_version_advisor_recipe_change_recommends_minor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "src/nilo/cli_handlers/recipe.py", "def run_recipe():\n    pass\n", "change recipe behavior")
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["recommended_bump_type"], "minor")
+            self.assertTrue(any("Recipe" in reason for reason in advice["reasons"]))
+
+    def test_version_advisor_docs_only_recommends_patch(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "README.md", "docs\n", "docs update")
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["recommended_bump_type"], "patch")
+
+    def test_version_advisor_docs_plus_src_user_facing_change_recommends_minor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "README.md", "new workflow\n", "docs workflow")
+            self.commit_file_change(root, "src/nilo/cli_handlers/workflow.py", "TEXT = 'status --ai runtime instruction'\n", "add ai workflow")
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["recommended_bump_type"], "minor")
+            self.assertTrue(any("Documentation" in reason for reason in advice["reasons"]))
+            self.assertTrue(any("AI-facing" in reason for reason in advice["reasons"]))
+
+    def test_version_advisor_current_version_and_latest_tag_mismatch_does_not_auto_resolve(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.8"])
+
+            advice = advise_version_bump(root)
+
+            self.assertEqual(advice["confidence"], "low")
+            self.assertTrue(advice["requires_explicit_confirmation"])
+            self.assertFalse(advice["resolved"])
+
+    def test_version_advisor_existing_recommended_tag_blocks_auto_adoption(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "src/nilo/cli_handlers/recipe.py", "def run_recipe():\n    pass\n", "change recipe behavior")
+            with patch("nilo.version_advisor.existing_release_tag", side_effect=lambda _cwd, version: "v0.2.0" if version == "0.2.0" else ""):
+                advice = advise_version_bump(root)
+
+            self.assertIn("tag already exists: v0.2.0", advice["warnings"])
+            self.assertFalse(advice["resolved"])
+
+    def test_release_recipe_minor_advice_output_does_not_ask_question(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            self.commit_file_change(root, "src/nilo/cli_handlers/recipe.py", "def run_recipe():\n    pass\n", "change recipe behavior")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaises(SystemExit) as raised:
+                    main(["recipe", "run", "release", "--project", root.name, "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = str(raised.exception)
+            self.assertIn("推奨: 0.2.0 (minor)", body)
+            self.assertIn("Recipe behavior changed", body)
+            self.assertIn("nilo recipe run release --project nilo --var target_version=0.2.0", body)
+            self.assertNotIn("どちらにしますか", body)
+            self.assertNotIn("どの target_version", body)
+            self.assertNotIn("進めますか？", body)
 
     def test_recipe_run_allows_declared_project_id_without_var(self) -> None:
         with TemporaryDirectory() as directory:

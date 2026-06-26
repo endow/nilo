@@ -114,57 +114,6 @@ def recipe_to_json(data: dict[str, list[RecipeSource]], include_all: bool = Fals
     return json.dumps([source.to_dict() for source in data[key]], ensure_ascii=False, indent=2)
 
 
-def resolve_next_patch_version(cwd: Path) -> dict[str, Any]:
-    current_version = read_project_version(cwd)
-    latest_tag = read_latest_semver_tag(cwd)
-
-    if not current_version:
-        return {"resolved": False, "reason": "current version not found", "current_version": "", "latest_tag": latest_tag or ""}
-    if not SEMVER_PATTERN.match(current_version):
-        return {
-            "resolved": False,
-            "reason": f"current version is not SemVer: {current_version}",
-            "current_version": current_version,
-            "latest_tag": latest_tag or "",
-        }
-
-    if not latest_tag:
-        return {
-            "resolved": True,
-            "value": bump_patch(current_version),
-            "reason": "no semver tag found; based on current version",
-            "current_version": current_version,
-            "latest_tag": "",
-        }
-
-    latest_tag_version = strip_v_prefix(latest_tag)
-    if latest_tag_version != current_version:
-        return {
-            "resolved": False,
-            "reason": f"current version {current_version} does not match latest tag {latest_tag}",
-            "current_version": current_version,
-            "latest_tag": latest_tag,
-        }
-
-    next_version = bump_patch(current_version)
-    existing_next_tag = existing_release_tag(cwd, next_version)
-    if existing_next_tag:
-        return {
-            "resolved": False,
-            "reason": f"tag already exists: {existing_next_tag}",
-            "current_version": current_version,
-            "latest_tag": latest_tag,
-        }
-
-    return {
-        "resolved": True,
-        "value": next_version,
-        "reason": f"current version and latest tag are {current_version}",
-        "current_version": current_version,
-        "latest_tag": latest_tag,
-    }
-
-
 def read_project_version(cwd: Path) -> str:
     pyproject = cwd / "pyproject.toml"
     if pyproject.exists():
@@ -185,28 +134,6 @@ def read_project_version(cwd: Path) -> str:
         if match:
             return match.group(1).strip()
     return ""
-
-
-def read_latest_semver_tag(cwd: Path) -> str:
-    completed = subprocess.run(
-        ["git", "tag", "--list"],
-        cwd=cwd,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if completed.returncode != 0:
-        return ""
-    tags: list[tuple[tuple[int, int, int], str]] = []
-    for raw in completed.stdout.splitlines():
-        tag = raw.strip()
-        match = SEMVER_PATTERN.match(tag)
-        if match:
-            tags.append(((int(match.group(1)), int(match.group(2)), int(match.group(3))), tag))
-    if not tags:
-        return ""
-    return sorted(tags, key=lambda item: item[0])[-1][1]
 
 
 def strip_v_prefix(value: str) -> str:

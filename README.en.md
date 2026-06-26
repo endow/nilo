@@ -380,6 +380,16 @@ The storage format is handled by the agent. When needed, recipes are saved under
 
 If you want to inspect available recipes directly, use `nilo recipe list`.
 
+### Version Advice In The Release Recipe
+
+When `target_version` is omitted, the release recipe can suggest a patch or minor bump from the current version, latest git tag, and changed files.
+
+Small fixes usually suggest a patch bump.
+
+User-facing changes such as CLI behavior, DB migrations, recipes, AI-facing output, roadmap/review/failure workflows, or documentation for new workflows may suggest a minor bump.
+
+Explicit `target_version` values are never overwritten.
+
 ## Developer Notes
 
 Use `--help` for CLI details:
