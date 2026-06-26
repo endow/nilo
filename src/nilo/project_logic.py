@@ -73,6 +73,18 @@ def contains_large_work_keyword(haystack: str, keywords: tuple[str, ...]) -> boo
     return False
 
 
+def count_large_work_keywords(haystack: str, keywords: tuple[str, ...]) -> int:
+    count = 0
+    for keyword in keywords:
+        lowered = keyword.lower()
+        if lowered.isascii() and lowered.replace("-", "").replace("_", "").isalnum():
+            if re.search(rf"(?<![A-Za-z0-9_-]){re.escape(lowered)}(?![A-Za-z0-9_-])", haystack):
+                count += 1
+        elif lowered in haystack:
+            count += 1
+    return count
+
+
 def git_commit_log(cwd: Path, base_commit: str, latest_head: str) -> list[dict]:
     from .cli import git_commit_log as cli_git_commit_log
 
@@ -616,16 +628,32 @@ def task_looks_like_large_work(task: dict) -> bool:
     acceptance = task.get("acceptance_criteria") or []
     description = task.get("description") or ""
     haystack = "\n".join([task.get("title") or "", description, "\n".join(acceptance)]).lower()
-    strong_keyword = contains_large_work_keyword(haystack, LARGE_WORK_STRONG_KEYWORDS)
+    strong_keyword_count = count_large_work_keywords(haystack, LARGE_WORK_STRONG_KEYWORDS)
     weak_keyword = contains_large_work_keyword(haystack, LARGE_WORK_WEAK_KEYWORDS)
+    high_caution = task.get("risk_level") == "high" or task.get("requires_understanding_check")
+    many_acceptance_items = len(acceptance) >= 3
+    very_many_acceptance_items = len(acceptance) >= 5
+    long_description = len(description) >= 400
+    very_long_description = len(description) >= 800
 
-    if task.get("risk_level") == "high" or task.get("requires_understanding_check"):
+    if very_many_acceptance_items or very_long_description:
         return True
-    if len(acceptance) >= 3 or len(description) >= 400:
-        return True
-    if strong_keyword:
-        return True
-    return weak_keyword and (len(acceptance) >= 2 or len(description) >= 160)
+
+    breadth_signals = 0
+    if strong_keyword_count >= 1:
+        breadth_signals += 1
+    if strong_keyword_count >= 2:
+        breadth_signals += 1
+    if weak_keyword:
+        breadth_signals += 1
+    if high_caution:
+        breadth_signals += 1
+    if many_acceptance_items:
+        breadth_signals += 1
+    if long_description:
+        breadth_signals += 1
+
+    return breadth_signals >= 3
 
 
 def large_work_next_actions(task: dict, status: str) -> list[str]:

@@ -1329,7 +1329,8 @@ variables:
                 status_body = status_with_report.getvalue()
                 self.assertIn("証跡: 提出あり (present)", status_body)
                 self.assertIn("作業規模の判定:", status_body)
-                self.assertIn("複数モジュール", status_body)
+                self.assertIn("複数ファイルだけでは roadmap 扱いにせず", status_body)
+                self.assertIn("複数機能・複数実装トラック", status_body)
                 self.assertIn("CLI", status_body)
                 self.assertIn("roadmap", status_body)
 
@@ -2894,6 +2895,88 @@ variables:
             self.assertIn("作業指示を生成してください。", body)
             self.assertNotIn("roadmap discuss", body)
             self.assertNotIn("大きな作業の可能性", body)
+
+    def test_next_allows_coherent_bug_fix_with_multiple_file_references(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_bug_fix",
+                        "--title",
+                        "Fix report import path handling",
+                        "--description",
+                        "Fix one coherent bug where report import normalizes paths inconsistently across parser, handler, and tests.",
+                        "--acceptance",
+                        "Report import accepts the same path in parser and handler flows",
+                        "--acceptance",
+                        "Focused tests cover the regression",
+                        "--risk",
+                        "medium",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("作業指示を生成してください。", body)
+            self.assertNotIn("roadmap discuss", body)
+            self.assertNotIn("大きな作業の可能性", body)
+
+    def test_next_routes_multi_feature_work_with_broad_roadmap_signals(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_multi_feature",
+                        "--title",
+                        "Implement CLI roadmap MCP workflow updates",
+                        "--description",
+                        "Add a multi-feature workflow that changes CLI routing, roadmap state transitions, MCP identity output, and operator guidance.",
+                        "--acceptance",
+                        "CLI commands expose the new workflow",
+                        "--acceptance",
+                        "Roadmap state and next actions reflect the workflow",
+                        "--acceptance",
+                        "MCP identity responses expose the same state",
+                        "--risk",
+                        "medium",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("roadmap discuss", body)
+            self.assertIn("大きな作業の可能性", body)
+
+    def test_help_ai_describes_higher_roadmap_threshold(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main(["help", "ai"])
+        body = output.getvalue()
+        self.assertIn("A coherent bug fix can proceed as a normal task even when it touches several files.", body)
+        self.assertIn("changes DB schema or migrations with broad data or compatibility impact", body)
+        self.assertIn("adds or changes CLI commands together with broader workflow behavior", body)
 
     def test_project_status_allows_clean_verification_task_completion_without_human_prompt(self) -> None:
         with TemporaryDirectory() as directory:

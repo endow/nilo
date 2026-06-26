@@ -173,7 +173,8 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
     lines.extend(f"- {human_next_action_text(action)}" for action in actions) if actions else lines.append("- なし")
     lines.append("作業規模の判定:")
     lines.append("- 小さく明確な修正は通常 task として進める。")
-    lines.append("- 複数モジュール、DB schema、CLI、AI向け出力、docs/tests を含む作業は roadmap を先に使う。")
+    lines.append("- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。")
+    lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を先に使う。")
     return "\n".join(lines)
 
 
