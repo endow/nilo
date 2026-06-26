@@ -316,6 +316,14 @@ Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
 - MCP は通常入口ではない。必要な連携場面でだけ使う。
 
+MCP identity guard:
+- MCP tool が呼べる場合でも、それだけで正しい Nilo 状態とは判断しない。
+- MCP を使う前に identity の repository / project / git_root / db_path が現在作業中のリポジトリと一致しているか確認する。
+- `expected_project` は通常 repository directory name を渡す repository identity guard であり、DB 内の任意 project id ではない。
+- 不一致時の `repository_mismatch` は通常 status payload を返さない。
+- 一致しない場合はその MCP を使わず、人間に質問せず CLI fallback を使う。
+- fallback: 対象 repository の作業ディレクトリで `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
+
 大きな作業の扱い:
 - 実装前に、その指示が小さい作業か大きい作業かを判定する。
 - 小さく明確な作業だけ、通常 task として進める。

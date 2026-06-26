@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from ..mcp_identity import mcp_identity
 from ..mcp_server import call_tool, serve_stdio
 
 
@@ -16,7 +17,7 @@ def cmd_mcp_serve(args: argparse.Namespace) -> None:
 
 def cmd_mcp_doctor(args: argparse.Namespace) -> None:
     result = call_tool("mcp_doctor", {"project_id": args.project}, args.db)
-    result["db_path"] = str(args.db) if args.db else "default"
+    result["db_path"] = result.get("identity", {}).get("db_path", str(args.db) if args.db else "default")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -181,6 +182,7 @@ def cmd_mcp_ping(args: argparse.Namespace) -> None:
         "ok": True,
         "server": initialize_response["result"]["serverInfo"],
         "protocolVersion": initialize_response["result"]["protocolVersion"],
+        "identity": mcp_identity(Path.cwd(), args.db),
         "tool_count": len(tools),
         "tool_names": [tool["name"] for tool in tools],
         "transcript": transcript,

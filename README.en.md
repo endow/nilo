@@ -288,6 +288,22 @@ Nilo is not tied to a specific AI agent. Codex, Claude Code, ChatGPT, local LLMs
 
 MCP lets an AI agent read Nilo state and write verification or review results through conversation tools.
 
+### MCP identity guard
+
+A callable Nilo MCP server is not necessarily serving the current repository.
+
+Nilo exposes the MCP identity: repository, project, git root, and DB path. If the identity does not match the current working repository, do not use that MCP server for the task. Use the local CLI from the target repository instead.
+The MCP tool `expected_project` parameter is a repository identity guard, usually the repository directory name, not an arbitrary Nilo DB project id.
+On mismatch, tools return `ok: false` and `error: "repository_mismatch"` without the normal status payload.
+
+```bash
+nilo mcp doctor
+nilo status --ai
+nilo next
+```
+
+Callable does not mean correct for the current repository.
+
 `nilo init` writes runtime instructions to local files rather than tracked files such as `CLAUDE.md` or `AGENTS.md`:
 
 - Claude Code: `CLAUDE.local.md`

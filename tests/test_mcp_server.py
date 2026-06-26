@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.cli import main
+from nilo.mcp_identity import identity_matches_expected, mcp_identity
 from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, handle_request
 from nilo.review_dispatcher import find_executable
 from nilo.store import JSON_COLUMNS, Store
@@ -20,6 +21,69 @@ from nilo.timeutil import now_iso
 
 
 class McpServerTests(unittest.TestCase):
+    def test_mcp_identity_returns_current_repository_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "repo_identity"
+            root.mkdir()
+            subprocess.run(["git", "init"], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            db = root / ".nilo" / "nilo.db"
+            db.parent.mkdir()
+            db.touch()
+
+            previous_db = os.environ.pop("NILO_DB", None)
+            try:
+                identity = mcp_identity(root, db)
+                default_identity = mcp_identity(root)
+            finally:
+                if previous_db is not None:
+                    os.environ["NILO_DB"] = previous_db
+
+        self.assertEqual(identity["git_root"], str(root.resolve()))
+        self.assertEqual(identity["db_path"], str(db.resolve()))
+        self.assertEqual(default_identity["db_path"], str(db.resolve()))
+        self.assertEqual(identity["repository_name"], "repo_identity")
+        self.assertEqual(identity["project_id"], "repo_identity")
+        self.assertIn("git_head", identity)
+
+    def test_identity_matches_expected_returns_true_for_matching_project(self) -> None:
+        ok, reasons = identity_matches_expected({"project_id": "Other", "repository_name": "Chiffon", "git_root": ""}, expected_project="Chiffon")
+
+        self.assertTrue(ok)
+        self.assertEqual(reasons, [])
+
+    def test_identity_matches_expected_returns_false_for_mismatched_project(self) -> None:
+        ok, reasons = identity_matches_expected({"project_id": "nilo", "repository_name": "nilo", "git_root": ""}, expected_project="Chiffon")
+
+        self.assertFalse(ok)
+        self.assertIn("expected project Chiffon", reasons[0])
+        self.assertIn("nilo", reasons[0])
+
+    def test_identity_matches_expected_detects_git_root_mismatch(self) -> None:
+        ok, reasons = identity_matches_expected({"project_id": "nilo", "repository_name": "nilo", "git_root": "/repo/nilo"}, expected_git_root="/repo/Chiffon")
+
+        self.assertFalse(ok)
+        self.assertIn("expected git root", reasons[0])
+        self.assertIn("MCP git root", reasons[0])
+
+    def test_mcp_identity_uses_bounded_git_metadata_calls(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / ".nilo" / "nilo.db"
+            with patch(
+                "nilo.mcp_identity.git_output",
+                side_effect=[
+                    (0, str(root), ""),
+                    (0, "abc123", ""),
+                    (0, " M src/nilo/mcp_identity.py", ""),
+                ],
+            ) as git_output:
+                identity = mcp_identity(root, db)
+
+        self.assertEqual(identity["git_root"], str(root.resolve()))
+        self.assertEqual(identity["git_head"], "abc123")
+        self.assertTrue(identity["working_tree_dirty"])
+        self.assertEqual(git_output.call_count, 3)
+
     def test_mcp_stdio_hello_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -773,10 +837,18 @@ class McpServerTests(unittest.TestCase):
 
         cli_result = json.loads(output.getvalue())
         self.assertTrue(tool_result["ok"])
+        self.assertIn("identity", tool_result)
+        self.assertIn("cwd", tool_result["identity"])
+        self.assertIn("git_root", tool_result["identity"])
+        self.assertIn("db_path", tool_result["identity"])
+        self.assertIn("project_id", tool_result["identity"])
+        self.assertIn("repository_name", tool_result["identity"])
         self.assertTrue(tool_result["expected_safe_tools_present"])
         self.assertEqual(tool_result["exposed_human_gated_tools"], [])
         self.assertEqual(cli_result["project_id"], "project_test")
-        self.assertEqual(cli_result["db_path"], str(db))
+        self.assertEqual(cli_result["db_path"], str(db.resolve()))
+        self.assertIn("identity", cli_result)
+        self.assertEqual(cli_result["identity"]["db_path"], str(db.resolve()))
         self.assertEqual(tool_result["claude_code_reviewer"]["reason"], "heartbeat_only")
         self.assertFalse(tool_result["claude_code_reviewer"]["ready"])
         reviewers = {row["reviewer"]: row for row in tool_result["reviewers"]}
@@ -806,6 +878,44 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["project_name"], "Nilo")
         self.assertEqual(result["active_tasks"], [])
         self.assertIn("next_actions", result)
+
+    def test_mcp_ping_response_includes_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                result = call_tool("mcp_ping", {}, db)
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["server"]["name"], "nilo")
+        self.assertIn("identity", result)
+        self.assertEqual(result["identity"]["db_path"], str(db.resolve()))
+
+    def test_mcp_expected_project_mismatch_returns_repository_mismatch(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                result = call_tool("get_status", {"project_id": "project_test", "expected_project": "Chiffon"}, db)
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "repository_mismatch")
+        self.assertEqual(result["expected"]["project"], "Chiffon")
+        self.assertEqual(result["fallback"], "CLI fallback")
+        self.assertEqual(result["fallback_commands"], ["nilo status --ai", "nilo next"])
+        self.assertIn("actual", result)
+        self.assertNotIn("project", result)
+        self.assertNotIn("tasks", result)
 
     def test_todo_mcp_tools_create_triage_start_and_promote_with_status_guards(self) -> None:
         with TemporaryDirectory() as directory:

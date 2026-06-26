@@ -136,6 +136,24 @@ Nilo の状態を見てから進めて。
 
 MCP や CLI が使えない場合は、代替手段で完了扱いにせず、Nilo を読めないことを人間に報告する運用を想定しています。
 
+### MCP identity guard
+
+Nilo MCP が呼べる場合でも、それが現在の repository の Nilo DB を見ているとは限りません。
+
+Nilo MCP は、参照中の repository / project / git root / DB path を identity として表示します。
+
+identity が現在の作業 repository と一致しない場合、その MCP は使わず、対象 repository の作業ディレクトリで CLI を使います。
+MCP tool の `expected_project` は Nilo DB 内の任意の project id ではなく、通常は repository directory name として扱う repository identity guard です。
+不一致時は `ok: false`、`error: "repository_mismatch"` を返し、通常の status payload は返しません。
+
+```bash
+nilo mcp doctor
+nilo status --ai
+nilo next
+```
+
+MCP が callable であることと、現在の repository に対して正しいことは別です。
+
 ## レシピ
 
 レシピは、よくある作業を同じやり方で始めるための仕組みです。

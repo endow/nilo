@@ -12,6 +12,7 @@ from .agent_report_import import import_agent_report
 from .ai_context import project_ai_context
 from .cli_support import make_id
 from .human_status import human_next_action_text, human_task_status
+from .mcp_identity import identity_matches_expected, mcp_identity, repository_mismatch_response
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from .review_dispatcher import DispatchError, dispatch_review
 from .reviewer_registry import (
@@ -67,6 +68,17 @@ def text_tool_result(data: Any, is_error: bool = False) -> dict:
 
 
 def json_schema(properties: dict[str, dict], required: list[str]) -> dict:
+    properties = {
+        **properties,
+        "expected_project": {
+            "type": "string",
+            "description": "Optional repository guard. This is the expected repository/project identity, usually the repository directory name. If set, reject the call unless MCP identity project_id or repository_name matches.",
+        },
+        "expected_git_root": {
+            "type": "string",
+            "description": "Optional repository guard. If set, reject the call unless the MCP identity git root matches.",
+        },
+    }
     return {
         "type": "object",
         "properties": properties,
@@ -256,6 +268,11 @@ TOOLS = [
         "name": "mcp_doctor",
         "description": "Diagnose the MCP tool surface and project readability without changing state.",
         "inputSchema": json_schema({"project_id": {"type": "string"}}, ["project_id"]),
+    },
+    {
+        "name": "mcp_ping",
+        "description": "Return MCP server liveness and repository identity without reading project state.",
+        "inputSchema": json_schema({}, []),
     },
     {
         "name": "prepare_reviewer",
@@ -1018,6 +1035,7 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
         )
     return {
         "ok": not exposed_human_gated,
+        "identity": mcp_identity(Path.cwd(), store.path),
         "project_id": project_id,
         "project_readable": True,
         "tool_count": len(tool_names),
@@ -1057,6 +1075,14 @@ def mcp_doctor(store: Store, arguments: dict) -> dict:
         "claude_code_reviewer": reviewer_prepare_status(store, "claude-code"),
         "work_state": summary["work_state"],
         "roadmap_position": summary["roadmap_position"],
+    }
+
+
+def mcp_ping(store: Store, arguments: dict) -> dict:
+    return {
+        "ok": True,
+        "server": {"name": "nilo", "version": __version__},
+        "protocolVersion": PROTOCOL_VERSION,
     }
 
 
@@ -1869,6 +1895,7 @@ TOOL_HANDLERS = {
     "record_verification": mcp_record_verification_run,
     "get_agent_work_context": get_agent_work_context,
     "get_next_step": get_next_step,
+    "mcp_ping": mcp_ping,
     "mcp_doctor": mcp_doctor,
     "prepare_reviewer": prepare_reviewer,
     "submit_agent_report": submit_agent_report,
@@ -1912,7 +1939,16 @@ def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) ->
         raise McpToolError("tool arguments must be an object")
     store = Store(resolve_mcp_db_path(db_path, name, arguments))
     try:
-        return TOOL_HANDLERS[name](store, arguments)
+        identity = mcp_identity(Path.cwd(), store.path)
+        expected_project = optional_string(arguments, "expected_project")
+        expected_git_root = optional_string(arguments, "expected_git_root")
+        matches, _reasons = identity_matches_expected(identity, expected_project, expected_git_root)
+        if not matches:
+            return repository_mismatch_response(identity, expected_project, expected_git_root)
+        result = TOOL_HANDLERS[name](store, arguments)
+        if isinstance(result, dict) and "identity" not in result:
+            result = {**result, "identity": identity}
+        return result
     finally:
         store.close()
 
