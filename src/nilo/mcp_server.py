@@ -355,11 +355,12 @@ TOOLS = [
     },
     {
         "name": "request_task_review",
-        "description": (
-            "Low-level API that only creates a task review request and returns refreshed task context. "
-            "Do not use this for normal AI-to-AI review instructions such as asking Claude or Codex to review; "
-            "use dispatch_review, run_agent_review, or request_and_run_review instead."
-        ),
+        "description": "Low-level: only create request; use dispatch_review for AI review.",
+        "metadata": {
+            "api_level": "low_level",
+            "recommended_for": "manual review handoff only",
+            "prefer_for_ai_review": "dispatch_review",
+        },
         "inputSchema": json_schema(
             {
                 "task_id": {"type": "string"},
@@ -374,13 +375,12 @@ TOOLS = [
     },
     {
         "name": "dispatch_review",
-        "description": (
-            "High-level API for normal AI-to-AI review instructions such as asking Claude or Codex to review. "
-            "This does not merely create a review request: it creates the request, starts the configured reviewer "
-            "process when auto_start=true, claims the review, runs the review, imports the ReviewResult with "
-            "import_review_result semantics, confirms final status, and returns success only when the review_result "
-            "is imported and the review request is completed."
-        ),
+        "description": "High-level: run AI review through request/start/import/confirm.",
+        "metadata": {
+            "api_level": "high_level",
+            "recommended_for": "normal AI-to-AI review",
+            "workflow": "request, start, claim, run, import, confirm",
+        },
         "inputSchema": json_schema(
             {
                 "task_id": {"type": "string"},
@@ -397,7 +397,7 @@ TOOLS = [
     },
     {
         "name": "register_reviewer",
-        "description": "Register or heartbeat an MCP reviewer worker so review requests can be dispatched without launching local AI CLIs.",
+        "description": "Register or heartbeat an MCP reviewer worker.",
         "inputSchema": json_schema(
             {
                 "reviewer": {"type": "string"},
@@ -410,7 +410,7 @@ TOOLS = [
     },
     {
         "name": "claim_next_review",
-        "description": "Claim the next pending review for a registered MCP reviewer and return the review prompt/template.",
+        "description": "Claim the next pending review for a registered MCP reviewer.",
         "inputSchema": json_schema(
             {
                 "reviewer": {"type": "string"},
@@ -421,7 +421,7 @@ TOOLS = [
     },
     {
         "name": "mark_stale_review_requests",
-        "description": "Mark claimed/in-progress review requests stale when their reviewer has not returned a result in time.",
+        "description": "Mark expired claimed review requests stale.",
         "inputSchema": json_schema(
             {
                 "reviewer": {"type": "string"},
@@ -462,7 +462,7 @@ TOOLS = [
     },
     {
         "name": "get_review_status",
-        "description": "Return review requests, results, findings, and finding update history for a task.",
+        "description": "Return review requests, results, and findings for a task.",
         "inputSchema": json_schema({"task_id": {"type": "string"}}, ["task_id"]),
     },
     {
@@ -679,19 +679,15 @@ REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES = {
 
 
 def default_tools() -> list[dict]:
-    return [tool for tool in TOOLS if tool["name"] in DEFAULT_TOOL_NAMES]
+    names = DEFAULT_TOOL_NAMES.union(REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES)
+    return [tool for tool in TOOLS if tool["name"] in names]
 
 
 def review_handoff_tools() -> list[dict]:
     return [tool for tool in TOOLS if tool["name"] in REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES]
 
 
-def tools_for_list_params(params: dict | None) -> list[dict]:
-    params = params or {}
-    context = params.get("context")
-    if context in {"review", "review_handoff", "reviewer", "agent_handoff"}:
-        names = DEFAULT_TOOL_NAMES.union(REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES)
-        return [tool for tool in TOOLS if tool["name"] in names]
+def tools_for_list_params(_params: dict | None) -> list[dict]:
     return default_tools()
 
 

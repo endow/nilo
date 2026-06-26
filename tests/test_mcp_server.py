@@ -785,6 +785,14 @@ class McpServerTests(unittest.TestCase):
                 "record_verification",
                 "request_review",
                 "import_review_result",
+                "register_reviewer",
+                "claim_next_review",
+                "request_task_review",
+                "dispatch_review",
+                "get_review_prompt",
+                "get_review_template",
+                "get_review_status",
+                "mark_stale_review_requests",
             },
         )
         self.assertGreater(response["result"]["advanced_tool_count"], 0)
@@ -794,6 +802,7 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("close_roadmap", names)
         self.assertNotIn("close_roadmap_commitment", names)
         self.assertNotIn("commit_changes", names)
+        self.assertIn("dispatch_review", names)
         tool_by_name = {tool["name"]: tool for tool in tools}
         self.assertEqual(
             tool_by_name["import_review_result"]["metadata"],
@@ -804,8 +813,24 @@ class McpServerTests(unittest.TestCase):
             },
         )
         self.assertIsNot(tool_by_name["import_review_result"]["metadata"], HEADROOM_TOOL_METADATA[0])
+        self.assertEqual(
+            tool_by_name["request_task_review"]["metadata"],
+            {
+                "api_level": "low_level",
+                "recommended_for": "manual review handoff only",
+                "prefer_for_ai_review": "dispatch_review",
+            },
+        )
+        self.assertEqual(
+            tool_by_name["dispatch_review"]["metadata"],
+            {
+                "api_level": "high_level",
+                "recommended_for": "normal AI-to-AI review",
+                "workflow": "request, start, claim, run, import, confirm",
+            },
+        )
 
-    def test_tools_list_exposes_review_handoff_tools_for_review_context(self) -> None:
+    def test_tools_list_exposes_review_handoff_tools_unconditionally(self) -> None:
         response = handle_request(
             {
                 "jsonrpc": "2.0",
@@ -839,7 +864,7 @@ class McpServerTests(unittest.TestCase):
                 "mark_stale_review_requests",
             }.issubset(names)
         )
-        self.assertEqual(response["result"]["default_tool_count"], 5)
+        self.assertEqual(response["result"]["default_tool_count"], 13)
         self.assertEqual(response["result"]["review_handoff_tool_count"], 8)
 
     def test_get_agent_work_context_returns_next_step_and_write_token(self) -> None:

@@ -1366,7 +1366,7 @@ variables:
                 with redirect_stdout(doctor_output):
                     main(["--db", str(db), "doctor", "ai-context", "--project", project_id])
                 doctor_body = doctor_output.getvalue()
-                self.assertIn("mcp_default_tool_count: 5", doctor_body)
+                self.assertIn("mcp_default_tool_count: 13", doctor_body)
                 self.assertIn("mcp_review_handoff_tool_count:", doctor_body)
                 self.assertIn("dispatch_review", doctor_body)
                 self.assertIn("register_reviewer", doctor_body)
