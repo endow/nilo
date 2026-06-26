@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,7 @@ from typing import Any
 RECIPE_VERSION = 1
 RECIPE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
 VARIABLE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+SEMVER_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 REQUIRED_FIELDS = {"schema_version", "name", "title", "summary", "instruction", "acceptance"}
 KNOWN_FIELDS = REQUIRED_FIELDS | {
     "description",
@@ -109,6 +112,130 @@ def discover_recipes(project_root: Path | None = None, user_root: Path | None = 
 def recipe_to_json(data: dict[str, list[RecipeSource]], include_all: bool = False) -> str:
     key = "all_sources" if include_all else "effective_recipes"
     return json.dumps([source.to_dict() for source in data[key]], ensure_ascii=False, indent=2)
+
+
+def resolve_next_patch_version(cwd: Path) -> dict[str, Any]:
+    current_version = read_project_version(cwd)
+    latest_tag = read_latest_semver_tag(cwd)
+
+    if not current_version:
+        return {"resolved": False, "reason": "current version not found", "current_version": "", "latest_tag": latest_tag or ""}
+    if not SEMVER_PATTERN.match(current_version):
+        return {
+            "resolved": False,
+            "reason": f"current version is not SemVer: {current_version}",
+            "current_version": current_version,
+            "latest_tag": latest_tag or "",
+        }
+
+    if not latest_tag:
+        return {
+            "resolved": True,
+            "value": bump_patch(current_version),
+            "reason": "no semver tag found; based on current version",
+            "current_version": current_version,
+            "latest_tag": "",
+        }
+
+    latest_tag_version = strip_v_prefix(latest_tag)
+    if latest_tag_version != current_version:
+        return {
+            "resolved": False,
+            "reason": f"current version {current_version} does not match latest tag {latest_tag}",
+            "current_version": current_version,
+            "latest_tag": latest_tag,
+        }
+
+    next_version = bump_patch(current_version)
+    existing_next_tag = existing_release_tag(cwd, next_version)
+    if existing_next_tag:
+        return {
+            "resolved": False,
+            "reason": f"tag already exists: {existing_next_tag}",
+            "current_version": current_version,
+            "latest_tag": latest_tag,
+        }
+
+    return {
+        "resolved": True,
+        "value": next_version,
+        "reason": f"current version and latest tag are {current_version}",
+        "current_version": current_version,
+        "latest_tag": latest_tag,
+    }
+
+
+def read_project_version(cwd: Path) -> str:
+    pyproject = cwd / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            data = {}
+        version = data.get("project", {}).get("version") if isinstance(data, dict) else None
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+
+    init_file = cwd / "src" / "nilo" / "__init__.py"
+    if init_file.exists():
+        try:
+            match = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]", init_file.read_text(encoding="utf-8"), re.MULTILINE)
+        except OSError:
+            match = None
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def read_latest_semver_tag(cwd: Path) -> str:
+    completed = subprocess.run(
+        ["git", "tag", "--list"],
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ""
+    tags: list[tuple[tuple[int, int, int], str]] = []
+    for raw in completed.stdout.splitlines():
+        tag = raw.strip()
+        match = SEMVER_PATTERN.match(tag)
+        if match:
+            tags.append(((int(match.group(1)), int(match.group(2)), int(match.group(3))), tag))
+    if not tags:
+        return ""
+    return sorted(tags, key=lambda item: item[0])[-1][1]
+
+
+def strip_v_prefix(value: str) -> str:
+    return value[1:] if value.startswith("v") else value
+
+
+def bump_patch(version: str) -> str:
+    match = SEMVER_PATTERN.match(version)
+    if not match:
+        return ""
+    return f"{int(match.group(1))}.{int(match.group(2))}.{int(match.group(3)) + 1}"
+
+
+def existing_release_tag(cwd: Path, version: str) -> str:
+    for tag in (f"v{version}", version):
+        if git_tag_exists(cwd, tag):
+            return tag
+    return ""
+
+
+def git_tag_exists(cwd: Path, tag: str) -> bool:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return completed.returncode == 0
 
 
 def _load_layer(layer: str, directory: Path) -> list[RecipeSource]:

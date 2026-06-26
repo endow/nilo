@@ -17,6 +17,7 @@ from unittest.mock import patch
 from nilo.backup import BackupError
 from nilo.cli import git_changed_files, handson_language, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
+from nilo.recipe import resolve_next_patch_version
 from nilo.roadmap_render import render_human_roadmap_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.store import Store
@@ -91,6 +92,27 @@ class CliTests(unittest.TestCase):
             return {str(row[0]) for row in rows}
         finally:
             conn.close()
+
+    def write_pyproject_version(self, root: Path, version: str) -> None:
+        root.joinpath("pyproject.toml").write_text(
+            f'[project]\nname = "sample"\nversion = "{version}"\n',
+            encoding="utf-8",
+        )
+
+    def init_git_with_tags(self, root: Path, tags: list[str]) -> None:
+        subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        root.joinpath("tracked.txt").write_text("tracked\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"],
+            cwd=root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for tag in tags:
+            subprocess.run(["git", "tag", tag], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def test_recipe_list_resolves_project_user_builtin_precedence(self) -> None:
         with TemporaryDirectory() as directory:
@@ -903,6 +925,107 @@ variables:
                 os.chdir(previous_cwd)
 
             self.assertIn("missing required recipe variable: topic", str(raised.exception))
+
+    def test_release_recipe_infers_target_version_when_current_matches_latest_tag(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["recipe", "run", "release", "--project", root.name, "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = output.getvalue()
+            self.assertIn("現在バージョン: 0.1.9", body)
+            self.assertIn("最新タグ: v0.1.9", body)
+            self.assertIn("推定 target_version: 0.1.10", body)
+            self.assertIn("title: Release 0.1.10", body)
+            self.assertNotIn("どの target_version", body)
+
+    def test_release_recipe_infers_target_version_without_semver_tag(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, [])
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["recipe", "run", "release", "--project", root.name, "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = output.getvalue()
+            self.assertIn("最新タグ: なし", body)
+            self.assertIn("推定 target_version: 0.1.10", body)
+            self.assertIn("理由: no semver tag found; based on current version", body)
+            self.assertIn("この値を使って release レシピを続行します。", body)
+
+    def test_release_recipe_requires_explicit_target_version_when_current_and_tag_mismatch(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.8"])
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaises(SystemExit) as raised:
+                    main(["recipe", "run", "release", "--project", root.name, "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = str(raised.exception)
+            self.assertIn("target_version を自動推定できませんでした。", body)
+            self.assertIn("理由: current version 0.1.9 does not match latest tag v0.1.8", body)
+            self.assertIn("target_version を明示して再実行してください。", body)
+            self.assertIn("nilo recipe run release --project nilo --var target_version=0.1.10", body)
+            self.assertNotIn("どの target_version", body)
+
+    def test_release_next_patch_resolver_rejects_existing_next_tag(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            with patch("nilo.recipe.read_latest_semver_tag", return_value="v0.1.9"), patch("nilo.recipe.existing_release_tag", return_value="v0.1.10"):
+                result = resolve_next_patch_version(root)
+
+            self.assertFalse(result["resolved"])
+            self.assertEqual(result["reason"], "tag already exists: v0.1.10")
+
+    def test_release_next_patch_resolver_rejects_existing_bare_next_tag(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9", "0.1.10"])
+
+            with patch("nilo.recipe.read_latest_semver_tag", return_value="v0.1.9"):
+                result = resolve_next_patch_version(root)
+
+            self.assertFalse(result["resolved"])
+            self.assertEqual(result["reason"], "tag already exists: 0.1.10")
+
+    def test_release_recipe_explicit_target_version_is_not_overwritten(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_pyproject_version(root, "0.1.9")
+            self.init_git_with_tags(root, ["v0.1.9"])
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["recipe", "run", "release", "--project", root.name, "--var", "target_version=0.2.0", "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = output.getvalue()
+            self.assertIn("title: Release 0.2.0", body)
+            self.assertNotIn("推定 target_version", body)
 
     def test_recipe_run_allows_declared_project_id_without_var(self) -> None:
         with TemporaryDirectory() as directory:

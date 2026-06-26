@@ -8,7 +8,7 @@ from typing import Any
 
 from ..cli_support import make_id
 from ..failure import deterministic_id
-from ..recipe import RecipeSource, discover_recipes, recipe_to_json
+from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json, resolve_next_patch_version
 from ..store import Store
 from ..timeutil import now_iso
 
@@ -66,11 +66,14 @@ def cmd_recipe_doctor(args: argparse.Namespace) -> None:
 
 def cmd_recipe_run(args: argparse.Namespace) -> None:
     project = args.project or Path.cwd().name
-    data = discover_recipes(_project_root(project))
+    project_root = _project_root(project)
+    data = discover_recipes(project_root)
     source = _find_recipe(data["effective_recipes"], args.name)
     if not source:
         raise SystemExit(f"recipe not found: {args.name}")
-    rendered = _render_task_fields(source, project, args.var, args.title)
+    rendered, variable_messages = _render_task_fields(source, project, args.var, args.title, project_root)
+    for message in variable_messages:
+        print(message)
     if args.dry_run:
         print("recipe_run: dry-run")
         _print_rendered_task(rendered)
@@ -131,8 +134,8 @@ def _format_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def _render_task_fields(source: RecipeSource, project_id: str, raw_vars: list[str], title_override: str) -> dict[str, Any]:
-    values = _recipe_variables(source, project_id, raw_vars)
+def _render_task_fields(source: RecipeSource, project_id: str, raw_vars: list[str], title_override: str, project_root: Path) -> tuple[dict[str, Any], list[str]]:
+    values, variable_messages = _recipe_variables(source, project_id, raw_vars, project_root)
     data = source.data
     title = _render_string(title_override or data["title"], values)
     instruction = _render_value(data["instruction"], values)
@@ -151,12 +154,13 @@ def _render_task_fields(source: RecipeSource, project_id: str, raw_vars: list[st
     ]:
         if field in data:
             description_parts.extend(["", f"{heading}:", _format_value(_render_value(data[field], values))])
-    return {"title": title, "description": "\n".join(description_parts).rstrip(), "acceptance": acceptance}
+    return {"title": title, "description": "\n".join(description_parts).rstrip(), "acceptance": acceptance}, variable_messages
 
 
-def _recipe_variables(source: RecipeSource, project_id: str, raw_vars: list[str]) -> dict[str, Any]:
+def _recipe_variables(source: RecipeSource, project_id: str, raw_vars: list[str], project_root: Path) -> tuple[dict[str, Any], list[str]]:
     variables = source.data.get("variables") or {}
     values: dict[str, Any] = {"project_id": project_id}
+    messages: list[str] = []
     supplied: dict[str, str] = {}
     for raw in raw_vars:
         key, separator, value = raw.partition("=")
@@ -168,6 +172,13 @@ def _recipe_variables(source: RecipeSource, project_id: str, raw_vars: list[str]
             values[name] = _coerce_variable(name, supplied[name], spec)
         elif name in values:
             values[name] = _coerce_variable(name, str(values[name]), spec)
+        elif source.name == "release" and name == "target_version":
+            resolution = resolve_next_patch_version(project_root)
+            if resolution.get("resolved"):
+                values[name] = _coerce_variable(name, str(resolution["value"]), spec)
+                messages.extend(_release_target_version_resolved_messages(resolution))
+            elif spec.get("required"):
+                raise SystemExit(_release_target_version_unresolved_message(resolution))
         elif "default" in spec:
             values[name] = spec["default"]
         elif spec.get("required"):
@@ -175,8 +186,35 @@ def _recipe_variables(source: RecipeSource, project_id: str, raw_vars: list[str]
     for name, value in supplied.items():
         if name not in variables:
             values[name] = value
-    return values
+    return values, messages
 
+
+def _release_target_version_resolved_messages(resolution: dict[str, Any]) -> list[str]:
+    latest_tag = resolution.get("latest_tag") or "なし"
+    return [
+        "target_version が未指定です。",
+        f"現在バージョン: {resolution.get('current_version', '')}",
+        f"最新タグ: {latest_tag}",
+        f"推定 target_version: {resolution['value']}",
+        f"理由: {resolution.get('reason', '')}",
+        "この値を使って release レシピを続行します。",
+    ]
+
+
+def _release_target_version_unresolved_message(resolution: dict[str, Any]) -> str:
+    current = resolution.get("current_version") or "不明"
+    latest = resolution.get("latest_tag") or "なし"
+    example_base = current if current != "不明" else "0.1.9"
+    example = bump_patch(example_base) or "0.1.10"
+    return (
+        "target_version を自動推定できませんでした。\n"
+        f"現在バージョン: {current}\n"
+        f"最新タグ: {latest}\n"
+        f"理由: {resolution.get('reason', 'unknown')}\n\n"
+        "target_version を明示して再実行してください。\n"
+        "例:\n"
+        f"nilo recipe run release --project nilo --var target_version={example}"
+    )
 
 def _coerce_variable(name: str, value: str, spec: dict[str, Any]) -> Any:
     var_type = spec.get("type", "string")

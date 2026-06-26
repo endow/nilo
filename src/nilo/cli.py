@@ -316,6 +316,11 @@ Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
 - MCP は通常入口ではない。必要な連携場面でだけ使う。
 
+質問抑制:
+- Nilo の出力や状態から安全に一意推定できる不足値は人間に質問しない。
+- release recipe の `target_version` は現在バージョンと最新 git tag が一致する場合、または SemVer tag が無く現在バージョンから一意に決まる場合、次 patch を採用して進める。
+- 質問してよいのは候補が複数、状態矛盾、公開・破壊的操作の直前確認が必要な場合だけ。
+
 詳細は `nilo help ai` を参照する。
 {NILO_BLOCK_END}
 """
