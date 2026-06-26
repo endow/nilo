@@ -1163,6 +1163,8 @@ def prepare_reviewer(store: Store, arguments: dict) -> dict:
 
 
 def get_roadmap_status(store: Store, arguments: dict) -> dict:
+    from .roadmap_render import render_pending_roadmap_plan_lines
+
     summary = project_summary(store, require_string(arguments, "project_id"))
     return {
         "project_id": summary["project_id"],
@@ -1170,6 +1172,11 @@ def get_roadmap_status(store: Store, arguments: dict) -> dict:
         "roadmap_commitments": summary["roadmap_commitments"],
         "closed_roadmap_commitments": summary["closed_roadmap_commitments"],
         "pending_roadmap_revisions": summary["pending_roadmap_revisions"],
+        "pending_roadmap_review_messages": [
+            "\n".join(render_pending_roadmap_plan_lines(revision, "ja"))
+            for revision in summary["pending_roadmap_revisions"]
+        ],
+        "human_next_actions": summary["human_next_actions"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],
         "roadmap_assessments": summary["roadmap_assessments"],

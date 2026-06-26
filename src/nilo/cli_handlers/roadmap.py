@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..cli_support import make_id, read_text_or_exit
 from ..roadmap_render import (
+    render_pending_roadmap_plan_lines,
     render_human_roadmap_markdown,
     render_human_roadmap_summary_markdown,
     render_roadmap_assess_markdown,
@@ -345,6 +346,9 @@ def cmd_roadmap_status(args: argparse.Namespace) -> None:
             for revision in pending_revisions:
                 commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
                 title = commitment["title"] if commitment else "missing commitment"
+                for line in render_pending_roadmap_plan_lines({**revision, "proposed_commitment": commitment or {}}, "ja"):
+                    print(line)
+                print("  内部状態:")
                 print(f"- {revision['id']} -> {revision['proposed_commitment_id']} {title}")
                 if revision.get("source_path"):
                     print(f"  source_path: {revision['source_path']}")

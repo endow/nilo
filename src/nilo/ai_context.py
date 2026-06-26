@@ -175,6 +175,13 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
     lines.append("- 小さく明確な修正は通常 task として進める。")
     lines.append("- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。")
     lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を先に使う。")
+    lines.append("ロードマップ承認待ちの応答ルール:")
+    lines.append("- pending Roadmap / RoadmapProposal / RoadmapRevision をユーザーに内部用語だけで説明しない。")
+    lines.append("- まず「作業が大きいので、先に作業計画を作った」と説明する。")
+    lines.append("- 次に、計画の中身を人間が判断できる形で要約または全文表示する。")
+    lines.append("- 「これで進めてよければ承認してください」と明示する。")
+    lines.append("- 承認後は「この計画をもとに Task 化します」と説明する。")
+    lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
     return "\n".join(lines)
 
 

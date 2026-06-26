@@ -318,6 +318,17 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
         print(f"status: {completion_status(args.actor)}")
         print(f"completed_by: {args.actor}")
         print(f"task_completion: {row['id']}")
+        closed_commitments = c.auto_close_ready_roadmap_commitments(
+            store,
+            task["project_id"],
+            args.actor,
+            f"All linked tasks completed after {args.task}: {args.reason}",
+            task.get("roadmap_commitment_id") or None,
+        )
+        if closed_commitments:
+            print("closed_roadmap_commitments:")
+            for commitment in closed_commitments:
+                print(f"- {commitment['id']} {commitment['title']}")
         completion_warnings = c.recipe_completion_warnings(store, args.task)
         if completion_warnings:
             print("completion_warnings:")

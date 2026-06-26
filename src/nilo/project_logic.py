@@ -130,6 +130,15 @@ def pending_roadmap_revisions(store: Store, project_id: str) -> list[dict]:
     return store.list_where("roadmap_revisions", "project_id=? AND status='pending'", (project_id,))
 
 
+def pending_roadmap_revision_summaries(store: Store, project_id: str) -> list[dict]:
+    revisions = pending_roadmap_revisions(store, project_id)
+    enriched = []
+    for revision in revisions:
+        commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
+        enriched.append({**revision, "proposed_commitment": commitment or {}})
+    return enriched
+
+
 def related_tasks_for_commitment(tasks: list[dict], commitment: dict) -> list[dict]:
     title = commitment["title"].lower()
     commitment_id = commitment["id"]
@@ -356,6 +365,41 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
 
 def roadmap_assessments(store: Store, project_id: str, tasks: list[dict], statuses: dict[str, str]) -> list[dict]:
     return [roadmap_commitment_assessment(store, commitment, tasks, statuses) for commitment in accepted_roadmap_commitments(store, project_id)]
+
+
+def auto_close_ready_roadmap_commitments(
+    store: Store,
+    project_id: str,
+    actor: str,
+    reason: str,
+    commitment_id: str | None = None,
+) -> list[dict]:
+    tasks, statuses = project_tasks_and_statuses(store, project_id)
+    closed = []
+    for commitment in accepted_roadmap_commitments(store, project_id):
+        if commitment_id and commitment["id"] != commitment_id:
+            continue
+        related = related_tasks_for_commitment(tasks, commitment)
+        if not related:
+            continue
+        if any(not is_task_completed_status(statuses[task["id"]]) for task in related):
+            continue
+        assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
+        if not assessment["closure_ready"]:
+            continue
+        closed_at = now_iso()
+        store.update(
+            "roadmap_commitments",
+            commitment["id"],
+            {
+                "status": "closed",
+                "closed_by": actor,
+                "closed_at": closed_at,
+                "closure_reason": reason,
+            },
+        )
+        closed.append({**commitment, "closed_by": actor, "closed_at": closed_at, "closure_reason": reason})
+    return closed
 
 
 def human_roadmap_assessment_status(status: str) -> dict:
@@ -1441,7 +1485,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
         statuses,
     )
     closed_commitments = closed_roadmap_commitments(store, project["id"])
-    pending_revisions = pending_roadmap_revisions(store, project["id"])
+    pending_revisions = pending_roadmap_revision_summaries(store, project["id"])
     for task in active_tasks:
         status = statuses[task["id"]]
         verification_run = store.latest_for_task("verification_runs", task["id"])
@@ -1586,6 +1630,13 @@ def print_project_summary_text(summary: dict) -> None:
     print("next_actions:")
     if summary["next_actions"]:
         for action in summary["next_actions"]:
+            print(f"- {action}")
+    else:
+        print("- none")
+
+    print("human_next_actions:")
+    if summary["human_next_actions"]:
+        for action in summary["human_next_actions"]:
             print(f"- {action}")
     else:
         print("- none")
@@ -1763,13 +1814,13 @@ def render_handson_next_action(action: str, language: str) -> str:
         detail, command = action.removeprefix(pending_prefix).split(pending_marker, 1)
         command = command.removesuffix(" or revise it")
         if " at " in detail:
-            revision_id, source_path = detail.split(" at ", 1)
-            return f"保留中の RoadmapRevision {revision_id} を確認する: `{source_path}` を読み、`{command}`"
-        return f"保留中の RoadmapRevision {detail} を確認し、`{command}`"
+            _revision_id, source_path = detail.split(" at ", 1)
+            return f"作業計画を確認する: `{source_path}` を読み、これで進めてよければ承認する。承認後は Task 化する"
+        return "作業計画を確認し、これで進めてよければ承認する。承認後は Task 化する"
     task_plan_prefix = "create tasks from accepted commitment "
     if action.startswith(task_plan_prefix):
         detail = action.removeprefix(task_plan_prefix)
-        return f"承認済み RoadmapCommitment からタスク候補を作成する: {detail}"
+        return f"承認された作業計画をもとに、具体的な Task に分ける: {detail}"
     assess_prefix = "run nilo roadmap assess "
     if action.startswith(assess_prefix):
         command = action.split(" and ", 1)[0]

@@ -195,6 +195,8 @@ def render_roadmap_discuss_markdown(summary: dict) -> str:
     lines.extend(["", "## Pending Revisions", ""])
     if summary["pending_roadmap_revisions"]:
         for revision in summary["pending_roadmap_revisions"]:
+            lines.extend(render_pending_roadmap_plan_lines(revision, "ja"))
+            lines.append("")
             lines.append(
                 f"- {revision['id']} [{revision['status']}] "
                 f"proposed_commitment={revision['proposed_commitment_id']}{roadmap_revision_source_label(revision)}"
@@ -237,6 +239,101 @@ def render_roadmap_discuss_markdown(summary: dict) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def pending_roadmap_approval_message(language: str = "ja") -> str:
+    if language == "ja":
+        return (
+            "この作業は少し大きいので、いきなり実装タスクにせず、先に作業計画を作りました。\n\n"
+            "以下の内容で進めてよいか確認してください。\n\n"
+            "承認すると、この計画をもとに具体的な Nilo Task を作成します。\n"
+            "修正したい場合は、「ここを変えて」と指示してください。"
+        )
+    return (
+        "This request is large enough that Nilo created a work plan before implementation.\n\n"
+        "Please review the plan below and decide whether it is OK to proceed.\n\n"
+        "After approval, Nilo will create concrete Tasks from this plan.\n"
+        "If you want changes, describe which part should be changed."
+    )
+
+
+def _pending_revision_commitment(revision: dict) -> dict:
+    return revision.get("proposed_commitment") or {}
+
+
+def render_pending_roadmap_plan_lines(revision: dict, language: str = "ja") -> list[str]:
+    commitment = _pending_revision_commitment(revision)
+    title = commitment.get("title") or revision.get("title") or "作業計画"
+    intent = commitment.get("intent") or "本文を確認してください。"
+    success_criteria = commitment.get("success_criteria") or []
+    non_goals = commitment.get("non_goals") or []
+    review_gates = commitment.get("review_gates") or []
+    evidence_policy = commitment.get("evidence_policy") or []
+    body = (revision.get("body_md") or "").strip()
+    if language == "ja":
+        lines = [
+            pending_roadmap_approval_message(language),
+            "",
+            f"### 作業計画: {title}",
+            "",
+            "#### 目的",
+            "",
+            intent,
+            "",
+            "#### やること",
+            "",
+        ]
+        for item in commitment.get("autonomy_scope") or ["本文の Proposed Changes / Scope を確認してください。"]:
+            lines.append(f"- {item}")
+        lines.extend(["", "#### 完了条件", ""])
+        for item in success_criteria or ["完了条件は本文を確認してください。"]:
+            lines.append(f"- {item}")
+        lines.extend(["", "#### やらないこと", ""])
+        for item in non_goals or ["明示された範囲外の変更は行いません。"]:
+            lines.append(f"- {item}")
+        lines.extend(["", "#### 確認・レビュー観点", ""])
+        for item in review_gates or evidence_policy or ["承認前に、目的、範囲、完了条件が意図に合っているか確認してください。"]:
+            lines.append(f"- {item}")
+        lines.extend(
+            [
+                "",
+                "#### 承認後に作られる Task の見込み",
+                "",
+                "- 実装 Task",
+                "- 検証 Task",
+            ]
+        )
+        if body:
+            lines.extend(["", "#### 作業計画本文", "", body])
+        return lines
+
+    lines = [
+        pending_roadmap_approval_message(language),
+        "",
+        f"### Work plan: {title}",
+        "",
+        "#### Purpose",
+        "",
+        intent,
+        "",
+        "#### Work to do",
+        "",
+    ]
+    for item in commitment.get("autonomy_scope") or ["Review the Proposed Changes / Scope in the plan body."]:
+        lines.append(f"- {item}")
+    lines.extend(["", "#### Completion criteria", ""])
+    for item in success_criteria or ["Review the plan body for completion criteria."]:
+        lines.append(f"- {item}")
+    lines.extend(["", "#### Non-goals", ""])
+    for item in non_goals or ["Do not change behavior outside the approved plan."]:
+        lines.append(f"- {item}")
+    lines.extend(["", "#### Review focus", ""])
+    for item in review_gates or evidence_policy or ["Confirm that the purpose, scope, and completion criteria match the request."]:
+        lines.append(f"- {item}")
+    lines.extend(["", "#### Expected Tasks after approval", "", "- Implementation Task", "- Verification Task"])
+    if body:
+        lines.extend(["", "#### Plan body", "", body])
+    return lines
 
 
 def human_roadmap_status_label(status: str, language: str) -> str:
@@ -525,8 +622,8 @@ def render_human_roadmap_markdown(summary: dict, language: str = "en") -> str:
 
     lines.extend(["", text["pending_revisions"], ""])
     if summary["pending_roadmap_revisions"]:
-        for _revision in summary["pending_roadmap_revisions"]:
-            lines.append(f"- {text['pending_revision']}")
+        for revision in summary["pending_roadmap_revisions"]:
+            lines.extend(render_pending_roadmap_plan_lines(revision, language))
     else:
         lines.append(f"- {text['none']}")
 
@@ -557,7 +654,7 @@ def task_plan_candidates(commitment: dict) -> list[dict]:
             "task_type": "implementation",
             "risk": "medium",
             "commitment_id": commitment["id"],
-            "description": commitment["intent"] or f"RoadmapCommitment {commitment['id']} を実装する。",
+            "description": commitment["intent"] or "承認された作業計画を実装する。",
             "acceptance": implementation_acceptance,
         }
     ]
@@ -568,7 +665,7 @@ def task_plan_candidates(commitment: dict) -> list[dict]:
             "task_type": "verification",
             "risk": "medium",
             "commitment_id": commitment["id"],
-            "description": f"RoadmapCommitment {commitment['id']} の evidence policy を満たすことを確認する。",
+            "description": "承認された作業計画の証跡ポリシーを満たすことを確認する。",
             "acceptance": evidence_acceptance,
         }
     )

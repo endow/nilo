@@ -199,12 +199,18 @@ def human_next_action_text(action: str) -> str:
     if action.startswith("no active task; roadmap evidence needs internal review"):
         return "作業中のタスクはありません。ロードマップ証跡の不足を確認してください。"
     if action.startswith("roadmap update pending"):
-        return "保留中のロードマップ更新を採用するか人間が判断してください。"
+        return "作業計画を確認し、これで進めてよいか判断してください。承認後、この計画をもとに Task 化します。修正したい場合は、どこを変えるか指示してください。"
     if action.startswith("create a task for open design residue:"):
         return "未解決の設計残差についてタスクを作成してください。"
     if action.startswith("possible large work; use `nilo roadmap discuss`"):
         return (
-            "大きな作業の可能性: この task は roadmap 未整理のまま直接実装すると危険です。"
-            "先に `nilo roadmap discuss` を使い、roadmap commitment と task-plan に分解してください。"
+            "この依頼は大きめなので、実装前に作業計画として整理してください。"
+            "計画を確認して承認されたら、その計画をもとに Task 化します。"
         )
+    if action.startswith("requires_roadmap todo から RoadmapProposal を作成する"):
+        return "この依頼は大きめなので、実装前に作業計画として整理してください。"
+    if action.startswith("ready todo から task を作成する"):
+        return "実行できる依頼を具体的な Task にします。"
+    if action.startswith("create tasks from accepted commitment"):
+        return "承認された作業計画をもとに、具体的な Task に分けます。"
     return action

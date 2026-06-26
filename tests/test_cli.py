@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from nilo.backup import BackupError
+from nilo.ai_context import project_ai_context, render_ai_context_text
 from nilo.cli import git_changed_files, handson_language, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
 from nilo.project_logic import project_tasks_and_statuses, selected_roadmap_commitment
@@ -3461,6 +3462,309 @@ project status からロードマップ現在地を読めるようにする。
             self.assertIn("ask the user whether to adopt or reject the direction", summary["next_actions"][0])
             self.assertIn("requires_roadmap todo", summary["next_actions"][1])
 
+    def test_pending_roadmap_revision_surfaces_human_work_plan_guidance(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# Human Pending Plan
+
+## Intent
+承認待ちの計画を人間が判断できるようにする。
+
+## Autonomy Scope
+- CLI 表示を人間向けにする
+- AI context に応答方針を入れる
+
+## Success Criteria
+- 作業計画が表示される
+- 承認後に Task 化することが分かる
+
+## Non Goals
+- 内部データモデルは変えない
+
+## Review Gates
+- 承認なしで実装を進めない
+
+## Evidence Policy
+- focused tests を実行する
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                main(["--db", str(db), "todo", "add", "--project", "project_test", "Another broad change"])
+                store = Store(db)
+                try:
+                    store.update(
+                        "todos",
+                        store.list_where("todos", "project_id=?", ("project_test",))[0]["id"],
+                        {"status": "requires_roadmap"},
+                    )
+                finally:
+                    store.close()
+
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "roadmap", "status", "--project", "project_test"])
+            status_body = status_output.getvalue()
+            self.assertIn("この作業は少し大きいので", status_body)
+            self.assertIn("作業計画", status_body)
+            self.assertIn("確認", status_body)
+            self.assertIn("承認", status_body)
+            self.assertIn("Task 化", status_body)
+            self.assertIn("Human Pending Plan", status_body)
+            self.assertIn("作業計画本文", status_body)
+
+            discuss_output = io.StringIO()
+            with redirect_stdout(discuss_output):
+                main(["--db", str(db), "roadmap", "discuss", "--project", "project_test"])
+            discuss_body = discuss_output.getvalue()
+            self.assertIn("作業計画: Human Pending Plan", discuss_body)
+            self.assertIn("承認すると、この計画をもとに具体的な Nilo Task を作成します。", discuss_body)
+
+            summary_output = io.StringIO()
+            with redirect_stdout(summary_output):
+                main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
+            summary = json.loads(summary_output.getvalue())
+            human_next = summary["human_next_actions"][0]
+            self.assertIn("作業計画", human_next)
+            self.assertIn("確認", human_next)
+            self.assertIn("承認", human_next)
+            self.assertIn("Task 化", human_next)
+            self.assertIn("requires_roadmap todo", summary["next_actions"][1])
+
+            store = Store(db)
+            try:
+                ai_context = render_ai_context_text(project_ai_context(store, "project_test", cwd=root))
+            finally:
+                store.close()
+            self.assertIn("ロードマップ承認待ちの応答ルール", ai_context)
+            self.assertIn("作業が大きいので、先に作業計画を作った", ai_context)
+            self.assertIn("この計画をもとに Task 化します", ai_context)
+
+    def test_task_complete_auto_closes_ready_roadmap_when_all_tasks_completed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# Auto Close Roadmap
+
+## Intent
+全タスク完了時にロードマップも完了にする。
+
+## Success Criteria
+- linked task is complete
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                commitment_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_auto_close",
+                        "--title",
+                        "Implement auto close",
+                        "--commitment",
+                        commitment_id,
+                    ]
+                )
+
+            now = now_iso()
+            store = Store(db)
+            try:
+                store.insert(
+                    "roadmap_commitments",
+                    {
+                        "id": "commitment_unrelated_ready",
+                        "project_id": "project_test",
+                        "title": "Unrelated Ready Roadmap",
+                        "intent": "別の完了候補ロードマップ。",
+                        "success_criteria": ["unrelated task is complete"],
+                        "non_goals": [],
+                        "autonomy_scope": [],
+                        "review_gates": [],
+                        "evidence_policy": [],
+                        "status": "accepted",
+                        "accepted_by": "human",
+                        "accepted_at": now,
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "tasks",
+                    {
+                        "id": "task_unrelated_ready",
+                        "project_id": "project_test",
+                        "title": "Unrelated ready task",
+                        "description": "",
+                        "acceptance_criteria": [],
+                        "parent_task_id": None,
+                        "split_index": None,
+                        "task_type": "implementation",
+                        "risk_level": "medium",
+                        "requires_understanding_check": False,
+                        "roadmap_commitment_id": "commitment_unrelated_ready",
+                        "roadmap_item_id": "",
+                        "status": "planned",
+                        "assigned_model_profile": "",
+                        "degradation_mode": "normal",
+                        "mode": "normal",
+                        "base_commit": None,
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "agent_reports",
+                    {
+                        "id": "report_unrelated_ready",
+                        "task_id": "task_unrelated_ready",
+                        "agent": "codex",
+                        "claimed_status": "done",
+                        "changed_files": [],
+                        "body_md": REPORT,
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "verification_runs",
+                    {
+                        "id": "verification_unrelated_ready",
+                        "task_id": "task_unrelated_ready",
+                        "evidence_check_id": None,
+                        "source": "nilo_executed",
+                        "command": "python -m unittest tests.test_cli",
+                        "cwd": str(root),
+                        "stdout": "ok",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "timed_out": False,
+                        "timeout_seconds": 30,
+                        "git_head": "",
+                        "git_status_porcelain": "",
+                        "git_diff_hash": "",
+                        "working_tree_dirty": False,
+                        "observed_paths": [],
+                        "metadata": {},
+                        "started_at": now,
+                        "finished_at": now,
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "task_completions",
+                    {
+                        "id": "completion_unrelated_ready",
+                        "task_id": "task_unrelated_ready",
+                        "actor": "human",
+                        "completed_by": "human",
+                        "completed_snapshot": {},
+                        "completion_note": "already accepted",
+                        "accepted_verification_run_ids": ["verification_unrelated_ready"],
+                        "accepted_review_result_ids": [],
+                        "human_decision_note": "already accepted",
+                        "completed_with_reservations": False,
+                        "completed_at": now,
+                        "reason": "already accepted",
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "agent_reports",
+                    {
+                        "id": "report_auto_close",
+                        "task_id": "task_auto_close",
+                        "agent": "codex",
+                        "claimed_status": "done",
+                        "changed_files": [],
+                        "body_md": REPORT,
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "verification_runs",
+                    {
+                        "id": "verification_auto_close",
+                        "task_id": "task_auto_close",
+                        "evidence_check_id": None,
+                        "source": "nilo_executed",
+                        "command": "python -m unittest tests.test_cli",
+                        "cwd": str(root),
+                        "stdout": "ok",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "timed_out": False,
+                        "timeout_seconds": 30,
+                        "git_head": "",
+                        "git_status_porcelain": "",
+                        "git_diff_hash": "",
+                        "working_tree_dirty": False,
+                        "observed_paths": [],
+                        "metadata": {},
+                        "started_at": now,
+                        "finished_at": now,
+                        "created_at": now,
+                    },
+                )
+            finally:
+                store.close()
+
+            complete_output = io.StringIO()
+            with redirect_stdout(complete_output):
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "complete",
+                        "--task",
+                        "task_auto_close",
+                        "--reason",
+                        "verified",
+                        "--actor",
+                        "human",
+                    ]
+                )
+            self.assertIn("closed_roadmap_commitments:", complete_output.getvalue())
+            self.assertIn(commitment_id, complete_output.getvalue())
+
+            store = Store(db)
+            try:
+                commitment = store.get("roadmap_commitments", commitment_id)
+                unrelated = store.get("roadmap_commitments", "commitment_unrelated_ready")
+            finally:
+                store.close()
+            self.assertEqual(commitment["status"], "closed")
+            self.assertEqual(commitment["closed_by"], "human")
+            self.assertIn("All linked tasks completed", commitment["closure_reason"])
+            self.assertEqual(unrelated["status"], "accepted")
+
     def test_multiple_accepted_roadmap_commitments_select_incomplete_commitment(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -4591,7 +4895,6 @@ project status からロードマップ現在地を読めるようにする。
                 main(["--db", str(db), "instruct", "--task", "task_assess"])
                 main(["--db", str(db), "report", "import", "--task", "task_assess", "--file", str(report)])
                 main(["--db", str(db), "verification", "run", "--task", "task_assess", "--command", f'"{sys.executable}" "{script}"'])
-                main(["--db", str(db), "task", "complete", "--task", "task_assess", "--reason", "human accepted evidence"])
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -4614,28 +4917,25 @@ project status からロードマップ現在地を読めるようにする。
             self.assertTrue(summary["roadmap_assessments"][0]["closure_ready"])
             self.assertEqual(summary["roadmap_assessments"][0]["related_tasks"][0]["task_id"], "task_assess")
             self.assertEqual(summary["roadmap_agent_state"]["commitment_id"], commitment_id)
-            self.assertEqual(summary["roadmap_agent_state"]["work_status"], "complete")
+            self.assertEqual(summary["roadmap_agent_state"]["work_status"], "active")
             self.assertEqual(summary["roadmap_agent_state"]["evidence_status"], "complete")
             self.assertEqual(summary["roadmap_agent_state"]["verification_status"], "complete")
-            self.assertEqual(summary["roadmap_agent_state"]["closure_status"], "awaiting_closure")
+            self.assertEqual(summary["roadmap_agent_state"]["closure_status"], "not_ready")
             self.assertNotIn("close_roadmap_commitment", summary["roadmap_agent_state"]["ai_allowed_actions"])
             self.assertNotIn("draft_next_roadmap_proposal", summary["roadmap_agent_state"]["ai_allowed_actions"])
-            self.assertIn("wait_for_user_direction", summary["roadmap_agent_state"]["ai_allowed_actions"])
+            self.assertIn("continue_active_task", summary["roadmap_agent_state"]["ai_allowed_actions"])
             self.assertEqual(summary["roadmap_agent_state"]["ai_blocked_actions"], [])
-            self.assertEqual(summary["roadmap_agent_state"]["recommended_next_action"], "wait_for_user_direction")
-            self.assertEqual(summary["roadmap_agent_next_actions"][0]["action_id"], "summarize_current_commitment")
+            self.assertEqual(summary["roadmap_agent_state"]["recommended_next_action"], "continue_active_task")
+            self.assertEqual(summary["roadmap_agent_next_actions"][0]["action_id"], "continue_active_task")
             self.assertEqual(summary["roadmap_agent_next_actions"][0]["actor"], "ai")
             self.assertEqual(summary["roadmap_agent_next_actions"][0]["status"], "allowed")
             self.assertNotIn("nilo roadmap", summary["roadmap_agent_next_actions"][0]["command_hint"])
-            self.assertIn("wait_for_user_direction", [item["action_id"] for item in summary["roadmap_agent_next_actions"]])
-            expected_guardrail = (
-                "no active task; create or select a Nilo task before implementation; "
-                "current roadmap scope is satisfied, ask the user for the next direction"
-            )
-            self.assertEqual(summary["next_actions"], [expected_guardrail])
+            self.assertIn("summarize_current_commitment", [item["action_id"] for item in summary["roadmap_agent_next_actions"]])
+            self.assertEqual(len(summary["next_actions"]), 1)
+            self.assertTrue(summary["next_actions"][0].startswith("task_assess: "))
+            self.assertIn("dirty-tree verification metadata", summary["next_actions"][0])
             self.assertNotIn("close commitment", summary["next_actions"][0])
             self.assertNotIn("--actor ai", summary["next_actions"][0])
-            self.assertNotIn(commitment_id, summary["next_actions"][0])
             self.assertNotIn("nilo roadmap discuss --project project_test", summary["next_actions"][0])
             self.assertNotIn("nilo roadmap import --project project_test", summary["next_actions"][0])
             self.assertNotIn(".nilo/roadmap/project_test/roadmap_proposal.md", summary["next_actions"][0])
@@ -4652,7 +4952,8 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn("roadmap_agent_next_actions:", text_summary_body)
             self.assertNotIn("action_id: close_roadmap_commitment", text_summary_body)
             self.assertNotIn("--actor ai", text_summary_body)
-            self.assertIn(expected_guardrail, text_summary_body)
+            self.assertIn("task_assess:", text_summary_body)
+            self.assertIn("dirty-tree verification metadata", text_summary_body)
 
             status_output = io.StringIO()
             with redirect_stdout(status_output):
@@ -4666,9 +4967,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn(".nilo/roadmap/project_test/roadmap_proposal.md", status_body)
             self.assertNotIn(str(proposal), status_body)
             self.assertNotIn("close commitment", status_body)
-            self.assertNotIn("--actor ai", status_body)
-            self.assertNotIn(commitment_id, status_body)
-            self.assertIn(expected_guardrail, status_body)
+            self.assertIn("dirty-tree verification metadata", status_body)
             self.assertNotIn("run nilo roadmap assess --project project_test for final human review", status_body)
 
             roadmap_status_output = io.StringIO()
@@ -4677,10 +4976,10 @@ project status からロードマップ現在地を読めるようにする。
             roadmap_status_body = roadmap_status_output.getvalue()
             self.assertIn("roadmap_agent_state:", roadmap_status_body)
             self.assertIn("roadmap_agent_next_actions:", roadmap_status_body)
-            self.assertIn("closure_status: awaiting_closure", roadmap_status_body)
+            self.assertIn("closure_status: not_ready", roadmap_status_body)
             self.assertNotIn("action_id: close_roadmap_commitment", roadmap_status_body)
             self.assertNotIn("--actor ai", roadmap_status_body)
-            self.assertIn("action_id: wait_for_user_direction", roadmap_status_body)
+            self.assertIn("action_id: continue_active_task", roadmap_status_body)
 
     def test_project_status_guides_task_plan_for_accepted_commitment_without_tasks(self) -> None:
         with TemporaryDirectory() as directory:
@@ -4767,7 +5066,6 @@ close 済み commitment を表示できるようにした。
                 main(["--db", str(db), "instruct", "--task", "task_close"])
                 main(["--db", str(db), "report", "import", "--task", "task_close", "--file", str(report)])
                 main(["--db", str(db), "verification", "run", "--task", "task_close", "--command", f'"{sys.executable}" "{script}"'])
-                main(["--db", str(db), "task", "complete", "--task", "task_close", "--reason", "human accepted evidence"])
 
             close_output = io.StringIO()
             with redirect_stdout(close_output):

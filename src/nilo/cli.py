@@ -402,6 +402,7 @@ MCP identity guard:
 
 from .project_logic import (
     accepted_roadmap_commitments,
+    auto_close_ready_roadmap_commitments,
     closed_roadmap_commitments,
     command_covers_expected_test,
     command_runs_broad_test_suite,
@@ -416,6 +417,7 @@ from .project_logic import (
     normalize_command_path,
     ordered_roadmap_commitments,
     pending_roadmap_revisions,
+    pending_roadmap_revision_summaries,
     print_human_project_status,
     print_project_summary_text,
     print_roadmap_agent_next_actions,

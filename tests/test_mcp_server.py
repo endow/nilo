@@ -1331,6 +1331,38 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual({todo["id"] for todo in listed["todos"]}, {todo_id, pending_ready["todo"]["id"]})
 
+    def test_get_roadmap_status_returns_human_pending_plan_message(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# MCP Pending Plan
+
+## Intent
+MCP でも承認待ちの計画を人間向けに返す。
+
+## Success Criteria
+- 作業計画が返る
+- 承認後に Task 化することが分かる
+""",
+                encoding="utf-8",
+            )
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+
+            result = call_tool("get_roadmap_status", {"project_id": "project_test"}, db)
+
+        self.assertIn("pending_roadmap_review_messages", result)
+        self.assertEqual(len(result["pending_roadmap_review_messages"]), 1)
+        message = result["pending_roadmap_review_messages"][0]
+        self.assertIn("作業計画", message)
+        self.assertIn("確認", message)
+        self.assertIn("承認", message)
+        self.assertIn("Task 化", message)
+        self.assertIn("MCP Pending Plan", message)
+
     def test_get_task_status_and_instruction_are_read_only(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
