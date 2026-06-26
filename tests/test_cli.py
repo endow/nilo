@@ -402,6 +402,41 @@ instruction: Do work.
             self.assertTrue(all(recipe["status"] == "valid" for recipe in builtin))
             self.assertFalse(any(diagnostic["severity"] == "error" for recipe in builtin for diagnostic in recipe["diagnostics"]))
 
+    def test_focused_implementation_recipe_suggests_targeted_group_not_full_suite(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "recipe",
+                            "run",
+                            "focused-implementation",
+                            "--project",
+                            root.name,
+                            "--var",
+                            "change=task guidance",
+                            "--var",
+                            "verification_command=python tests/run_cli_group.py task",
+                            "--dry-run",
+                        ]
+                    )
+            finally:
+                os.chdir(previous_cwd)
+
+            body = output.getvalue()
+            self.assertIn("nilo check \"python tests/run_cli_group.py task\"", body)
+            self.assertIn("--mode targeted", body)
+            self.assertNotIn("python -m unittest discover tests", body)
+
     def test_recipe_project_id_matching_current_directory_uses_cwd(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1959,9 +1994,18 @@ variables:
                 self.assertEqual(revision["status"], "pending")
                 self.assertEqual(revision["source_path"], "todo:todo_requires_roadmap")
                 self.assertIn("# Large follow-up", revision["body_md"])
+                self.assertIn("focused test group first", revision["body_md"])
                 self.assertEqual(commitment["status"], "pending")
                 self.assertEqual(commitment["title"], "Large follow-up")
                 self.assertEqual(commitment["success_criteria"], ["Roadmap proposal captures the follow-up."])
+                self.assertEqual(
+                    commitment["evidence_policy"],
+                    [
+                        "Record targeted verification for the changed module or focused test group first; "
+                        "use full verification only for release, broad-risk, or shared-core changes; "
+                        "if full verification is skipped, document the scope reason instead of treating the skip as a failure."
+                    ],
+                )
             finally:
                 os.chdir(previous_cwd)
 
@@ -4486,6 +4530,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertIn("roadmap_position が accepted commitment を表示する", body)
             self.assertIn("### 2. Verify Phase 2.5 Roadmap Projection", body)
             self.assertIn("- type: verification", body)
+            self.assertIn("- VerificationRun を記録する", body)
             self.assertIn("nilo task create --project \"project_test\" --title \"Implement Phase 2.5 Roadmap Projection\"", body)
             self.assertIn(f"--commitment {commitment_id}", body)
             self.assertEqual(output_file.read_text(encoding="utf-8"), body)

@@ -27,6 +27,11 @@ TODO_PRIORITIES = ["low", "normal", "high"]
 TRIAGE_TODO_STATUSES = {"triaged", "ready", "ad_hoc_approved", "requires_roadmap", "blocked", "deferred", "rejected"}
 STARTABLE_TODO_STATUSES = {"ready", "ad_hoc_approved"}
 PROMOTABLE_TODO_STATUSES = {"requires_roadmap"}
+FOCUSED_EVIDENCE_POLICY = (
+    "Record targeted verification for the changed module or focused test group first; "
+    "use full verification only for release, broad-risk, or shared-core changes; "
+    "if full verification is skipped, document the scope reason instead of treating the skip as a failure."
+)
 
 
 def _require_project(store: Store, project_id: str) -> None:
@@ -238,7 +243,7 @@ def _roadmap_proposal_from_todo(todo: dict, title: str) -> str:
             "- Human acceptance is required before implementation tasks are created.",
             "",
             "## Evidence Policy",
-            "- Record verification commands and results on each task created from the accepted commitment.",
+            f"- {FOCUSED_EVIDENCE_POLICY}",
             "",
         ]
     )
@@ -274,7 +279,7 @@ def cmd_todo_promote(args: argparse.Namespace) -> None:
                 "non_goals": ["This proposal does not accept or close the roadmap commitment."],
                 "autonomy_scope": ["Create concrete tasks only after this proposal is accepted."],
                 "review_gates": ["Human acceptance is required before implementation tasks are created."],
-                "evidence_policy": ["Record verification commands and results on each task created from the accepted commitment."],
+                "evidence_policy": [FOCUSED_EVIDENCE_POLICY],
                 "status": "pending",
                 "accepted_by": "",
                 "accepted_at": "",

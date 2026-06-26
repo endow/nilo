@@ -12,9 +12,12 @@ variables:
   change:
     type: string
     required: true
+  verification_command:
+    type: string
+    required: true
 verification:
-  - command: "nilo check \"python -m unittest discover tests\" --project {project_id} --mode targeted --timeout 120"
-    reason: "Run the project's most relevant targeted tests and record them as verification evidence."
+  - command: "nilo check \"{verification_command}\" --project {project_id} --mode targeted --timeout 120"
+    reason: "Run the changed-module or focused test command selected for this implementation and record it as targeted verification evidence."
 review:
   required: false
   focus:

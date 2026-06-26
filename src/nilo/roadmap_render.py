@@ -4,6 +4,14 @@ import re
 
 from .cli_support import cli_quote
 
+FOCUSED_DEFAULT_EVIDENCE_POLICY = [
+    (
+        "Record targeted verification for the changed module or focused test group first; "
+        "use full verification only for release, broad-risk, or shared-core changes; "
+        "if full verification is skipped, document the scope reason instead of treating the skip as a failure."
+    )
+]
+
 
 def roadmap_revision_source_label(revision: dict) -> str:
     source_path = revision.get("source_path") or ""
@@ -553,18 +561,17 @@ def task_plan_candidates(commitment: dict) -> list[dict]:
             "acceptance": implementation_acceptance,
         }
     ]
-    evidence_acceptance = list(commitment["evidence_policy"])
-    if evidence_acceptance:
-        candidates.append(
-            {
-                "title": f"Verify {commitment['title']}",
-                "task_type": "verification",
-                "risk": "medium",
-                "commitment_id": commitment["id"],
-                "description": f"RoadmapCommitment {commitment['id']} の evidence policy を満たすことを確認する。",
-                "acceptance": evidence_acceptance,
-            }
-        )
+    evidence_acceptance = list(commitment["evidence_policy"]) or FOCUSED_DEFAULT_EVIDENCE_POLICY
+    candidates.append(
+        {
+            "title": f"Verify {commitment['title']}",
+            "task_type": "verification",
+            "risk": "medium",
+            "commitment_id": commitment["id"],
+            "description": f"RoadmapCommitment {commitment['id']} の evidence policy を満たすことを確認する。",
+            "acceptance": evidence_acceptance,
+        }
+    )
     return candidates
 
 
