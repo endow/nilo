@@ -95,6 +95,7 @@ class ProjectBoundary:
 class WriteFenceResult:
     ok: bool
     boundary: ProjectBoundary
+    inspected_repositories: list[str]
     changed_files: list[str]
     outside_writable_scope: list[str]
     tool_owner_changes: list[str]
@@ -102,6 +103,7 @@ class WriteFenceResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "inspected_repositories": self.inspected_repositories,
             "changed_files": self.changed_files,
             "outside_writable_scope": self.outside_writable_scope,
             "tool_owner_changes": self.tool_owner_changes,
@@ -258,20 +260,23 @@ def changed_file_paths(repo_root: Path) -> list[Path]:
     return sorted(set(paths))
 
 
-def evaluate_write_fence(boundary: ProjectBoundary) -> WriteFenceResult:
+def evaluate_write_fence(boundary: ProjectBoundary, *, include_tool_owner_repository: bool = False) -> WriteFenceResult:
     repo_root = boundary.git_root or boundary.project_root
     changed = changed_file_paths(repo_root)
-    if boundary.tool_owner_repository is not None and boundary.tool_owner_repository != repo_root:
+    inspected = [str(repo_root.resolve())]
+    if include_tool_owner_repository and boundary.tool_owner_repository is not None and boundary.tool_owner_repository != repo_root:
+        inspected.append(str(boundary.tool_owner_repository.resolve()))
         changed.extend(changed_file_paths(boundary.tool_owner_repository))
         changed = sorted(set(changed))
     outside = [str(path) for path in changed if not is_relative_to(path, boundary.project_root)]
     owner_changes: list[str] = []
-    if boundary.tool_owner_repository is not None:
+    if include_tool_owner_repository and boundary.tool_owner_repository is not None:
         owner_changes = [str(path) for path in changed if is_relative_to(path, boundary.tool_owner_repository)]
     ok = not outside and not (owner_changes and not self_modification_allowed(boundary))
     return WriteFenceResult(
         ok=ok,
         boundary=boundary,
+        inspected_repositories=inspected,
         changed_files=[str(path) for path in changed],
         outside_writable_scope=outside,
         tool_owner_changes=owner_changes,
@@ -287,9 +292,9 @@ def self_modification_allowed(boundary: ProjectBoundary) -> bool:
     )
 
 
-def require_write_fence(boundary: ProjectBoundary) -> WriteFenceResult:
+def require_write_fence(boundary: ProjectBoundary, *, include_tool_owner_repository: bool = False) -> WriteFenceResult:
     require_binding_safe_for_write(boundary)
-    result = evaluate_write_fence(boundary)
+    result = evaluate_write_fence(boundary, include_tool_owner_repository=include_tool_owner_repository)
     if result.ok:
         return result
     if result.tool_owner_changes and not self_modification_allowed(boundary):
@@ -298,6 +303,13 @@ def require_write_fence(boundary: ProjectBoundary) -> WriteFenceResult:
             "",
             "This appears to be a Nilo defect, not a project code issue.",
             "Nilo source modification is disabled in this project session.",
+            "",
+            "Repository identity:",
+            f"  target_project_root: {boundary.project_root}",
+            f"  target_git_root: {boundary.git_root or ''}",
+            f"  tool_owner_repository: {boundary.tool_owner_repository or ''}",
+            "  inspected_repositories:",
+            *[f"    {path}" for path in result.inspected_repositories],
             "",
             "Suggested next step:",
             "Switch to the Nilo repository and start a separate self-development task.",
@@ -311,6 +323,12 @@ def require_write_fence(boundary: ProjectBoundary) -> WriteFenceResult:
         "",
         "Current project:",
         f"  {boundary.project_name}",
+        "",
+        "Repository identity:",
+        f"  target_project_root: {boundary.project_root}",
+        f"  target_git_root: {boundary.git_root or ''}",
+        "  inspected_repositories:",
+        *[f"    {path}" for path in result.inspected_repositories],
         "",
         "Writable scope:",
         f"  {boundary.project_root}",
@@ -332,8 +350,10 @@ def record_nilo_issue_for_task(store: Any, project_id: str, task_id: str, comman
             f"target_project: {project_id}",
             f"project_root: {boundary.project_root}",
             f"git_root: {boundary.git_root or ''}",
+            f"tool_owner_repository: {boundary.tool_owner_repository or ''}",
             f"nilo_db: {boundary.db_path}",
             f"error_code: {error.code}",
+            f"inspected_repositories: {', '.join(error.details.get('inspected_repositories', []))}",
             "",
             str(error),
             "",

@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from nilo.cli import main
 from nilo.mcp_server import call_tool
+from nilo.project_boundary import ProjectBoundaryError, require_write_fence, resolve_project_boundary
 from nilo.store import Store
 from nilo.timeutil import now_iso
 
@@ -147,7 +148,7 @@ class ProjectBoundaryTests(unittest.TestCase):
 
         self.assertIn("project binding mismatch", str(raised.exception).lower())
 
-    def test_tool_owner_changes_block_completion_and_record_nilo_issue(self) -> None:
+    def test_tool_owner_changes_do_not_block_unrelated_project_completion(self) -> None:
         with TemporaryDirectory() as directory:
             project = Path(directory) / "Chiffon"
             owner = Path(directory) / "nilo"
@@ -160,9 +161,8 @@ class ProjectBoundaryTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(project)
-                with self.assertRaises(SystemExit) as raised:
-                    with redirect_stdout(io.StringIO()):
-                        main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done"])
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done"])
             finally:
                 os.chdir(previous)
 
@@ -173,9 +173,66 @@ class ProjectBoundaryTests(unittest.TestCase):
             finally:
                 store.close()
 
-        self.assertIn("Nilo source modification is disabled", str(raised.exception))
-        self.assertEqual(completions, [])
-        self.assertTrue(any(failure["category"] == "NiloIssue" for failure in failures))
+        self.assertEqual(len(completions), 1)
+        self.assertEqual(failures, [])
+
+    def test_tool_owner_changes_do_not_block_unrelated_project_check(self) -> None:
+        with TemporaryDirectory() as directory:
+            project = Path(directory) / "Chiffon"
+            owner = Path(directory) / "nilo"
+            self.init_git(project)
+            self.init_git(owner)
+            self.write_binding(project, project_name="Chiffon", repository_id="Chiffon", tool_owner_repository=owner)
+            (owner / "src.py").write_text("dirty\n", encoding="utf-8")
+            db = project / ".nilo" / "nilo.db"
+            self.create_project_task(db, "Chiffon")
+            previous = Path.cwd()
+            try:
+                os.chdir(project)
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "check",
+                            "--task",
+                            "task_test",
+                            "--mode",
+                            "targeted",
+                            f'"{sys.executable}" -c "print(1)"',
+                        ]
+                    )
+            finally:
+                os.chdir(previous)
+
+            store = Store(db)
+            try:
+                runs = store.list_where("verification_runs", "task_id=?", ("task_test",))
+                failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
+            finally:
+                store.close()
+
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(failures, [])
+
+    def test_explicit_tool_owner_check_blocks_with_repository_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            project = Path(directory) / "Chiffon"
+            owner = Path(directory) / "nilo"
+            self.init_git(project)
+            self.init_git(owner)
+            self.write_binding(project, project_name="Chiffon", repository_id="Chiffon", tool_owner_repository=owner)
+            (owner / "src.py").write_text("dirty\n", encoding="utf-8")
+            db = project / ".nilo" / "nilo.db"
+
+            boundary = resolve_project_boundary(project, db_path=db)
+            with self.assertRaises(ProjectBoundaryError) as raised:
+                require_write_fence(boundary, include_tool_owner_repository=True)
+
+        self.assertIn("target_project_root", str(raised.exception))
+        self.assertIn("tool_owner_repository", str(raised.exception))
+        self.assertIn(str(project.resolve()), raised.exception.details["inspected_repositories"])
+        self.assertIn(str(owner.resolve()), raised.exception.details["inspected_repositories"])
 
     def test_self_modification_allowed_only_for_nilo_repository(self) -> None:
         with TemporaryDirectory() as directory:
@@ -269,7 +326,7 @@ class ProjectBoundaryTests(unittest.TestCase):
 
         self.assertIn("only available in the Nilo repository", str(raised.exception))
 
-    def test_mcp_write_fence_blocks_verification_and_returns_boundary(self) -> None:
+    def test_mcp_write_fence_ignores_tool_owner_changes_for_target_repository_verification(self) -> None:
         with TemporaryDirectory() as directory:
             project = Path(directory) / "Chiffon"
             owner = Path(directory) / "nilo"
@@ -308,13 +365,11 @@ class ProjectBoundaryTests(unittest.TestCase):
             finally:
                 store.close()
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "nilo_self_modification_forbidden")
-        self.assertIn("project_boundary", result)
-        self.assertEqual(runs, [])
-        self.assertTrue(any(failure["category"] == "NiloIssue" for failure in failures))
+        self.assertEqual(result["task_id"], "task_test")
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(failures, [])
 
-    def test_mcp_review_result_not_created_when_write_fence_violated(self) -> None:
+    def test_mcp_review_result_import_ignores_unrelated_tool_owner_changes(self) -> None:
         with TemporaryDirectory() as directory:
             project = Path(directory) / "Chiffon"
             owner = Path(directory) / "nilo"
@@ -369,8 +424,8 @@ class ProjectBoundaryTests(unittest.TestCase):
             finally:
                 store.close()
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(results, [])
+        self.assertEqual(result["task_id"], "task_test")
+        self.assertEqual(len(results), 1)
 
 
 if __name__ == "__main__":

@@ -163,6 +163,19 @@ def resolve_command_parts(command: list[str], env: dict[str, str] | None = None)
             {"type": "fix_reviewer_command", "command": command[0]},
             stderr=message,
         )
+    resolved_suffix = Path(resolved).suffix.casefold()
+    if sys.platform == "win32" and resolved_suffix in {".cmd", ".bat"}:
+        shell = windows_command_shell(env)
+        if not shell:
+            message = f"cmd.exe executable not found for reviewer command shim: {resolved}"
+            raise DispatchError(
+                "command_resolution",
+                message,
+                {"type": "fix_reviewer_command", "command": command[0]},
+                stderr=message,
+            )
+        shim_command = subprocess.list2cmdline([resolved, *command[1:]])
+        normalized = [shell, "/d", "/s", "/c", shim_command]
     if sys.platform == "win32" and resolved.lower().endswith(".ps1"):
         powershell = find_executable("powershell.exe", env) or find_executable("pwsh.exe", env)
         if not powershell:
@@ -174,13 +187,21 @@ def resolve_command_parts(command: list[str], env: dict[str, str] | None = None)
                 stderr=message,
             )
         normalized = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved, *command[1:]]
-    else:
+    elif not (sys.platform == "win32" and resolved_suffix in {".cmd", ".bat"}):
         normalized = [resolved, *command[1:]]
     return ResolvedCommand(
         command=normalized,
         executable=resolved,
         preview=" ".join(shlex.quote(part) for part in normalized),
     )
+
+
+def windows_command_shell(env: dict[str, str] | None = None) -> str | None:
+    environ = env or os.environ
+    comspec = environ.get("ComSpec") or environ.get("COMSPEC")
+    if comspec and Path(comspec).exists():
+        return str(Path(comspec))
+    return find_executable("cmd.exe", env)
 
 
 def default_reviewer_command(reviewer: str) -> str:

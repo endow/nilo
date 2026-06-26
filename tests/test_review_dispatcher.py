@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from nilo.mcp_server import call_tool
 from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
-from nilo.review_dispatcher import dispatch_review, find_executable, run_reviewer_process, safe_default_config
+from nilo.review_dispatcher import dispatch_review, find_executable, resolve_command_parts, run_reviewer_process, safe_default_config
 from nilo.reviewer_registry import reviewer_is_registered_available
 from nilo.store import Store
 from nilo.timeutil import now_iso
@@ -461,6 +461,27 @@ class ReviewDispatcherTests(unittest.TestCase):
                 resolved = find_executable("codex", {"PATH": str(bin_dir)})
 
         self.assertEqual(Path(resolved or "").name.casefold(), "codex.cmd")
+
+    def test_resolve_command_wraps_windows_cmd_shim_with_cmd_exe(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            cmd_exe = root / "cmd.exe"
+            cmd_exe.write_text("", encoding="utf-8")
+            shim = bin_dir / "claude.cmd"
+            shim.write_text("@echo off\r\n", encoding="utf-8")
+
+            with patch("nilo.review_dispatcher.sys.platform", "win32"):
+                resolved = resolve_command_parts(
+                    ["claude", "-p", "prompt with spaces"],
+                    {"PATH": str(bin_dir), "ComSpec": str(cmd_exe)},
+                )
+
+        self.assertEqual(resolved.executable, str(shim))
+        self.assertEqual(resolved.command[:4], [str(cmd_exe), "/d", "/s", "/c"])
+        self.assertIn(str(shim), resolved.command[4])
+        self.assertIn("prompt with spaces", resolved.command[4])
 
     def test_run_reviewer_process_converts_oserror_to_dispatch_error(self) -> None:
         config = ReviewerConfig(
