@@ -127,7 +127,7 @@ python -m unittest discover tests
 nilo status --project nilo
 ```
 
-When recording verification during a Nilo task, use `nilo check "python -m unittest discover tests" --project nilo --timeout 300` to avoid short AI runner defaults.
+When recording verification during a Nilo task, choose the test scope first and record it with `--mode quick`, `--mode targeted`, or `--mode full`. Timeouts are guardrails for the chosen scope, not the main way to make full-suite verification practical.
 
 ## Update Nilo
 
@@ -447,13 +447,15 @@ nilo review --help
 nilo roadmap --help
 ```
 
-Run tests with:
+Run tests with the smallest mode that matches the risk:
 
 ```bash
-nilo check "python -m unittest discover tests" --project nilo --timeout 300
+nilo check "python -m unittest tests.test_verification" --project nilo --mode quick --timeout 60
+nilo check "python tests/run_cli_group.py verification" --project nilo --mode targeted --timeout 120
+nilo check "python -m unittest discover tests" --project nilo --mode full --timeout 300
 ```
 
-To run a focused slice of `tests.test_cli`, use the helper runner. It is outside unittest discovery, so it does not add duplicate tests to the full suite.
+Use `quick` for narrow smoke checks, `targeted` for changed areas or focused groups, and `full` for releases or broad-risk changes. To run a focused slice of `tests.test_cli`, use the helper runner. It is outside unittest discovery, so it does not add duplicate tests to the full suite.
 
 ```bash
 python tests/run_cli_group.py review

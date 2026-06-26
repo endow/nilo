@@ -1516,6 +1516,7 @@ class McpServerTests(unittest.TestCase):
                         "stderr": "",
                         "exit_code": 0,
                         "timed_out": False,
+                        "mode": "quick",
                         "git_head": "agent-head",
                         "git_diff_hash": "agent-diff",
                         "working_tree_dirty": False,
@@ -2248,6 +2249,7 @@ class McpServerTests(unittest.TestCase):
                         "stderr": "",
                         "exit_code": 0,
                         "timed_out": False,
+                        "mode": "quick",
                         "git_head": "agent-head",
                         "git_diff_hash": "agent-diff",
                         "working_tree_dirty": False,
@@ -2270,9 +2272,42 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(run["git_diff_hash"], "agent-diff")
         self.assertFalse(run["working_tree_dirty"])
         self.assertEqual(run["observed_paths"], ["src/agent.py"])
+        self.assertEqual(run["metadata"]["verification_mode"], "quick")
         self.assertEqual(result["verification_run"]["source"], "agent_reported")
         self.assertEqual(result["previous_event"]["event_id"], last_seen_event_id)
         self.assertEqual(result["latest_event"]["event_id"], run["id"])
+
+    def test_record_verification_run_rejects_invalid_mode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--title", "Invalid mode"])
+            store = Store(db)
+            try:
+                task = store.list_where("tasks", "project_id=?", ("project_test",))[0]
+                task_id = task["id"]
+                last_seen_event_id = store.latest_task_status_event(task_id)["event_id"]
+            finally:
+                store.close()
+
+            with self.assertRaises(McpToolError):
+                call_tool(
+                    "record_verification_run",
+                    {
+                        "task_id": task_id,
+                        "last_seen_event_id": last_seen_event_id,
+                        "command": "python -m unittest",
+                        "cwd": str(root),
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "timed_out": False,
+                        "mode": "smoke",
+                    },
+                    db,
+                )
 
     def test_record_verification_run_rejects_stale_event_without_writing(self) -> None:
         with TemporaryDirectory() as directory:

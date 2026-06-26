@@ -279,6 +279,7 @@ TOOLS = [
                 "exit_code": {"type": ["integer", "null"]},
                 "timed_out": {"type": "boolean"},
                 "timeout_seconds": {"type": "number"},
+                "mode": {"type": "string", "enum": ["quick", "targeted", "full"], "description": "Verification scope."},
                 "git_head": {"type": ["string", "null"]},
                 "git_diff_hash": {"type": "string"},
                 "working_tree_dirty": {"type": "boolean"},
@@ -335,7 +336,7 @@ TOOLS = [
     },
     {
         "name": "record_test_result",
-        "description": "Wrapper for recording an externally reported verification log and returning refreshed task context.",
+        "description": "Record an external verification log and return refreshed task context.",
         "inputSchema": json_schema(
             {
                 "task_id": {"type": "string"},
@@ -348,6 +349,7 @@ TOOLS = [
                 "exit_code": {"type": ["integer", "null"]},
                 "timed_out": {"type": "boolean"},
                 "timeout_seconds": {"type": "number"},
+                "mode": {"type": "string", "enum": ["quick", "targeted", "full"], "description": "Verification scope."},
                 "git_head": {"type": ["string", "null"]},
                 "git_diff_hash": {"type": "string"},
                 "working_tree_dirty": {"type": "boolean"},
@@ -575,7 +577,7 @@ TOOLS = [
     },
     {
         "name": "record_verification_run",
-        "description": "Record an externally reported verification log as agent_reported evidence.",
+        "description": "Record an external verification log as agent_reported evidence.",
         "inputSchema": json_schema(
             {
                 "task_id": {"type": "string"},
@@ -588,6 +590,7 @@ TOOLS = [
                 "exit_code": {"type": ["integer", "null"]},
                 "timed_out": {"type": "boolean"},
                 "timeout_seconds": {"type": "number"},
+                "mode": {"type": "string", "enum": ["quick", "targeted", "full"], "description": "Verification scope."},
                 "git_head": {"type": ["string", "null"]},
                 "metadata": {"type": "object"},
                 "started_at": {"type": "string"},
@@ -1589,6 +1592,9 @@ def mcp_record_verification_run(store: Store, arguments: dict) -> dict:
     metadata = arguments.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise McpToolError("argument must be an object: metadata")
+    mode = optional_string(arguments, "mode", metadata.get("verification_mode", "targeted")) or "targeted"
+    if mode not in {"quick", "targeted", "full"}:
+        raise McpToolError("argument must be one of quick, targeted, full: mode")
     finished_at = optional_string(arguments, "finished_at", now_iso()) or now_iso()
     if any(key in arguments for key in ("git_head", "git_diff_hash", "working_tree_dirty")):
         snapshot = {
@@ -1615,6 +1621,7 @@ def mcp_record_verification_run(store: Store, arguments: dict) -> dict:
         **snapshot_columns(snapshot),
         "metadata": {
             **metadata,
+            "verification_mode": mode,
             "secret_issue_count": len(secret_issues),
             "secret_issues": secret_issues,
             "runner": metadata.get("runner", "external_agent"),

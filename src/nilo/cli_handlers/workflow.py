@@ -301,7 +301,9 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "- Follow the first action shown by `nilo next`.",
                 "- Do not treat stale, missing, or failed evidence as complete.",
                 "- Do not treat unresolved review findings as complete.",
-                "- After verification, record it with `nilo check`.",
+                "- After verification, record it with `nilo check --mode quick|targeted|full`.",
+                "- Use quick for narrow smoke checks, targeted for changed modules or focused test groups, and full for releases or broad-risk changes.",
+                "- Treat timeouts as guardrails around a chosen scope, not as the main way to make full-suite verification practical.",
                 "- Final completion acceptance remains a human decision.",
                 "- MCP is not the normal entrypoint; use available Nilo MCP tools only for review handoff, reviewer workers, or MCP-based evidence recording.",
                 "",
@@ -610,6 +612,7 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
         if not task:
             raise SystemExit(f"task not found: {args.task}")
         result = run_local_verification(args.command, Path.cwd(), args.timeout)
+        result.setdefault("metadata", {})["verification_mode"] = args.mode
         boundary = resolve_project_boundary(db_path=args.db)
         try:
             require_write_fence(boundary)
@@ -639,6 +642,7 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
                 status="open",
             )
         print(f"verification_run: {row['id']}")
+        print(f"mode: {args.mode}")
         print(f"exit_code: {row['exit_code']}")
         print(f"timed_out: {bool(row['timed_out'])}")
     finally:

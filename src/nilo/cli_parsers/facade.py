@@ -43,6 +43,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     check.add_argument("command")
     add_project_option(check)
     add_task_option(check)
+    check.add_argument("--mode", choices=["quick", "targeted", "full"], default="targeted")
     check.add_argument("--timeout", type=float, default=300.0)
     check.set_defaults(func=handlers.cmd_facade_check)
 

@@ -1351,7 +1351,9 @@ variables:
                 help_body = help_output.getvalue()
                 self.assertIn("Start with `nilo status --ai`", help_body)
                 self.assertIn("Follow the first action shown by `nilo next`", help_body)
-                self.assertIn("record it with `nilo check`", help_body)
+                self.assertIn("record it with `nilo check --mode quick|targeted|full`", help_body)
+                self.assertIn("Use quick for narrow smoke checks", help_body)
+                self.assertIn("Treat timeouts as guardrails", help_body)
                 self.assertIn("Work size:", help_body)
                 self.assertIn("Large work must be routed through roadmap first.", help_body)
                 self.assertIn("nilo roadmap discuss", help_body)
@@ -8922,7 +8924,9 @@ close 済み commitment を表示できるようにした。
                         "検証実行を記録する",
                     ]
                 )
-                main(["--db", str(db), "verification", "run", "--task", "task_test", "--command", command])
+                verification_output = io.StringIO()
+                with redirect_stdout(verification_output):
+                    main(["--db", str(db), "verification", "run", "--task", "task_test", "--command", command, "--mode", "targeted"])
                 status_output = io.StringIO()
                 with redirect_stdout(status_output):
                     main(["--db", str(db), "task", "status", "--task", "task_test"])
@@ -8940,11 +8944,55 @@ close 済み commitment を表示できるようにした。
             self.assertTrue(run["finished_at"])
             self.assertIn("working_tree_dirty", run["metadata"])
             self.assertIn("working_tree_files", run["metadata"])
+            self.assertEqual(run["metadata"]["verification_mode"], "targeted")
             self.assertIsInstance(run["metadata"]["working_tree_dirty"], bool)
             self.assertIsInstance(run["metadata"]["working_tree_files"], list)
+            self.assertIn("mode: targeted", verification_output.getvalue())
             self.assertIn("状態: 検証成功", status_output.getvalue())
             self.assertIn("最新の検証実行:", status_output.getvalue())
             self.assertIn("検証元: nilo_executed", status_output.getvalue())
+            self.assertIn("verification_mode: targeted", status_output.getvalue())
+
+    def test_facade_check_records_quick_verification_mode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            script = root / "verify.py"
+            script.write_text("print('quick ok')\n", encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "quick verification",
+                    ]
+                )
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "check",
+                        f'"{sys.executable}" "{script}"',
+                        "--project",
+                        "project_test",
+                        "--mode",
+                        "quick",
+                    ]
+                )
+
+            store = Store(db)
+            run = store.latest_for_task("verification_runs", "task_test")
+            store.close()
+            self.assertEqual(run["metadata"]["verification_mode"], "quick")
 
     def test_status_surfaces_dirty_verification_working_tree(self) -> None:
         with TemporaryDirectory() as directory:

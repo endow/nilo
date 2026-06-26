@@ -67,7 +67,7 @@ def build_suite(group: str) -> unittest.TestSuite:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run a focused group from tests.test_cli.")
+    parser = argparse.ArgumentParser(description="Run a targeted focused group from tests.test_cli.")
     parser.add_argument("group", choices=sorted([*GROUPS, "ungrouped"]))
     parser.add_argument("--list", action="store_true", help="List selected test method names without running them.")
     args = parser.parse_args(argv)

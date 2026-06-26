@@ -140,6 +140,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
             result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
             print(f"{field_label('latest_verification_run')}: {verification_run['id']} ({result})")
             print(f"{field_label('verification_source')}: {verification_run.get('source', 'nilo_executed')}")
+            print(f"verification_mode: {verification_run.get('metadata', {}).get('verification_mode', 'targeted')}")
             print(f"{field_label('verification_command')}: {verification_run['command']}")
             print(f"{field_label('verification_working_tree')}: {c.verification_working_tree_summary(verification_run)}")
             for line in c.verification_snapshot_policy_lines(verification_run):

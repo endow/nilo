@@ -13,8 +13,8 @@ variables:
     type: string
     required: true
 verification:
-  - command: "python -m pytest -q"
-    reason: "Run the project test suite when available."
+  - command: "nilo check \"python -m unittest discover tests\" --project {project_id} --mode targeted --timeout 120"
+    reason: "Run the project's most relevant targeted tests and record them as verification evidence."
 review:
   required: false
   focus:

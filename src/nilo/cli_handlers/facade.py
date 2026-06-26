@@ -226,7 +226,7 @@ def cmd_facade_check(args: argparse.Namespace) -> None:
         task_id = resolve_task_id(args, store)
     finally:
         store.close()
-    cmd_verification_run(argparse.Namespace(db=args.db, task=task_id, command=args.command, timeout=args.timeout))
+    cmd_verification_run(argparse.Namespace(db=args.db, task=task_id, command=args.command, mode=args.mode, timeout=args.timeout))
 
 
 def cmd_facade_report(args: argparse.Namespace) -> None:

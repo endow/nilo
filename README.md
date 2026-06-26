@@ -355,13 +355,15 @@ nilo review --help
 nilo roadmap --help
 ```
 
-テスト:
+テストは目的に合わせて `quick` / `targeted` / `full` を選びます。timeout は選んだ範囲の保険であり、全体テストを常用するための前提ではありません。
 
 ```bash
-nilo check "python -m unittest discover tests" --project nilo --timeout 300
+nilo check "python -m unittest tests.test_verification" --project nilo --mode quick --timeout 60
+nilo check "python tests/run_cli_group.py verification" --project nilo --mode targeted --timeout 120
+nilo check "python -m unittest discover tests" --project nilo --mode full --timeout 300
 ```
 
-`tests.test_cli` の一部だけを確認したい場合:
+`quick` は狭い smoke check、`targeted` は変更領域や `tests.test_cli` の一部、`full` は release や広範囲の変更で使います。`tests.test_cli` の focused group は helper で実行できます:
 
 ```bash
 python tests/run_cli_group.py review

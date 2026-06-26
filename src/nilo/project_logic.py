@@ -749,7 +749,8 @@ def verification_summary(verification_run: dict | None) -> str:
         return "none"
     result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
     source = verification_run.get("source", "nilo_executed")
-    return f"{verification_run['id']} ({result}, source={source})"
+    mode = verification_run.get("metadata", {}).get("verification_mode", "targeted")
+    return f"{verification_run['id']} ({result}, source={source}, mode={mode})"
 
 
 def recipe_provenance_summary(store: Store, task_id: str) -> dict | None:
