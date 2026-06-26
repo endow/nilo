@@ -246,11 +246,11 @@ class FailureLedgerTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "failure", "show", "failure_show"])
             body = output.getvalue()
-            self.assertIn("source: manual", body)
-            self.assertIn("actor: human", body)
+            self.assertIn("発生元: manual", body)
+            self.assertIn("記録者: human", body)
             self.assertIn("related_id: report_test", body)
             self.assertIn("snapshot: {}", body)
-            self.assertIn("resolution_note:", body)
+            self.assertIn("解決メモ:", body)
 
     def test_doctor_ai_context_includes_failure_metrics(self) -> None:
         with TemporaryDirectory() as directory:
@@ -279,9 +279,9 @@ class FailureLedgerTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "task", "show", "--task", "task_test", "--ai"])
             body = output.getvalue()
-            self.assertIn("failure_logs:", body)
-            self.assertIn("human_rework_required", body)
-            self.assertIn("Failure logs are observations, not mandatory rules.", body)
+            self.assertIn("失敗ログ:", body)
+            self.assertIn("人間による修正要求", body)
+            self.assertIn("失敗ログは観測履歴であり、必須ルールではありません。", body)
             self.assertNotIn("secret_detected", body)
 
     def test_status_ai_includes_compact_failure_summary(self) -> None:
@@ -293,10 +293,70 @@ class FailureLedgerTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "status", "--project", "project_test", "--ai"])
             body = output.getvalue()
-            self.assertIn("failure_summary:", body)
-            self.assertIn("- open_failures: 1", body)
-            self.assertIn("Use `nilo failure list --project project_test` for details.", body)
+            self.assertIn("失敗ログ概要:", body)
+            self.assertIn("- 未解決の失敗: 1", body)
+            self.assertIn("詳細は `nilo failure list --project project_test` を確認してください。", body)
             self.assertNotIn("metadata_mismatch message metadata_mismatch message", body)
+
+    def test_status_text_surfaces_use_japanese_labels_but_json_stays_machine_readable(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            self.create_project_task(db)
+
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "status", "--project", "project_test"])
+            status_body = status_output.getvalue()
+            self.assertIn("状態", status_body)
+            self.assertIn("次の作業", status_body)
+            self.assertIn("証跡", status_body)
+
+            ai_output = io.StringIO()
+            with redirect_stdout(ai_output):
+                main(["--db", str(db), "status", "--project", "project_test", "--ai"])
+            ai_body = ai_output.getvalue()
+            self.assertIn("状態", ai_body)
+            self.assertIn("次の作業", ai_body)
+            self.assertIn("証跡", ai_body)
+            self.assertIn("未提出 (missing)", ai_body)
+
+            json_output = io.StringIO()
+            with redirect_stdout(json_output):
+                main(["--db", str(db), "status", "--project", "project_test", "--json"])
+            data = json.loads(json_output.getvalue())
+            self.assertIn("current_task", data)
+            self.assertEqual(data["current_task"]["task"]["state"], "planned")
+            self.assertNotIn("状態", data)
+
+    def test_failure_text_surfaces_use_japanese_labels_but_db_values_stay_english(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            self.create_project_task(db)
+            self.insert_failure(db, "failure_japanese_labels", category="metadata_mismatch", severity="high", status="open")
+
+            list_output = io.StringIO()
+            with redirect_stdout(list_output):
+                main(["--db", str(db), "failure", "list", "--project", "project_test"])
+            list_body = list_output.getvalue()
+            for label in ["失敗ログ", "重大度", "分類", "状態", "内容", "作成日時"]:
+                self.assertIn(label, list_body)
+
+            summary_output = io.StringIO()
+            with redirect_stdout(summary_output):
+                main(["--db", str(db), "failure", "summary", "--project", "project_test"])
+            summary_body = summary_output.getvalue()
+            for label in ["失敗ログ概要", "重大度別", "分類別"]:
+                self.assertIn(label, summary_body)
+
+            store = Store(db)
+            try:
+                failure = store.get("failure_logs", "failure_japanese_labels")
+            finally:
+                store.close()
+            assert failure is not None
+            self.assertEqual(failure["status"], "open")
+            self.assertEqual(failure["severity"], "high")
+            self.assertEqual(failure["category"], "metadata_mismatch")
 
 
 if __name__ == "__main__":

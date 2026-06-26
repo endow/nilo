@@ -4,6 +4,7 @@ import locale
 from pathlib import Path
 
 from .design_residue import parse_design_residue
+from .display_labels import field_label, status_label
 from .human_status import human_next_action_text, human_project_work_state, human_task_status
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
 from .snapshot import current_git_snapshot, evidence_status
@@ -1427,24 +1428,34 @@ def print_project_summary_text(summary: dict) -> None:
 
 
 def print_human_project_status(store: Store, project: dict, active_tasks: list[dict], statuses: dict[str, str]) -> None:
+    from .failure import summarize_failure_logs
+
+    print(f"{field_label('project')}: {project['id']}")
     if not active_tasks:
-        print("いいえ、現在残っているタスクはありません。")
+        print(f"{field_label('status')}: 完了")
+        print()
+        print(f"{field_label('next_action')}:")
+        print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
         return
 
-    count = len(active_tasks)
-    print(f"はい、{count}件残っています。")
+    print(f"{field_label('status')}: 作業中")
     print()
+    print("作業中のタスク:")
 
     next_lines: list[str] = []
     for task in active_tasks[:3]:
         task = {**task, "status": statuses[task["id"]]}
         verification_run = store.latest_for_task("verification_runs", task["id"])
         blocking = unresolved_blocking_review_findings(store, task["id"])
+        evidence = evidence_status(verification_run, current_git_snapshot(Path.cwd()))
+        print(f"- {task['title']}")
+        print(f"  {field_label('status')}: {status_label(task['status'])}")
+        print(f"  {field_label('evidence')}: {status_label(evidence)}")
         for line in human_active_task_lines(task, verification_run, len(blocking)):
-            print(line)
+            print(f"  {line}")
         recipe_label = human_recipe_provenance_label(recipe_provenance_summary(store, task["id"]))
         if recipe_label:
-            print(f"Recipe: {recipe_label}")
+            print(f"  Recipe: {recipe_label}")
         print()
 
         status = task["status"]
@@ -1452,11 +1463,20 @@ def print_human_project_status(store: Store, project: dict, active_tasks: list[d
         if blocking:
             next_lines.append("次はその指摘を確認して、修正するか、理由を記録して受け入れれば完了に進めます。")
         else:
-            next_lines.append(next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"])[0])
+            next_lines.append(human_next_action_text(next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"])[0]))
 
+    print(f"{field_label('evidence')}:")
+    print("- 上記の各タスク行を確認してください。")
+    print()
     if next_lines:
+        print(f"{field_label('next_action')}:")
         print(next_lines[0])
         print()
+    failure_summary = summarize_failure_logs(store, project_id=project["id"], limit=100000)
+    print(f"{field_label('failure_logs')}:")
+    print(f"- {field_label('open_failures')}: {failure_summary['open_failure_count']}")
+    print(f"- {field_label('high_open_failures')}: {failure_summary['high_open_failure_count']}")
+    print()
     print("詳細が必要な場合:")
     print(f"nilo status --project {project['id']} --verbose")
 

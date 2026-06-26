@@ -7,7 +7,9 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from ..ai_context import project_ai_context, render_ai_context_text
+from ..display_labels import field_label, status_label
 from ..failure import deterministic_id
+from ..human_status import human_next_action_text
 from ..store import Store
 from ..timeutil import now_iso
 from .task import cmd_task_complete, cmd_task_create
@@ -65,16 +67,16 @@ def print_facade_next_for_task(store: Store, task_id: str) -> None:
     status = c.projected_task_status(store, task)
     verification_run = store.latest_for_task("verification_runs", task_id)
     unexecuted = c.unexecuted_verifications_for_task(status, verification_run)
-    print(f"task: {task['id']}")
-    print(f"title: {task['title']}")
-    print(f"status: {status}")
-    print("next:")
+    print(f"{field_label('task')}: {task['id']}")
+    print(f"{field_label('title')}: {task['title']}")
+    print(f"{field_label('status')}: {status_label(status)}")
+    print(f"{field_label('next_action')}:")
     pending_review = p.latest_pending_review_request(store, task_id)
     if pending_review:
-        print(f"- {p.next_action_for_review_request(store, pending_review)}")
+        print(f"- {human_next_action_text(p.next_action_for_review_request(store, pending_review))}")
         return
     for action in c.next_actions_for_task(status, verification_run, unexecuted, task["id"], task["task_type"]):
-        print(f"- {action}")
+        print(f"- {human_next_action_text(action)}")
 
 
 def cmd_facade_status(args: argparse.Namespace) -> None:
@@ -101,28 +103,28 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
 
             c.print_human_project_status(store, project, active_tasks, statuses)
             return
-        print(f"project: {summary['project_id']} ({summary['project_name']})")
-        print(f"roadmap: {summary['roadmap_position']}")
-        print(f"work: {summary['work_state']}")
-        print("active:")
+        print(f"{field_label('project')}: {summary['project_id']} ({summary['project_name']})")
+        print(f"ロードマップ: {summary['roadmap_position']}")
+        print(f"作業状態: {summary['work_state']}")
+        print("作業中:")
         if summary["active_tasks"]:
             for task in summary["active_tasks"]:
-                print(f"- {task['id']} [{task['status']}] {task['task_type']} {task['title']}")
+                print(f"- {task['id']} [{status_label(task['status'])}] {field_label('task_type')}: {task['task_type']} {task['title']}")
         else:
-            print("- none")
-        print("todo:")
+            print("- なし")
+        print("TODO:")
         if summary["todo_status_counts"]:
             for status, count in summary["todo_status_counts"].items():
-                print(f"- {status}: {count}")
+                print(f"- {status_label(status)}: {count}")
         else:
-            print("- none")
-        print("next:")
+            print("- なし")
+        print(f"{field_label('next_action')}:")
         actions = summary["next_actions"] or []
         if actions:
             for action in actions[:3]:
-                print(f"- {action}")
+                print(f"- {human_next_action_text(action)}")
         else:
-            print("- none")
+            print("- なし")
     finally:
         store.close()
 
@@ -139,13 +141,13 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             task_id = summary["active_tasks"][0]["id"]
             print_facade_next_for_task(store, task_id)
             return
-        print(f"project: {summary['project_id']} ({summary['project_name']})")
-        print("next:")
+        print(f"{field_label('project')}: {summary['project_id']} ({summary['project_name']})")
+        print(f"{field_label('next_action')}:")
         actions = summary["next_actions"] or []
         if actions:
-            print(f"- {actions[0]}")
+            print(f"- {human_next_action_text(actions[0])}")
         else:
-            print("- none")
+            print("- なし")
     finally:
         store.close()
 

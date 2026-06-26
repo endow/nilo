@@ -3,18 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 
+from ..display_labels import category_label, field_label, severity_label, status_label
 from ..failure import list_failure_logs, summarize_failure_logs, update_failure_status
 from ..store import Store
 
 
 def print_failure_row(failure: dict) -> None:
     print(f"- {failure['id']}")
-    print(f"  severity: {failure['severity']}")
-    print(f"  category: {failure['category']}")
-    print(f"  status: {failure['status']}")
-    print(f"  task: {failure['task_id']}")
-    print(f"  message: {failure['message']}")
-    print(f"  created_at: {failure['created_at']}")
+    print(f"  {field_label('severity')}: {severity_label(failure['severity'])}")
+    print(f"  {field_label('category')}: {category_label(failure['category'])}")
+    print(f"  {field_label('status')}: {status_label(failure['status'])}")
+    print(f"  {field_label('task')}: {failure['task_id']}")
+    print(f"  {field_label('message')}: {failure['message']}")
+    print(f"  {field_label('created_at')}: {failure['created_at']}")
 
 
 def cmd_failure_list(args: argparse.Namespace) -> None:
@@ -32,12 +33,12 @@ def cmd_failure_list(args: argparse.Namespace) -> None:
         if args.json:
             print(json.dumps({"failures": failures}, ensure_ascii=False, indent=2))
             return
-        print("failure_logs:")
+        print(f"{field_label('failure_logs')}:")
         if failures:
             for failure in failures:
                 print_failure_row(failure)
         else:
-            print("- none")
+            print("- なし")
     finally:
         store.close()
 
@@ -49,37 +50,37 @@ def cmd_failure_summary(args: argparse.Namespace) -> None:
         if args.json:
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return
-        print("failure_summary:")
-        print(f"- total: {summary['total']}")
-        print(f"- open: {summary['open']}")
-        print(f"- resolved: {summary['resolved']}")
-        print(f"- ignored: {summary['ignored']}")
+        print(f"{field_label('failure_summary')}:")
+        print(f"- {field_label('total')}: {summary['total']}")
+        print(f"- {field_label('open')}: {summary['open']}")
+        print(f"- {field_label('resolved')}: {summary['resolved']}")
+        print(f"- {field_label('ignored')}: {summary['ignored']}")
         print()
-        print("by_severity:")
+        print(f"{field_label('by_severity')}:")
         for key, count in sorted(summary["by_severity"].items()):
-            print(f"- {key}: {count}")
+            print(f"- {severity_label(key)}: {count}")
         if not summary["by_severity"]:
-            print("- none")
+            print("- なし")
         print()
-        print("by_category:")
+        print(f"{field_label('by_category')}:")
         for key, count in sorted(summary["by_category"].items()):
-            print(f"- {key}: {count}")
+            print(f"- {category_label(key)}: {count}")
         if not summary["by_category"]:
-            print("- none")
+            print("- なし")
         print()
-        print("by_status:")
+        print(f"{field_label('by_status')}:")
         for key, count in sorted(summary["by_status"].items()):
-            print(f"- {key}: {count}")
+            print(f"- {status_label(key)}: {count}")
         if not summary["by_status"]:
-            print("- none")
+            print("- なし")
         print()
-        print("recent_high_failures:")
+        print(f"{field_label('recent_high_failures')}:")
         recent_high = summary["recent_high_failures"]
         if recent_high:
             for failure in recent_high:
-                print(f"- {failure['id']} {failure['task_id']} {failure['category']}")
+                print(f"- {failure['id']} {failure['task_id']} {category_label(failure['category'])}")
         else:
-            print("- none")
+            print("- なし")
     finally:
         store.close()
 
@@ -111,7 +112,14 @@ def cmd_failure_show(args: argparse.Namespace) -> None:
             "resolved_at",
             "resolved_by",
         ):
-            print(f"{key}: {failure.get(key, '')}")
+            value = failure.get(key, "")
+            if key == "category":
+                value = category_label(value)
+            elif key == "severity":
+                value = severity_label(value)
+            elif key == "status":
+                value = status_label(value)
+            print(f"{field_label(key)}: {value}")
     finally:
         store.close()
 
@@ -121,7 +129,7 @@ def print_status_update(prefix: str, failure: dict, as_json: bool) -> None:
         print(json.dumps({"failure": failure}, ensure_ascii=False, indent=2))
         return
     print(f"{prefix}: {failure['id']}")
-    print(f"status: {failure['status']}")
+    print(f"{field_label('status')}: {status_label(failure['status'])}")
 
 
 def cmd_failure_resolve(args: argparse.Namespace) -> None:

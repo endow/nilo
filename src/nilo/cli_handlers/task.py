@@ -6,7 +6,9 @@ from pathlib import Path
 
 from ..ai_context import evidence_ai_context, review_ai_context, task_ai_context
 from ..cli_support import make_id
+from ..display_labels import ai_value_label, bool_label, category_label, field_label, severity_label, status_label
 from ..failure import deterministic_id
+from ..human_status import human_next_action_text
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
 from ..task_logic import completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
@@ -81,25 +83,26 @@ def cmd_task_status(args: argparse.Namespace) -> None:
                 print(json.dumps(data, ensure_ascii=False, indent=2))
             else:
                 task_summary = data["task"]
-                print(f"task: {task_summary['id']} [{task_summary['state']}] {task_summary['title']}")
-                print(f"evidence: {data['evidence']['status']}")
-                print(f"unresolved_review_count: {data['review']['unresolved_count']}")
-                print(f"completion: {'allowed' if data['completion']['allowed'] else 'blocked'}")
-                print("blocking_reasons:")
+                print(f"{field_label('task')}: {task_summary['id']} {task_summary['title']}")
+                print(f"{field_label('status')}: {ai_value_label(task_summary['state'])}")
+                print(f"{field_label('evidence')}: {ai_value_label(data['evidence']['status'])}")
+                print(f"{field_label('unresolved_review_count')}: {data['review']['unresolved_count']}")
+                print(f"{field_label('completion')}: {ai_value_label('allowed' if data['completion']['allowed'] else 'blocked')}")
+                print(f"{field_label('blocking_reasons')}:")
                 if data["completion"]["blocking_reasons"]:
                     for reason in data["completion"]["blocking_reasons"]:
                         print(f"- {reason}")
                 else:
-                    print("- none")
+                    print("- なし")
                 if data.get("failure_logs"):
-                    print("failure_logs:")
+                    print(f"{field_label('failure_logs')}:")
                     for failure in data["failure_logs"]:
-                        print(f"- [{failure['severity']}] {failure['category']}")
+                        print(f"- [{severity_label(failure['severity'])}] {category_label(failure['category'])}")
                         print(f"  {failure['message']}")
                     print(data["failure_logs_note"])
-                print("next_required_actions:")
-                for action in data["next_required_actions"] or ["none"]:
-                    print(f"- {action}")
+                print(f"{field_label('next_required_actions')}:")
+                for action in data["next_required_actions"] or ["なし"]:
+                    print(f"- {human_next_action_text(action)}")
             return
         verification_run = store.latest_for_task("verification_runs", args.task)
         current_snapshot = current_git_snapshot(Path.cwd())
@@ -110,64 +113,64 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         review_result = store.latest_for_task("review_results", args.task)
         review_findings = store.list_where("review_findings", "task_id=?", (args.task,))
         recipe_provenance = store.latest_for_task("recipe_task_provenance", args.task)
-        print(f"id: {task['id']}")
-        print(f"status: {projected_task_status(store, task)}")
-        print(f"task_type: {task['task_type']}")
-        print(f"risk_level: {task['risk_level']}")
-        print(f"requires_understanding_check: {bool(task['requires_understanding_check'])}")
-        print(f"mode: {task.get('mode', 'normal')}")
+        print(f"{field_label('id')}: {task['id']}")
+        print(f"{field_label('status')}: {status_label(projected_task_status(store, task))}")
+        print(f"{field_label('task_type')}: {task['task_type']}")
+        print(f"{field_label('risk_level')}: {task['risk_level']}")
+        print(f"{field_label('requires_understanding_check')}: {bool_label(bool(task['requires_understanding_check']))}")
+        print(f"{field_label('mode')}: {task.get('mode', 'normal')}")
         if recipe_provenance:
-            print(f"recipe: {recipe_provenance['recipe_name']} ({recipe_provenance['source_layer']} layer)")
-            print("recipe_provenance: stored for audit")
+            print(f"{field_label('recipe')}: {recipe_provenance['recipe_name']} ({recipe_provenance['source_layer']} layer)")
+            print(f"{field_label('recipe_provenance')}: stored for audit")
         if task.get("description"):
-            print("description:")
+            print(f"{field_label('description')}:")
             print(task["description"])
         if task.get("acceptance_criteria"):
-            print("acceptance_criteria:")
+            print(f"{field_label('acceptance_criteria')}:")
             for criterion in task["acceptance_criteria"]:
                 print(f"- {criterion}")
-        print(f"base_commit: {task['base_commit'] or 'none'}")
+        print(f"{field_label('base_commit')}: {task['base_commit'] or 'なし'}")
         if instruction:
-            print(f"latest_instruction: {instruction['id']}")
+            print(f"{field_label('latest_instruction')}: {instruction['id']}")
         if report:
-            print(f"latest_report: {report['id']} ({report['claimed_status']})")
-        print(f"evidence_status: {evidence_status(verification_run, current_snapshot)}")
+            print(f"{field_label('latest_report')}: {report['id']} ({report['claimed_status']})")
+        print(f"{field_label('evidence_status')}: {status_label(evidence_status(verification_run, current_snapshot))}")
         if verification_run:
             result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
-            print(f"latest_verification_run: {verification_run['id']} ({result})")
-            print(f"verification_source: {verification_run.get('source', 'nilo_executed')}")
-            print(f"verification_command: {verification_run['command']}")
-            print(f"verification_working_tree: {c.verification_working_tree_summary(verification_run)}")
+            print(f"{field_label('latest_verification_run')}: {verification_run['id']} ({result})")
+            print(f"{field_label('verification_source')}: {verification_run.get('source', 'nilo_executed')}")
+            print(f"{field_label('verification_command')}: {verification_run['command']}")
+            print(f"{field_label('verification_working_tree')}: {c.verification_working_tree_summary(verification_run)}")
             for line in c.verification_snapshot_policy_lines(verification_run):
                 print(line)
             for file in c.verification_working_tree_state(verification_run)["files"]:
                 print(f"- {file}")
             if verification_run["evidence_check_id"]:
-                print(f"verification_evidence_check: {verification_run['evidence_check_id']}")
+                print(f"{field_label('verification_evidence_check')}: {verification_run['evidence_check_id']}")
         if quality_review:
             c.print_quality_review(quality_review)
         if review_request:
-            print(f"latest_review_request: {review_request['id']} ({review_request['status']}) {review_request['requester']} -> {review_request['reviewer']}")
+            print(f"{field_label('latest_review_request')}: {review_request['id']} ({review_request['status']}) {review_request['requester']} -> {review_request['reviewer']}")
         if review_result:
-            print(f"latest_review_result: {review_result['id']} ({review_result['verdict']}, {review_result_status(review_result, current_snapshot)})")
+            print(f"{field_label('latest_review_result')}: {review_result['id']} ({review_result['verdict']}, {review_result_status(review_result, current_snapshot)})")
         if review_findings:
-            print("review_findings:")
+            print(f"{field_label('review_findings')}:")
             for finding in review_findings:
-                marker = "blocking" if finding["blocking"] else "nonblocking"
+                marker = "ブロック" if finding["blocking"] else "非ブロック"
                 location = f" {finding['file_path']}:{finding['line']}" if finding["file_path"] else ""
-                print(f"- {finding['id']} [{finding['status']}] {finding['severity']} {marker}{location}: {finding['title']}")
+                print(f"- {finding['id']} [{status_label(finding['status'])}] {severity_label(finding['severity'])} {marker}{location}: {finding['title']}")
         completion_warnings = c.recipe_completion_warnings(store, args.task)
         if completion_warnings:
-            print("completion_warnings:")
+            print(f"{field_label('completion_warnings')}:")
             for warning in completion_warnings:
-                print(f"- {warning['severity']}: {warning['message']}")
+                print(f"- {severity_label(warning['severity'])}: {warning['message']}")
         understanding = store.latest_for_task("understanding_checks", args.task)
         if understanding:
-            print(f"latest_understanding_check: {understanding['id']} ({understanding['status']})")
+            print(f"{field_label('latest_understanding_check')}: {understanding['id']} ({status_label(understanding['status'])})")
         completion = store.latest_for_task("task_completions", args.task)
         if completion:
-            print(f"completed_reason: {completion['reason']}")
-            print(f"completed_with_reservations: {bool(completion.get('completed_with_reservations'))}")
+            print(f"{field_label('completed_reason')}: {completion['reason']}")
+            print(f"{field_label('completed_with_reservations')}: {bool_label(bool(completion.get('completed_with_reservations')))}")
     finally:
         store.close()
 
@@ -181,11 +184,11 @@ def cmd_evidence_show(args: argparse.Namespace) -> None:
         if args.format == "json":
             print(json.dumps(data, ensure_ascii=False, indent=2))
             return
-        print(f"task_id: {args.task}")
-        print(f"evidence: {data['status']}")
-        print(f"verification_run: {data['verification_run_id'] or 'none'}")
+        print(f"{field_label('task_id')}: {args.task}")
+        print(f"{field_label('evidence')}: {status_label(data['status'])}")
+        print(f"{field_label('verification_run')}: {data['verification_run_id'] or 'なし'}")
         print(f"exit_code: {data['verification_exit_code']}")
-        print(f"timed_out: {data['verification_timed_out']}")
+        print(f"timed_out: {bool_label(data['verification_timed_out'])}")
     finally:
         store.close()
 
@@ -199,17 +202,17 @@ def cmd_review_show(args: argparse.Namespace) -> None:
         if args.format == "json":
             print(json.dumps(data, ensure_ascii=False, indent=2))
             return
-        print(f"task_id: {args.task}")
-        print(f"unresolved_review_count: {data['unresolved_count']}")
-        print(f"unresolved_blocking_count: {data['unresolved_blocking_count']}")
-        print("unresolved_findings:")
+        print(f"{field_label('task_id')}: {args.task}")
+        print(f"{field_label('unresolved_review_count')}: {data['unresolved_count']}")
+        print(f"{field_label('unresolved_blocking_count')}: {data['unresolved_blocking_count']}")
+        print(f"{field_label('unresolved_findings')}:")
         if data["unresolved_findings"]:
             for finding in data["unresolved_findings"]:
-                marker = "blocking" if finding["blocking"] else "nonblocking"
+                marker = "ブロック" if finding["blocking"] else "非ブロック"
                 location = f" {finding['file_path']}:{finding['line']}" if finding["file_path"] else ""
-                print(f"- {finding['id']} {finding['severity']} {marker}{location}: {finding['title']}")
+                print(f"- {finding['id']} {severity_label(finding['severity'])} {marker}{location}: {finding['title']}")
         else:
-            print("- none")
+            print("- なし")
     finally:
         store.close()
 

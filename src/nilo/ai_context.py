@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .display_labels import ai_value_label, category_label, field_label, severity_label
 from .failure import compact_failure_message, list_failure_logs, summarize_failure_logs
+from .human_status import human_next_action_text
 from .snapshot import current_git_snapshot, evidence_status
 from .store import Store
 from .task_logic import is_task_completed_status, projected_task_status, unresolved_review_findings
@@ -84,7 +86,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
             }
             for failure in failures
         ],
-        "failure_logs_note": "Failure logs are observations, not mandatory rules. Use them to avoid repeating obvious mistakes, but do not invent new requirements from them.",
+        "failure_logs_note": "失敗ログは観測履歴であり、必須ルールではありません。同じ失敗を避ける参考には使えますが、新しい要件を作らないでください。",
     }
 
 
@@ -127,10 +129,11 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
 
 
 def render_ai_context_text(data: dict[str, Any]) -> str:
-    lines = [f"project: {data['project_id']} ({data['project_name']})"]
+    lines = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
     current = data.get("current_task")
     if not current:
-        lines.append("current_task: none")
+        lines.append(f"{field_label('status')}: {ai_value_label('no_active_task')}")
+        lines.append("現在のタスク: なし")
     else:
         task = current["task"]
         git = current["git"]
@@ -139,34 +142,35 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
         completion = current["completion"]
         lines.extend(
             [
-                f"current_task: {task['id']} [{task['state']}] {task['title']}",
+                f"{field_label('task')}: {task['id']} {task['title']}",
+                f"{field_label('status')}: {ai_value_label(task['state'])}",
                 f"git: head={git['git_head'] or 'none'} diff_hash={git['git_diff_hash'] or 'none'} dirty={git['dirty']}",
-                f"evidence: {evidence['status']}",
-                f"unresolved_review_count: {review['unresolved_count']}",
-                f"completion: {'allowed' if completion['allowed'] else 'blocked'}",
+                f"{field_label('evidence')}: {ai_value_label(evidence['status'])}",
+                f"{field_label('unresolved_review_count')}: {review['unresolved_count']}",
+                f"{field_label('completion')}: {ai_value_label('allowed' if completion['allowed'] else 'blocked')}",
             ]
         )
         if completion["blocking_reasons"]:
-            lines.append("blocking_reasons:")
+            lines.append(f"{field_label('blocking_reasons')}:")
             lines.extend(f"- {reason}" for reason in completion["blocking_reasons"])
         if current.get("failure_logs"):
-            lines.append("failure_logs:")
+            lines.append(f"{field_label('failure_logs')}:")
             for failure in current["failure_logs"]:
-                lines.append(f"- [{failure['severity']}] {failure['category']}")
+                lines.append(f"- [{severity_label(failure['severity'])}] {category_label(failure['category'])}")
                 lines.append(f"  {failure['message']}")
             lines.append(current["failure_logs_note"])
     failure_summary = data.get("failure_summary", {})
     if failure_summary:
-        lines.append("failure_summary:")
-        lines.append(f"- open_failures: {failure_summary.get('open_failures', 0)}")
-        lines.append(f"- high_open_failures: {failure_summary.get('high_open_failures', 0)}")
+        lines.append(f"{field_label('failure_summary')}:")
+        lines.append(f"- {field_label('open_failures')}: {failure_summary.get('open_failures', 0)}")
+        lines.append(f"- {field_label('high_open_failures')}: {failure_summary.get('high_open_failures', 0)}")
         latest = failure_summary.get("latest_open_failure")
         if latest:
-            lines.append(f"- latest_open_failure: {latest['task_id']} {latest['category']}")
-        lines.append(f"Use `nilo failure list --project {data['project_id']}` for details.")
-    lines.append("next_required_actions:")
+            lines.append(f"- {field_label('latest_open_failure')}: {latest['task_id']} {category_label(latest['category'])}")
+        lines.append(f"詳細は `nilo failure list --project {data['project_id']}` を確認してください。")
+    lines.append(f"{field_label('next_required_actions')}:")
     actions = data.get("next_required_actions") or []
-    lines.extend(f"- {action}" for action in actions) if actions else lines.append("- none")
+    lines.extend(f"- {human_next_action_text(action)}" for action in actions) if actions else lines.append("- なし")
     return "\n".join(lines)
 
 

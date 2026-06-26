@@ -601,7 +601,7 @@ acceptance:
                 main(["--db", str(db), "task", "status", "--task", task_id])
 
             body = status_output.getvalue()
-            self.assertIn("id: " + task_id, body)
+            self.assertIn("ID: " + task_id, body)
             self.assertNotIn("recipe:", body)
 
             project_output = io.StringIO()
@@ -674,7 +674,7 @@ variables:
                 roadmap_discuss_output.getvalue(),
                 roadmap_file.read_text(encoding="utf-8"),
             ]:
-                self.assertIn("recipe: docs-update (project layer)", body)
+                self.assertIn("docs-update (project layer)", body)
                 self.assertNotIn("recipe_content_hash", body)
 
             summary = json.loads(project_json_output.getvalue())
@@ -860,7 +860,7 @@ completion_contract:
             self.assertIn("imported_provenance: 1", import_output.getvalue())
             self.assertIn("imported_recipe_files: 1", import_output.getvalue())
             self.assertIn("diagnostic: warning: missing_recipe_source_file", import_output.getvalue())
-            self.assertIn("recipe: docs-update (project layer)", status_output.getvalue())
+            self.assertIn("docs-update (project layer)", status_output.getvalue())
             self.assertTrue((target_root / ".nilo" / "recipes" / "docs-update.recipe.yml").exists())
 
             target_store = Store(target_db)
@@ -990,14 +990,14 @@ variables:
                 status_output = io.StringIO()
                 with redirect_stdout(status_output):
                     main(["--db", str(db), "status", "--verbose"])
-                self.assertIn(f"project: {project_id} (Nilo)", status_output.getvalue())
-                self.assertIn(f"- {task_id} [planned] implementation 日常タスク", status_output.getvalue())
+                self.assertIn(f"プロジェクト: {project_id} (Nilo)", status_output.getvalue())
+                self.assertIn(f"- {task_id} [計画済み] タスク種別: implementation 日常タスク", status_output.getvalue())
 
                 next_output = io.StringIO()
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next"])
-                self.assertIn(f"task: {task_id}", next_output.getvalue())
-                self.assertIn(f"run nilo instruct --task {task_id}", next_output.getvalue())
+                self.assertIn(f"タスク: {task_id}", next_output.getvalue())
+                self.assertIn("作業指示を生成してください。", next_output.getvalue())
 
                 check_output = io.StringIO()
                 with redirect_stdout(check_output):
@@ -1057,9 +1057,10 @@ variables:
                 with redirect_stdout(status_text):
                     main(["--db", str(db), "status", "--ai"])
                 body = status_text.getvalue()
-                self.assertIn("current_task: task_ai [planned] AI compact", body)
-                self.assertIn("evidence: missing", body)
-                self.assertIn("unresolved_review_count: 1", body)
+                self.assertIn("タスク: task_ai AI compact", body)
+                self.assertIn("状態: 計画済み (planned)", body)
+                self.assertIn("証跡: 未提出 (missing)", body)
+                self.assertIn("未解決レビュー指摘数: 1", body)
                 self.assertLess(len(body), 700)
 
                 status_json = io.StringIO()
@@ -1090,7 +1091,7 @@ variables:
                 status_with_report = io.StringIO()
                 with redirect_stdout(status_with_report):
                     main(["--db", str(db), "status", "--ai"])
-                self.assertIn("evidence: present", status_with_report.getvalue())
+                self.assertIn("証跡: 提出あり (present)", status_with_report.getvalue())
 
                 for command in (
                     ["task", "show", "--task", "task_ai", "--ai"],
@@ -1235,7 +1236,7 @@ variables:
                 status_output = io.StringIO()
                 with redirect_stdout(status_output):
                     main(["--db", str(db), "task", "status", "--task", task_id])
-                self.assertIn("mode: overdrive", status_output.getvalue())
+                self.assertIn("モード: overdrive", status_output.getvalue())
 
                 run_output = io.StringIO()
                 with redirect_stdout(run_output):
@@ -1778,9 +1779,9 @@ variables:
                 with redirect_stdout(status_output):
                     main(["--db", str(db), "status", "--project", project_id, "--verbose"])
                 status_body = status_output.getvalue()
-                self.assertIn("todo:", status_body)
-                self.assertIn("- ready: 1", status_body)
-                self.assertIn("- requires_roadmap: 1", status_body)
+                self.assertIn("TODO:", status_body)
+                self.assertIn("- 着手可能: 1", status_body)
+                self.assertIn("- ロードマップ確認待ち: 1", status_body)
 
                 next_output = io.StringIO()
                 with redirect_stdout(next_output):
@@ -1809,7 +1810,7 @@ variables:
                 with redirect_stdout(roadmap_next_output):
                     main(["--db", str(db), "next", "--project", project_id])
                 self.assertIn(
-                    "no active task; ask the user for the next concrete task within the current roadmap",
+                    "作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。",
                     roadmap_next_output.getvalue(),
                 )
                 self.assertNotIn("todo_open", roadmap_next_output.getvalue())
@@ -2179,7 +2180,7 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertIn("warning: deprecated Nilo managed block remains in tracked agent file: AGENTS.md", output.getvalue())
+            self.assertIn("警告: deprecated Nilo managed block remains in tracked agent file: AGENTS.md", output.getvalue())
             self.assertIn("old block", legacy.read_text(encoding="utf-8"))
             self.assertTrue((root / "AGENTS.override.md").exists())
             self.assertTrue((root / "CLAUDE.local.md").exists())
@@ -2199,7 +2200,7 @@ variables:
                 os.chdir(previous_cwd)
 
             self.assertNotIn("not overwriting unmanaged local file: AGENTS.override.md", output.getvalue())
-            self.assertEqual(output.getvalue().count("warning: unmanaged local instruction file: AGENTS.override.md"), 1)
+            self.assertEqual(output.getvalue().count("警告: unmanaged local instruction file: AGENTS.override.md"), 1)
             self.assertEqual("human codex notes", (root / "AGENTS.override.md").read_text(encoding="utf-8"))
 
     def test_init_warns_about_legacy_tracked_agent_block_and_does_not_remove_it(self) -> None:
@@ -2356,7 +2357,7 @@ variables:
                 with redirect_stdout(output):
                     main(["--db", str(db), "task", "status", "--task", "task_test"])
 
-            self.assertIn("evidence_status: missing", output.getvalue())
+            self.assertIn("証跡: 未提出", output.getvalue())
 
     def test_task_list_shows_project_tasks_with_projected_status(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2961,7 +2962,7 @@ Reduce roadmap transaction friction.
             status_output = io.StringIO()
             with redirect_stdout(status_output):
                 main(["--db", str(db), "status", "--project", "project_test", "--verbose"])
-            self.assertIn("roadmap: accepted commitment: One Step Roadmap Adoption", status_output.getvalue())
+            self.assertIn("ロードマップ: accepted commitment: One Step Roadmap Adoption", status_output.getvalue())
 
     def test_roadmap_adopt_rejects_discussion_context(self) -> None:
         with TemporaryDirectory() as directory:
@@ -4681,8 +4682,8 @@ close 済み commitment を表示できるようにした。
             store.close()
             self.assertEqual(task["description"], "タスク説明を保存する。\n複数行の説明を扱う。")
             self.assertEqual(task["acceptance_criteria"], ["指示書に説明が表示される", "指示書に受け入れ条件が表示される"])
-            self.assertIn("description:", status_output.getvalue())
-            self.assertIn("acceptance_criteria:", status_output.getvalue())
+            self.assertIn("説明:", status_output.getvalue())
+            self.assertIn("受け入れ条件:", status_output.getvalue())
             self.assertIn("## タスク説明\nタスク説明を保存する。", instruct_output.getvalue())
             self.assertIn("- 指示書に説明が表示される", instruct_output.getvalue())
             self.assertIn(".nilo/reports/task_test.md", instruct_output.getvalue())
@@ -4887,8 +4888,8 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(output):
                     main(["--db", str(db), "task", "status", "--task", "task_test"])
 
-            self.assertIn("status: agent_reported", output.getvalue())
-            self.assertIn("evidence_status: missing", output.getvalue())
+            self.assertIn("状態: 作業報告あり", output.getvalue())
+            self.assertIn("証跡: 未提出", output.getvalue())
 
     def test_report_import_does_not_auto_create_rules(self) -> None:
         with TemporaryDirectory() as directory:
@@ -5104,8 +5105,8 @@ close 済み commitment を表示できるようにした。
             self.assertTrue(completion["completed_with_reservations"])
             self.assertIn("エラーメッセージの統一感が弱い", completion["human_decision_note"])
             self.assertTrue(completion["completed_snapshot"]["git_diff_hash"])
-            self.assertIn("status: completed_by_user", output.getvalue())
-            self.assertIn("completed_with_reservations: True", output.getvalue())
+            self.assertIn("状態: 人間が完了", output.getvalue())
+            self.assertIn("留保付き完了: はい", output.getvalue())
 
     def test_outcome_reject_records_failure_log_without_status_event(self) -> None:
         with TemporaryDirectory() as directory:
@@ -5901,7 +5902,7 @@ close 済み commitment を表示できるようにした。
             store.close()
             self.assertEqual(completion["actor"], "human")
             self.assertEqual(completion["reason"], "人間が成果物を確認して完了と判断した")
-            self.assertIn("status: completed_by_user", output.getvalue())
+            self.assertIn("状態: 人間が完了", output.getvalue())
 
     def test_task_complete_rejects_ai_completion_without_evidence(self) -> None:
         with TemporaryDirectory() as directory:
@@ -8204,7 +8205,7 @@ close 済み commitment を表示できるようにした。
             with redirect_stdout(output):
                 main(["--db", str(db), "project", "status", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("はい、1件残っています。", body)
+            self.assertIn("状態: 作業中", body)
             self.assertIn("レビュー指摘が1件残っています", body)
             self.assertIn("直近の検証は成功しています", body)
             self.assertNotIn("review_changes_requested", body)
@@ -8511,9 +8512,9 @@ close 済み commitment を表示できるようにした。
             self.assertIn("working_tree_files", run["metadata"])
             self.assertIsInstance(run["metadata"]["working_tree_dirty"], bool)
             self.assertIsInstance(run["metadata"]["working_tree_files"], list)
-            self.assertIn("status: verification_passed", status_output.getvalue())
-            self.assertIn("latest_verification_run:", status_output.getvalue())
-            self.assertIn("verification_source: nilo_executed", status_output.getvalue())
+            self.assertIn("状態: 検証成功", status_output.getvalue())
+            self.assertIn("最新の検証実行:", status_output.getvalue())
+            self.assertIn("検証元: nilo_executed", status_output.getvalue())
 
     def test_status_surfaces_dirty_verification_working_tree(self) -> None:
         with TemporaryDirectory() as directory:
@@ -8578,7 +8579,7 @@ close 済み commitment を表示できるようにした。
                 main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
             summary = json.loads(json_output.getvalue())
 
-            self.assertIn("verification_working_tree: dirty (2 files)", task_output.getvalue())
+            self.assertIn("検証時の作業ツリー: dirty (2 files)", task_output.getvalue())
             self.assertIn("snapshot:", task_output.getvalue())
             self.assertIn("skipped reasons: ignored=1", task_output.getvalue())
             self.assertIn("- src/nilo/cli.py", task_output.getvalue())
@@ -8868,7 +8869,7 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(output):
                     main(["--db", str(db), "instruct", "--task", "task_test"])
 
-            self.assertIn("status: approved_to_implement", status_output.getvalue())
+            self.assertIn("状態: 実装承認済み", status_output.getvalue())
             self.assertIn("# 作業指示", output.getvalue())
 
     def test_understanding_approve_requires_imported_report(self) -> None:
@@ -8930,7 +8931,7 @@ close 済み commitment を表示できるようにした。
             latest = store.latest_for_task("understanding_checks", "task_test")
             store.close()
             self.assertEqual(latest["status"], "understanding_reported")
-            self.assertIn("status: understanding_reported", output.getvalue())
+            self.assertIn("状態: 理解確認報告あり", output.getvalue())
 
 
 def wait_for_dispatch_capable_reviewer(db: Path, reviewer: str) -> None:

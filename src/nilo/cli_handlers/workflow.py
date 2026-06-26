@@ -18,6 +18,7 @@ from ..cli import (
 )
 from ..agent_report_import import import_agent_report
 from ..cli_support import make_id, read_text_or_exit
+from ..display_labels import field_label
 from ..failure import record_failure_log, summarize_failure_logs
 from ..gitmeta import git_output, head_commit
 from ..guard import evaluate_evidence
@@ -218,9 +219,9 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             ".git/info/exclude": bool(exclude_path and exclude_path.exists() and ".nilo/" in exclude_path.read_text(encoding="utf-8")),
         }
         for name, ok in checks.items():
-            print(f"{name}: {'ok' if ok else 'missing'}")
+            print(f"{name}: {'ok' if ok else '未作成'}")
         for warning in warnings:
-            print(f"warning: {warning}")
+            print(f"警告: {warning}")
     finally:
         store.close()
 
@@ -239,14 +240,14 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
         status_body = render_ai_context_text(ai_context)
         failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
         failure_summary_lines = [
-            "failure_summary:",
-            f"- open_failures: {failure_summary['open_failure_count']}",
-            f"- high_open_failures: {failure_summary['high_open_failure_count']}",
+            f"{field_label('failure_summary')}:",
+            f"- {field_label('open_failures')}: {failure_summary['open_failure_count']}",
+            f"- {field_label('high_open_failures')}: {failure_summary['high_open_failure_count']}",
         ]
         latest_failure = failure_summary["latest_open_failure"]
         if latest_failure:
-            failure_summary_lines.append(f"- latest_open_failure: {latest_failure['task_id']} {latest_failure['category']}")
-        failure_summary_lines.append(f"Use `nilo failure list --project {project_id}` for details.")
+            failure_summary_lines.append(f"- {field_label('latest_open_failure')}: {latest_failure['task_id']} {latest_failure['category']}")
+        failure_summary_lines.append(f"詳細は `nilo failure list --project {project_id}` を確認してください。")
         failure_summary_chars = len("\n".join(failure_summary_lines))
         long_descriptions = [
             {"name": tool["name"], "length": len(tool.get("description", ""))}
@@ -263,7 +264,7 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
             unresolved_review_count += len(unresolved_review_findings(store, task["id"]))
         default_tools = mcp_server.default_tools()
         review_handoff_tools = mcp_server.review_handoff_tools()
-        print("ai_context:")
+        print("AIコンテキスト:")
         print(f"- instruction_chars: {len(runtime_body)}")
         print(f"- mcp_default_tool_count: {len(default_tools)}")
         print(f"- mcp_review_handoff_tool_count: {len(review_handoff_tools)}")
