@@ -487,6 +487,34 @@ def roadmap_proposal_path_for_commitment(store: Store, project_id: str, commitme
     return f".nilo/roadmap/{project_id}/roadmap_proposal.md"
 
 
+def selected_roadmap_commitment(store: Store, commitments: list[dict], tasks: list[dict], statuses: dict[str, str]) -> dict | None:
+    if not commitments:
+        return None
+
+    ranked: list[tuple[int, int, dict]] = []
+    for index, commitment in enumerate(commitments):
+        assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
+        related = related_tasks_for_commitment(tasks, commitment)
+        active = [task for task in related if not is_task_completed_status(statuses[task["id"]])]
+        if active:
+            rank = 0
+        elif assessment["status"] != "evidence_present":
+            rank = 1
+        elif assessment["closure_ready"]:
+            rank = 2
+        else:
+            rank = 3
+        ranked.append((rank, index, commitment))
+    return sorted(ranked, key=lambda item: (item[0], item[1]))[0][2]
+
+
+def ordered_roadmap_commitments(store: Store, commitments: list[dict], tasks: list[dict], statuses: dict[str, str]) -> list[dict]:
+    selected = selected_roadmap_commitment(store, commitments, tasks, statuses)
+    if not selected:
+        return []
+    return [selected, *[commitment for commitment in commitments if commitment["id"] != selected["id"]]]
+
+
 def roadmap_discussion_path_for_project(project_id: str) -> str:
     return f".nilo/roadmap/{project_id}/roadmap_discussion.md"
 
@@ -497,12 +525,16 @@ def human_roadmap_path_for_project(project_id: str) -> str:
 
 def roadmap_agent_state(store: Store, project_id: str, tasks: list[dict], statuses: dict[str, str]) -> dict | None:
     commitments = accepted_roadmap_commitments(store, project_id)
-    if not commitments:
+    commitment = selected_roadmap_commitment(store, commitments, tasks, statuses)
+    if not commitment:
         return None
 
-    commitment = commitments[0]
     assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
-    active_tasks = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    active_tasks = [
+        task
+        for task in related_tasks_for_commitment(tasks, commitment)
+        if not is_task_completed_status(statuses[task["id"]])
+    ]
 
     if active_tasks:
         work_status = "active"
@@ -709,11 +741,22 @@ def project_level_next_actions(
         return actions
     if pending_revisions:
         revision = pending_revisions[0]
-        return [f"roadmap update pending ({revision['id']}); ask the user whether to adopt the direction"]
+        commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
+        title = commitment["title"] if commitment else "missing commitment"
+        source = revision.get("source_path") or "none"
+        return [
+            f"roadmap update pending ({revision['id']} -> {revision['proposed_commitment_id']} {title}; "
+            f"source_path: {source}); ask the user whether to adopt or reject the direction"
+        ]
     if commitments:
-        assessment = roadmap_commitment_assessment(store, commitments[0], tasks, statuses)
+        commitment = selected_roadmap_commitment(store, commitments, tasks, statuses) or commitments[0]
+        assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
         if assessment["status"] == "task_plan_required":
-            return [no_active_task_action("ask the user for the next concrete task within the current roadmap")]
+            return [
+                no_active_task_action(
+                    f"ask the user for the next concrete task within roadmap commitment {commitment['id']}"
+                )
+            ]
         if assessment["status"] != "evidence_present":
             return [no_active_task_action(f"roadmap evidence needs internal review ({assessment['unresolved_reason']})")]
         if assessment["closure_ready"]:
@@ -763,6 +806,8 @@ def no_active_task_next_actions(
     todo_actions = todo_next_actions(store, project_id)
     if not todo_actions:
         return base_next_actions
+    if base_next_actions and base_next_actions[0].startswith("roadmap update pending"):
+        return base_next_actions + todo_actions
 
     # Ready and requires_roadmap todos are already triaged and should interrupt
     # roadmap-level planning. Open/deferred todos are lower-priority intake work.
@@ -1389,7 +1434,12 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
     active_summaries = []
     unexecuted = []
     design_residue = project_design_residue()
-    commitments = accepted_roadmap_commitments(store, project["id"])
+    commitments = ordered_roadmap_commitments(
+        store,
+        accepted_roadmap_commitments(store, project["id"]),
+        tasks,
+        statuses,
+    )
     closed_commitments = closed_roadmap_commitments(store, project["id"])
     pending_revisions = pending_roadmap_revisions(store, project["id"])
     for task in active_tasks:

@@ -17,6 +17,7 @@ from unittest.mock import patch
 from nilo.backup import BackupError
 from nilo.cli import git_changed_files, handson_language, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
+from nilo.project_logic import project_tasks_and_statuses, selected_roadmap_commitment
 from nilo.roadmap_render import render_human_roadmap_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.store import Store
@@ -3289,9 +3290,13 @@ project status からロードマップ現在地を読めるようにする。
             with redirect_stdout(project_status_output):
                 main(["--db", str(db), "project", "status", "--project", "project_test", "--verbose"])
             project_status_body = project_status_output.getvalue()
-            self.assertIn(f"roadmap update pending ({revision_id}); ask the user whether to adopt the direction", project_status_body)
+            self.assertIn(
+                f"roadmap update pending ({revision_id} -> {commitment['id']} Phase 2.5 Roadmap Projection; "
+                f"source_path: {proposal}); ask the user whether to adopt or reject the direction",
+                project_status_body,
+            )
             self.assertNotIn(f"nilo roadmap accept --revision {revision_id}", project_status_body)
-            self.assertNotIn(str(proposal), project_status_body)
+            self.assertIn(str(proposal), project_status_body)
 
             accept_output = io.StringIO()
             with redirect_stdout(accept_output):
@@ -3359,6 +3364,293 @@ project status からロードマップ現在地を読めるようにする。
             self.assertIn("## Roadmap Position", english_handoff)
             self.assertIn("accepted commitment: Phase 2.5 Roadmap Projection", english_handoff)
             self.assertNotIn("承認済み RoadmapCommitment: Phase 2.5 Roadmap Projection", english_handoff)
+
+    def test_pending_roadmap_revision_blocks_todo_next_actions_with_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# ID Aware Roadmap
+
+## Success Criteria
+- pending revision identity is visible
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                commitment_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "todo", "add", "--project", "project_test", "Another broad change"])
+                store = Store(db)
+                store.update(
+                    "todos",
+                    store.list_where("todos", "project_id=?", ("project_test",))[0]["id"],
+                    {"status": "requires_roadmap"},
+                )
+                store.close()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
+            summary = json.loads(output.getvalue())
+
+            self.assertTrue(
+                summary["next_actions"][0].startswith(
+                    f"roadmap update pending ({revision_id} -> {commitment_id} ID Aware Roadmap; "
+                    f"source_path: {proposal})"
+                )
+            )
+            self.assertIn("ask the user whether to adopt or reject the direction", summary["next_actions"][0])
+            self.assertIn("requires_roadmap todo", summary["next_actions"][1])
+
+    def test_multiple_accepted_roadmap_commitments_select_incomplete_commitment(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            complete_proposal = root / "complete.md"
+            incomplete_proposal = root / "incomplete.md"
+            report = root / "report.md"
+            script = root / "verify.py"
+            complete_proposal.write_text(
+                """# Completed Commitment
+
+## Success Criteria
+- completed criterion
+""",
+                encoding="utf-8",
+            )
+            incomplete_proposal.write_text(
+                """# Incomplete Commitment
+
+## Success Criteria
+- incomplete criterion
+""",
+                encoding="utf-8",
+            )
+            report.write_text(
+                """# 完了報告
+
+## 1. 実施内容
+completed criterion を満たした。
+
+## 2. 変更ファイル一覧
+変更ファイルなし
+""",
+                encoding="utf-8",
+            )
+            script.write_text("print('ok')\n", encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                first = io.StringIO()
+                with redirect_stdout(first):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(complete_proposal)])
+                first_revision = next(
+                    line.split(": ", 1)[1]
+                    for line in first.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                first_commitment = next(
+                    line.split(": ", 1)[1]
+                    for line in first.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "first"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_complete",
+                        "--title",
+                        "Implement completed",
+                        "--commitment",
+                        first_commitment,
+                    ]
+                )
+                main(["--db", str(db), "instruct", "--task", "task_complete"])
+                main(["--db", str(db), "report", "import", "--task", "task_complete", "--file", str(report)])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "verification",
+                        "run",
+                        "--task",
+                        "task_complete",
+                        "--command",
+                        f'"{sys.executable}" "{script}"',
+                    ]
+                )
+                main(["--db", str(db), "task", "complete", "--task", "task_complete", "--reason", "human accepted evidence"])
+                second = io.StringIO()
+                with redirect_stdout(second):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(incomplete_proposal)])
+                second_revision = next(
+                    line.split(": ", 1)[1]
+                    for line in second.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                second_commitment = next(
+                    line.split(": ", 1)[1]
+                    for line in second.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", second_revision, "--reason", "second"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
+            summary = json.loads(output.getvalue())
+
+            self.assertEqual(summary["roadmap_agent_state"]["commitment_id"], second_commitment)
+            self.assertEqual(summary["roadmap_agent_state"]["work_status"], "task_plan_required")
+            self.assertEqual(summary["roadmap_position"], "accepted commitment: Incomplete Commitment")
+            self.assertIn(f"roadmap commitment {second_commitment}", summary["next_actions"][0])
+            self.assertEqual(summary["roadmap_commitments"][0]["id"], second_commitment)
+            self.assertEqual(
+                {item["id"] for item in summary["roadmap_commitments"]},
+                {first_commitment, second_commitment},
+            )
+
+            store = Store(db)
+            tasks, statuses = project_tasks_and_statuses(store, "project_test")
+            self.assertEqual(
+                selected_roadmap_commitment(
+                    store,
+                    [
+                        store.get("roadmap_commitments", first_commitment),
+                        store.get("roadmap_commitments", second_commitment),
+                    ],
+                    tasks,
+                    statuses,
+                )["id"],
+                second_commitment,
+            )
+            store.close()
+
+    def test_roadmap_agent_state_ignores_unrelated_active_task_for_selected_commitment(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "incomplete.md"
+            proposal.write_text(
+                """# Incomplete Commitment
+
+## Success Criteria
+- incomplete criterion
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                imported = io.StringIO()
+                with redirect_stdout(imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in imported.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                commitment_id = next(
+                    line.split(": ", 1)[1]
+                    for line in imported.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_unrelated", "--title", "Unrelated active task"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
+            summary = json.loads(output.getvalue())
+
+            self.assertEqual(summary["roadmap_agent_state"]["commitment_id"], commitment_id)
+            self.assertEqual(summary["roadmap_agent_state"]["work_status"], "task_plan_required")
+            self.assertEqual(summary["active_tasks"][0]["id"], "task_unrelated")
+
+    def test_roadmap_discuss_warning_uses_revision_source_path_status(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            default_proposal = root / ".nilo" / "roadmap" / "project_test" / "roadmap_proposal.md"
+            discussion = root / "discussion.md"
+            default_proposal.parent.mkdir(parents=True)
+            default_proposal.write_text(
+                """# Pending Proposal
+
+## Success Criteria
+- source path is linked
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(default_proposal)])
+                revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                commitment_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                store = Store(db)
+                store.update(
+                    "roadmap_revisions",
+                    revision_id,
+                    {"source_path": os.path.relpath(default_proposal, Path.cwd())},
+                )
+                store.close()
+
+            linked_output = io.StringIO()
+            with redirect_stdout(linked_output), patch(
+                "nilo.cli.roadmap_proposal_path_for_commitment",
+                return_value=str(default_proposal),
+            ):
+                main(["--db", str(db), "roadmap", "discuss", "--project", "project_test", "--file", str(discussion)])
+            self.assertIn(
+                f"notice: {default_proposal} already exists and is linked to pending roadmap revision "
+                f"{revision_id} for {commitment_id} Pending Proposal",
+                linked_output.getvalue(),
+            )
+            self.assertNotIn("warning:", linked_output.getvalue())
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted"])
+
+            stale_output = io.StringIO()
+            with redirect_stdout(stale_output), patch(
+                "nilo.cli.roadmap_proposal_path_for_commitment",
+                return_value=str(default_proposal),
+            ):
+                main(["--db", str(db), "roadmap", "discuss", "--project", "project_test", "--file", str(discussion)])
+            self.assertIn(f"matching revisions: {revision_id}:accepted", stale_output.getvalue())
+            self.assertIn("not linked to a pending roadmap revision", stale_output.getvalue())
 
     def test_human_roadmap_markdown_masks_internal_ids_without_free_text_rewrites(self) -> None:
         summary = {
@@ -4383,7 +4675,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn(f"create tasks from accepted commitment {commitment_id}", body)
             self.assertIn(
                 "no active task; create or select a Nilo task before implementation; "
-                "ask the user for the next concrete task within the current roadmap",
+                f"ask the user for the next concrete task within roadmap commitment {commitment_id}",
                 body,
             )
 

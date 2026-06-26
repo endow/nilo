@@ -40,7 +40,12 @@ def cmd_project_status(args: argparse.Namespace) -> None:
         print(f"project_id: {project['id']}")
         print(f"project_name: {project['name']}")
         design_residue = c.project_design_residue()
-        commitments = c.accepted_roadmap_commitments(store, project["id"])
+        commitments = c.ordered_roadmap_commitments(
+            store,
+            c.accepted_roadmap_commitments(store, project["id"]),
+            tasks,
+            statuses,
+        )
         pending_revisions = c.pending_roadmap_revisions(store, project["id"])
         print(f"roadmap_position: {c.project_roadmap_position(tasks, statuses, design_residue, commitments)}")
         print(f"work_state: {c.project_work_state(tasks, statuses)}")

@@ -42,6 +42,17 @@ def duplicate_commitments(store: Store, commitment: dict) -> list[dict]:
     return duplicates
 
 
+def comparable_roadmap_source_path(value: str) -> str:
+    if not value:
+        return ""
+    if value.startswith("todo:"):
+        return value
+    try:
+        return str(Path(value).resolve()).casefold()
+    except OSError:
+        return value.replace("\\", "/").casefold()
+
+
 def render_and_write_human_roadmap(store: Store, project: dict, output_path: str | None = None) -> Path:
     from .. import cli as c
 
@@ -404,9 +415,29 @@ def cmd_roadmap_discuss(args: argparse.Namespace) -> None:
             print(f"written: {output}")
             proposal_path = Path(c.roadmap_proposal_path_for_commitment(store, project["id"]))
             if proposal_path.exists():
-                print(
-                    f"warning: {proposal_path} already exists; verify it is a fresh internal RoadmapProposal draft before import"
-                )
+                source_path = comparable_roadmap_source_path(str(proposal_path))
+                revisions = [
+                    revision
+                    for revision in store.list_where("roadmap_revisions", "project_id=?", (project["id"],))
+                    if comparable_roadmap_source_path(revision.get("source_path") or "") == source_path
+                ]
+                pending = [revision for revision in revisions if revision["status"] == "pending"]
+                if pending:
+                    revision = pending[0]
+                    commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
+                    title = commitment["title"] if commitment else "missing commitment"
+                    print(
+                        f"notice: {proposal_path} already exists and is linked to pending roadmap revision "
+                        f"{revision['id']} for {revision['proposed_commitment_id']} {title}"
+                    )
+                else:
+                    statuses = ", ".join(
+                        f"{revision['id']}:{revision['status']}" for revision in revisions
+                    ) or "none"
+                    print(
+                        f"warning: {proposal_path} already exists but is not linked to a pending roadmap revision "
+                        f"(matching revisions: {statuses}); verify it is a fresh internal RoadmapProposal draft before import"
+                    )
         else:
             print(body, end="")
     finally:

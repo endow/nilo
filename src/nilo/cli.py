@@ -414,6 +414,7 @@ from .project_logic import (
     human_roadmap_path_for_project,
     next_actions_for_task,
     normalize_command_path,
+    ordered_roadmap_commitments,
     pending_roadmap_revisions,
     print_human_project_status,
     print_project_summary_text,
