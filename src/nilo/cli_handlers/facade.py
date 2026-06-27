@@ -33,6 +33,16 @@ def active_tasks_for_project(store: Store, project_id: str) -> tuple[list[dict],
     return [task for task in tasks if not c.is_task_completed_status(statuses[task["id"]])], statuses
 
 
+def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
+    from .. import cli as c
+
+    for task in store.list_where("tasks", "project_id=?", (project_id,)):
+        status = c.projected_task_status(store, task)
+        if not c.is_task_completed_status(status):
+            return task
+    return None
+
+
 def no_active_task_recovery_message(project_id: str) -> str:
     return (
         f"active task not found for project: {project_id}. "
@@ -182,11 +192,14 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         if getattr(args, "task", None):
             print_facade_next_for_task(store, args.task)
             return
-        summary = summary_for_project(store, project_id)
-        if summary["active_tasks"]:
-            task_id = summary["active_tasks"][0]["id"]
-            print_facade_next_for_task(store, task_id)
+        project = store.get("projects", project_id)
+        if not project:
+            raise SystemExit(f"project not found: {project_id}")
+        active_task = first_active_task_for_project(store, project_id)
+        if active_task:
+            print_facade_next_for_task(store, active_task["id"])
             return
+        summary = summary_for_project(store, project_id)
         print(f"{field_label('project')}: {summary['project_id']} ({summary['project_name']})")
         print(f"{field_label('next_action')}:")
         actions = summary["next_actions"] or []

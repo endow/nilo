@@ -1291,6 +1291,44 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
+    def test_facade_next_with_active_task_skips_project_summary(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            project_id,
+                            "--id",
+                            "task_fast_next",
+                            "--title",
+                            "Fast next",
+                        ]
+                    )
+
+                next_output = io.StringIO()
+                with (
+                    patch("nilo.cli_handlers.facade.summary_for_project", side_effect=AssertionError("summary should not run")),
+                    patch("nilo.cli_handlers.facade.active_tasks_for_project", side_effect=AssertionError("full active task scan should not run")),
+                    redirect_stdout(next_output),
+                ):
+                    main(["--db", str(db), "next", "--project", project_id])
+
+                self.assertIn("タスク: task_fast_next", next_output.getvalue())
+                self.assertIn("作業指示を生成してください。", next_output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
     def test_ai_context_surfaces_are_compact_and_json_serializable(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
