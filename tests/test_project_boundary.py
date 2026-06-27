@@ -9,15 +9,20 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from nilo.cli import main
 from nilo.mcp_server import call_tool
 from nilo.project_boundary import ProjectBoundaryError, require_write_fence, resolve_project_boundary
+from nilo.snapshot import compact_snapshot
 from nilo.store import Store
 from nilo.timeutil import now_iso
 
 
 class ProjectBoundaryTests(unittest.TestCase):
+    def stable_snapshot(self) -> dict:
+        return {"git_head": "test-head", "git_diff_hash": "test-diff", "working_tree_dirty": True}
+
     def init_git(self, root: Path) -> None:
         root.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -71,7 +76,7 @@ class ProjectBoundaryTests(unittest.TestCase):
                     "acceptance_criteria": [],
                     "parent_task_id": None,
                     "split_index": None,
-                    "task_type": "implementation",
+                    "task_type": "documentation",
                     "risk_level": "medium",
                     "requires_understanding_check": False,
                     "roadmap_commitment_id": "",
@@ -195,6 +200,8 @@ class ProjectBoundaryTests(unittest.TestCase):
                                 "completion_test",
                                 "--reason",
                                 "bad completion",
+                                "--actor",
+                                "human",
                             ]
                         )
             finally:
@@ -216,7 +223,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(project)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             finally:
                 os.chdir(previous)
 
@@ -300,7 +307,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(repo)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             finally:
                 os.chdir(previous)
 
@@ -324,7 +331,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(repo)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             finally:
                 os.chdir(previous)
 
@@ -350,7 +357,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(project)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             finally:
                 os.chdir(previous)
 
@@ -433,6 +440,8 @@ class ProjectBoundaryTests(unittest.TestCase):
             (owner / "src.py").write_text("dirty\n", encoding="utf-8")
             db = project / ".nilo" / "nilo.db"
             self.create_project_task(db, "Chiffon")
+            snapshot = self.stable_snapshot()
+            request_snapshot = compact_snapshot(snapshot)
             store = Store(db)
             try:
                 now = now_iso()
@@ -446,7 +455,7 @@ class ProjectBoundaryTests(unittest.TestCase):
                         "status": "claimed",
                         "reason": "test",
                         "based_on_event_id": "",
-                        "based_on_snapshot": {},
+                        "based_on_snapshot": request_snapshot,
                         "created_at": now,
                         "updated_at": now,
                     },
@@ -458,17 +467,18 @@ class ProjectBoundaryTests(unittest.TestCase):
                 os.chdir(project)
                 status = call_tool("get_agent_work_context", {"project_id": "Chiffon"}, db)
                 token = status["active_tasks"][0]["write_context_token"]
-                result = call_tool(
-                    "import_review_result",
-                    {
-                        "task_id": "task_test",
-                        "review_id": "review_test",
-                        "reviewer": "claude-code",
-                        "context_token": token,
-                        "body_md": "# ReviewResult\n\n## Verdict\napproved\n\n## Summary\nok\n\n## Findings\nなし\n",
-                    },
-                    db,
-                )
+                with patch("nilo.transitions.current_git_snapshot", return_value=snapshot):
+                    result = call_tool(
+                        "import_review_result",
+                        {
+                            "task_id": "task_test",
+                            "review_id": "review_test",
+                            "reviewer": "claude-code",
+                            "context_token": token,
+                            "body_md": "# ReviewResult\n\n## Verdict\napproved\n\n## Summary\nok\n\n## Findings\nなし\n",
+                        },
+                        db,
+                    )
             finally:
                 os.chdir(previous)
 

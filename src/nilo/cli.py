@@ -521,7 +521,7 @@ from .cli_handlers.task import (
 )
 from .cli_handlers.todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cmd_todo_show, cmd_todo_start, cmd_todo_triage
 from .cli_handlers.workflow import cmd_agent_install, cmd_doctor, cmd_init, cmd_instruct, cmd_migrate, cmd_outcome_record, cmd_report_import, cmd_understanding_approve, cmd_understanding_import, cmd_understanding_prepare, cmd_verification_run
-from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_doctor_completions, cmd_help_ai
+from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_doctor_completions, cmd_doctor_state, cmd_doctor_transitions, cmd_help_ai
 from .cli_handlers.workflow import cmd_update_check, cmd_upgrade
 from .cli_handlers.workspace import cmd_workspace_add, cmd_workspace_list, cmd_workspace_remove, cmd_workspace_show
 

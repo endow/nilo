@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS failure_logs (
   resolved_at TEXT NOT NULL DEFAULT '',
   resolved_by TEXT NOT NULL DEFAULT '',
   resolution_note TEXT NOT NULL DEFAULT '',
+  decision_note TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 
@@ -236,6 +237,8 @@ CREATE TABLE IF NOT EXISTS review_finding_updates (
   new_status TEXT NOT NULL,
   reason TEXT NOT NULL,
   actor TEXT NOT NULL,
+  decision_source TEXT NOT NULL DEFAULT '',
+  human_confirmed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 
@@ -252,6 +255,10 @@ CREATE TABLE IF NOT EXISTS understanding_checks (
   task_id TEXT NOT NULL,
   status TEXT NOT NULL,
   body_md TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  decision_source TEXT NOT NULL DEFAULT '',
+  human_confirmed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 
@@ -266,6 +273,8 @@ CREATE TABLE IF NOT EXISTS task_completions (
   accepted_review_result_ids TEXT NOT NULL DEFAULT '[]',
   human_decision_note TEXT NOT NULL DEFAULT '',
   completed_with_reservations INTEGER NOT NULL DEFAULT 0,
+  decision_source TEXT NOT NULL DEFAULT '',
+  human_confirmed INTEGER NOT NULL DEFAULT 0,
   completed_at TEXT NOT NULL DEFAULT '',
   invalidated_at TEXT NOT NULL DEFAULT '',
   invalidated_by TEXT NOT NULL DEFAULT '',
@@ -299,6 +308,9 @@ CREATE TABLE IF NOT EXISTS roadmap_commitments (
   status TEXT NOT NULL,
   accepted_by TEXT NOT NULL,
   accepted_at TEXT NOT NULL,
+  decision_source TEXT NOT NULL DEFAULT '',
+  decision_note TEXT NOT NULL DEFAULT '',
+  human_confirmed INTEGER NOT NULL DEFAULT 0,
   closed_by TEXT NOT NULL DEFAULT '',
   closed_at TEXT NOT NULL DEFAULT '',
   closure_reason TEXT NOT NULL DEFAULT '',
@@ -314,6 +326,9 @@ CREATE TABLE IF NOT EXISTS roadmap_revisions (
   source_path TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL,
   decided_by TEXT NOT NULL DEFAULT '',
+  decision_source TEXT NOT NULL DEFAULT '',
+  decision_note TEXT NOT NULL DEFAULT '',
+  human_confirmed INTEGER NOT NULL DEFAULT 0,
   accepted_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -332,6 +347,10 @@ CREATE TABLE IF NOT EXISTS todos (
   roadmap_commitment_id TEXT NOT NULL DEFAULT '',
   roadmap_revision_id TEXT NOT NULL DEFAULT '',
   converted_task_id TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT '',
+  decision_source TEXT NOT NULL DEFAULT '',
+  superseded_by_type TEXT NOT NULL DEFAULT '',
+  superseded_by_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   triaged_at TEXT NOT NULL DEFAULT '',
   triage_reason TEXT NOT NULL DEFAULT ''
@@ -360,6 +379,23 @@ CREATE TABLE IF NOT EXISTS overdrive_events (
   event_type TEXT NOT NULL,
   message TEXT NOT NULL,
   metadata TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transition_events (
+  id TEXT PRIMARY KEY,
+  transition TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  decision_source TEXT NOT NULL DEFAULT '',
+  human_confirmed INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  previous_state TEXT NOT NULL DEFAULT '',
+  new_state TEXT NOT NULL DEFAULT '',
+  related_ids TEXT NOT NULL DEFAULT '[]',
+  snapshot TEXT NOT NULL DEFAULT '{}',
+  warnings TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL
 );
 """
@@ -393,6 +429,8 @@ JSON_COLUMNS = {
     "rendered_fields",
     "recipe_snapshot",
     "snapshot",
+    "related_ids",
+    "warnings",
 }
 
 TABLE_JSON_COLUMNS = {
@@ -435,6 +473,8 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("task_completions", "accepted_review_result_ids", "TEXT NOT NULL DEFAULT '[]'"),
     ("task_completions", "human_decision_note", "TEXT NOT NULL DEFAULT ''"),
     ("task_completions", "completed_with_reservations", "INTEGER NOT NULL DEFAULT 0"),
+    ("task_completions", "decision_source", "TEXT NOT NULL DEFAULT ''"),
+    ("task_completions", "human_confirmed", "INTEGER NOT NULL DEFAULT 0"),
     ("task_completions", "completed_at", "TEXT NOT NULL DEFAULT ''"),
     ("task_completions", "invalidated_at", "TEXT NOT NULL DEFAULT ''"),
     ("task_completions", "invalidated_by", "TEXT NOT NULL DEFAULT ''"),
@@ -450,6 +490,25 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("failure_logs", "resolved_at", "TEXT NOT NULL DEFAULT ''"),
     ("failure_logs", "resolved_by", "TEXT NOT NULL DEFAULT ''"),
     ("failure_logs", "resolution_note", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "decision_note", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "resolution_source", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "human_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+    ("understanding_checks", "actor", "TEXT NOT NULL DEFAULT ''"),
+    ("understanding_checks", "reason", "TEXT NOT NULL DEFAULT ''"),
+    ("understanding_checks", "decision_source", "TEXT NOT NULL DEFAULT ''"),
+    ("understanding_checks", "human_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+    ("roadmap_commitments", "decision_source", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_commitments", "decision_note", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_commitments", "human_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+    ("roadmap_revisions", "decision_source", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_revisions", "decision_note", "TEXT NOT NULL DEFAULT ''"),
+    ("roadmap_revisions", "human_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+    ("todos", "actor", "TEXT NOT NULL DEFAULT ''"),
+    ("todos", "decision_source", "TEXT NOT NULL DEFAULT ''"),
+    ("todos", "superseded_by_type", "TEXT NOT NULL DEFAULT ''"),
+    ("todos", "superseded_by_id", "TEXT NOT NULL DEFAULT ''"),
+    ("review_finding_updates", "decision_source", "TEXT NOT NULL DEFAULT ''"),
+    ("review_finding_updates", "human_confirmed", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 MIGRATION_COLUMNS: dict[str, set[str]] = {}

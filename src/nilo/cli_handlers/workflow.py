@@ -16,7 +16,6 @@ from ..cli import (
     requires_understanding_gate,
     understanding_approved,
 )
-from ..agent_report_import import import_agent_report
 from ..cli_support import make_id, read_text_or_exit
 from ..display_labels import field_label
 from ..failure import record_failure_log, summarize_failure_logs
@@ -35,6 +34,13 @@ from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status
 from ..store import Store
 from ..task_logic import active_task_completion, completion_audit_issues, outcome_status, unresolved_review_findings
 from ..timeutil import now_iso
+from ..transitions import (
+    TransitionError,
+    approve_understanding,
+    import_agent_report,
+    record_outcome_decision,
+    record_verification_run,
+)
 from ..update_check import check_for_update, is_disabled, update_message
 from ..upgrade import run_upgrade
 from ..verification import run_local_verification
@@ -296,6 +302,7 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
 
 def cmd_doctor_completions(args: argparse.Namespace) -> None:
     import json
+    from ..state_audit import audit_project
 
     project_id = args.project or Path.cwd().name
     store = Store(args.db)
@@ -303,26 +310,8 @@ def cmd_doctor_completions(args: argparse.Namespace) -> None:
         project = store.get("projects", project_id)
         if not project:
             raise SystemExit(f"project not found: {project_id}")
-        findings = []
-        snapshot = current_git_snapshot(Path.cwd())
-        for task in store.list_where("tasks", "project_id=?", (project_id,)):
-            completion = active_task_completion(store, task["id"])
-            if not completion:
-                continue
-            issues = completion_audit_issues(store, task, current_snapshot=snapshot)
-            if not issues:
-                continue
-            findings.append(
-                {
-                    "task_id": task["id"],
-                    "task_title": task["title"],
-                    "task_type": task["task_type"],
-                    "completion_id": completion["id"],
-                    "actor": completion["actor"],
-                    "completed_at": completion.get("completed_at", ""),
-                    "issues": issues,
-                }
-            )
+        audit_findings = audit_project(store, project_id)
+        findings = [item for item in audit_findings if item["code"].startswith("completion_")]
         result = {"project_id": project_id, "count": len(findings), "findings": findings}
         if getattr(args, "json", False):
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -332,9 +321,53 @@ def cmd_doctor_completions(args: argparse.Namespace) -> None:
         if findings:
             print("No automatic changes were made. Use `nilo task completion invalidate --completion <id> --reason \"...\"` after human review.")
         for finding in findings:
-            print(f"- {finding['task_id']} completion={finding['completion_id']} actor={finding['actor']} {finding['task_title']}")
-            for issue in finding["issues"]:
-                print(f"  - {issue}")
+            print(f"- {finding['entity_type']}={finding['entity_id']} [{finding['severity']}] {finding['code']}: {finding['message']}")
+    finally:
+        store.close()
+
+
+def cmd_doctor_state(args: argparse.Namespace) -> None:
+    import json
+    from ..state_audit import doctor_state
+
+    project_id = args.project or Path.cwd().name
+    store = Store(args.db)
+    try:
+        result = doctor_state(store, project_id, cwd=Path.cwd())
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        print(f"project: {project_id}")
+        print(f"state_audit: {result['count']} finding(s)")
+        print("No automatic changes were made.")
+        for item in result["findings"]:
+            print(f"- [{item['severity']}] {item['code']} {item['entity_type']}={item['entity_id']}: {item['message']}")
+            if item.get("remediation"):
+                print(f"  remediation: {item['remediation']}")
+    finally:
+        store.close()
+
+
+def cmd_doctor_transitions(args: argparse.Namespace) -> None:
+    import json
+
+    project_id = args.project or Path.cwd().name
+    store = Store(args.db)
+    try:
+        task_ids = {task["id"] for task in store.list_where("tasks", "project_id=?", (project_id,))}
+        events = [
+            event
+            for event in store.list_where("transition_events", "1=1")
+            if event["entity_id"] in task_ids or (isinstance(event.get("related_ids"), dict) and any(value in task_ids for value in event["related_ids"].values()))
+        ]
+        result = {"project_id": project_id, "count": len(events), "transition_events": events[: args.limit]}
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        print(f"project: {project_id}")
+        print(f"transition_events: {len(events)}")
+        for event in events[: args.limit]:
+            print(f"- {event['created_at']} {event['transition']} {event['entity_type']}={event['entity_id']} actor={event['actor']} {event['previous_state']} -> {event['new_state']}")
     finally:
         store.close()
 
@@ -513,8 +546,11 @@ def cmd_report_import(args: argparse.Namespace) -> None:
         except ProjectBoundaryError as exc:
             record_nilo_issue_for_task(store, task["project_id"], task["id"], "report import", exc, boundary)
             raise SystemExit(str(exc)) from exc
-        result = import_agent_report(store, task, markdown, args.agent, Path.cwd(), evaluate_evidence)
-        check = result["evidence_status"]
+        try:
+            result = import_agent_report(store, task, markdown, args.agent, Path.cwd(), evaluate_evidence)
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
+        check = {"status": result.audit_notes[0] if result.audit_notes else "unknown", "issues": result.warnings}
 
         print(f"report_form_status: {check['status']}")
         if check["issues"]:
@@ -577,20 +613,20 @@ def cmd_understanding_approve(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        latest = store.latest_for_task("understanding_checks", args.task)
-        if not latest or latest["status"] != "understanding_reported":
-            raise SystemExit("understanding report import required before approval")
-        body = latest["body_md"]
-        row = {
-            "id": make_id("understanding"),
-            "task_id": args.task,
-            "status": "approved_to_implement",
-            "body_md": body,
-            "created_at": now_iso(),
-        }
-        store.insert("understanding_checks", row)
+        try:
+            result = approve_understanding(
+                store,
+                args.task,
+                actor=args.actor,
+                reason=args.reason,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+                decision_note=args.decision_note,
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print("status: approved_to_implement")
-        print(f"understanding_check: {row['id']}")
+        print(f"understanding_check: {result.created_ids['understanding_check']}")
     finally:
         store.close()
 
@@ -601,62 +637,33 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        latest_report = store.latest_for_task("agent_reports", args.task)
-        latest_verification = store.latest_for_task("verification_runs", args.task)
-        latest_review = store.latest_for_task("review_results", args.task)
         concerns = args.concern or []
         decision = args.decision
         if decision in ("accepted", "accepted_with_concerns"):
-            if not getattr(args, "human_confirm", False):
-                raise SystemExit("outcome accept requires --human-confirm after an explicit human decision")
-            decision_note = (getattr(args, "decision_note", "") or "").strip()
-            if not decision_note:
-                raise SystemExit("outcome accept requires --decision-note with the human acceptance note")
             boundary = resolve_project_boundary(db_path=args.db)
             try:
                 require_write_fence(boundary)
             except ProjectBoundaryError as exc:
                 record_nilo_issue_for_task(store, task["project_id"], task["id"], f"outcome {decision}", exc, boundary)
                 raise SystemExit(str(exc)) from exc
-        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
-        accepted = decision in ("accepted", "accepted_with_concerns")
-        row = {
-            "id": make_id("completion" if accepted else "outcome"),
-            "task_id": args.task,
-            "actor": "human",
-            "completed_by": "human",
-            "completed_snapshot": snapshot,
-            "completion_note": args.reason,
-            "accepted_verification_run_ids": [latest_verification["id"]] if accepted and latest_verification else [],
-            "accepted_review_result_ids": [latest_review["id"]] if accepted and latest_review else [],
-            "human_decision_note": "\n".join([getattr(args, "decision_note", "") or args.reason, *concerns]).strip(),
-            "completed_with_reservations": decision == "accepted_with_concerns",
-            "reason": args.reason,
-            "completed_at": now_iso(),
-            "created_at": now_iso(),
-        }
-        if accepted:
-            store.insert("task_completions", row)
-        if decision in ("rejected", "rework_required"):
-            severity = "high" if decision == "rejected" else "medium"
-            related_id = latest_report["id"] if latest_report else ""
-            record_failure_log(
+        try:
+            result = record_outcome_decision(
                 store,
-                task["project_id"],
-                task["id"],
-                related_id,
-                f"human_{decision}",
-                args.reason,
-                severity,
-                source="outcome_record",
+                args.task,
+                decision=decision,
                 actor="human",
-                related_id=related_id,
-                snapshot=snapshot,
-                status="open",
+                reason=args.reason,
+                concerns=concerns,
+                human_confirm=getattr(args, "human_confirm", False),
+                decision_source="human_interactive",
+                decision_note=getattr(args, "decision_note", ""),
+                cwd=Path.cwd(),
             )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"status: {outcome_status(decision)}")
-        if accepted:
-            print(f"task_completion: {row['id']}")
+        if "task_completion" in result.created_ids:
+            print(f"task_completion: {result.created_ids['task_completion']}")
     finally:
         store.close()
 
@@ -681,7 +688,10 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
             "evidence_check_id": None,
             **result,
         }
-        store.insert("verification_runs", row)
+        try:
+            record_verification_run(store, args.task, row=row, actor="nilo")
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         for issue in result["metadata"]["secret_issues"]:
             record_failure_log(
                 store,

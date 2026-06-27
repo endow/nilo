@@ -10,6 +10,7 @@ from ..ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_a
 from ..display_labels import field_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
+from ..open_state import open_state_detector
 from ..project_logic import refresh_review_dispatch_state
 from ..project_boundary import (
     ProjectBoundaryError,
@@ -49,46 +50,7 @@ def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
 
 
 def unresolved_project_state(store: Store, project_id: str, *, verbose: bool = False) -> dict:
-    task_ids = [task["id"] for task in store.list_where("tasks", "project_id=?", (project_id,))]
-    task_id_set = set(task_ids)
-    accepted_commitments = store.list_where("roadmap_commitments", "project_id=? AND status='accepted'", (project_id,))
-    open_failures = store.list_where("failure_logs", "project_id=? AND status='open'", (project_id,))
-    unresolved_findings = [
-        finding for finding in store.list_where("review_findings", "status='unresolved'") if finding["task_id"] in task_id_set
-    ]
-    evidence_issues = [
-        evidence
-        for evidence in store.list_where("evidence_checks", "status IN ('needs_human_review', 'evidence_missing')")
-        if evidence["task_id"] in task_id_set
-    ]
-    review_dispatches = store.list_where(
-        "review_dispatches",
-        "project_id=? AND status NOT IN ('review_completed', 'review_failed')",
-        (project_id,),
-    )
-    overdrive_runs = store.list_where(
-        "overdrive_runs",
-        "project_id=? AND status NOT IN ('completed', 'closed', 'cancelled')",
-        (project_id,),
-    )
-    data = {
-        "roadmap_commitments": len(accepted_commitments),
-        "failures": len(open_failures),
-        "review_findings": len(unresolved_findings),
-        "evidence_issues": len(evidence_issues),
-        "review_dispatches": len(review_dispatches),
-        "overdrive_runs": len(overdrive_runs),
-    }
-    if verbose:
-        data["details"] = {
-            "roadmap_commitments": [{"id": item["id"], "title": item["title"]} for item in accepted_commitments],
-            "failures": [{"id": item["id"], "task_id": item["task_id"], "severity": item["severity"], "category": item["category"]} for item in open_failures],
-            "review_findings": [{"id": item["id"], "task_id": item["task_id"], "severity": item["severity"], "title": item["title"]} for item in unresolved_findings],
-            "evidence_issues": [{"id": item["id"], "task_id": item["task_id"], "status": item["status"]} for item in evidence_issues],
-            "review_dispatches": [{"id": item["id"], "task_id": item["task_id"], "reviewer": item["reviewer"], "status": item["status"]} for item in review_dispatches],
-            "overdrive_runs": [{"id": item["id"], "status": item["status"], "roadmap_commitment_id": item["roadmap_commitment_id"]} for item in overdrive_runs],
-        }
-    return data
+    return open_state_detector(store, project_id, verbose=verbose)
 
 
 def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbose: bool = False) -> dict:
@@ -348,6 +310,8 @@ def cmd_facade_queue(args: argparse.Namespace) -> None:
         unresolved_summary = (
             f"failures={unresolved['failures']} review_findings={unresolved['review_findings']} "
             f"evidence_issues={unresolved['evidence_issues']} roadmap_commitments={unresolved['roadmap_commitments']} "
+            f"pending_roadmap_revisions={unresolved['pending_roadmap_revisions']} "
+            f"invalid_completions={unresolved['invalid_completions']} "
             f"review_dispatches={unresolved['review_dispatches']} overdrive_runs={unresolved['overdrive_runs']}"
         )
         if data["counts"]["total"] == 0 and data["counts"]["unresolved_project_state"]:
@@ -457,6 +421,7 @@ def cmd_facade_done(args: argparse.Namespace) -> None:
             reason=args.reason,
             actor=args.actor,
             human_confirm=args.human_confirm,
+            decision_note=args.decision_note,
             commit=args.commit,
             commit_message=args.commit_message,
         )

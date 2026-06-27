@@ -46,6 +46,10 @@ def register_understanding(sub: argparse._SubParsersAction, handlers: ModuleType
     understanding_import.set_defaults(func=handlers.cmd_understanding_import)
     understanding_approve = understanding_sub.add_parser("approve")
     understanding_approve.add_argument("--task", required=True)
+    understanding_approve.add_argument("--actor", choices=["human", "ai"], required=True)
+    understanding_approve.add_argument("--reason", required=True)
+    understanding_approve.add_argument("--human-confirm", action="store_true")
+    understanding_approve.add_argument("--decision-note", default="")
     understanding_approve.set_defaults(func=handlers.cmd_understanding_approve)
 
 
@@ -162,6 +166,8 @@ def register_review(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     review_import.add_argument("--strict-scores", action="store_true")
     review_import.add_argument("--allow-unknown-scores", action="store_true")
     review_import.add_argument("--reviewer")
+    review_import.add_argument("--last-seen-event-id", default="")
+    review_import.add_argument("--context-token", default="")
     review_import.set_defaults(func=handlers.cmd_review_import)
     review_status = review_sub.add_parser("status")
     review_status.add_argument("--task", required=True)
@@ -190,7 +196,11 @@ def register_review(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     review_finding_update.add_argument("--finding", required=True)
     review_finding_update.add_argument("--status", choices=["unresolved", "addressed", "accepted-risk"], required=True)
     review_finding_update.add_argument("--reason", required=True)
-    review_finding_update.add_argument("--actor", default="ai")
+    review_finding_update.add_argument("--actor", choices=["human", "ai"], required=True)
+    review_finding_update.add_argument("--human-confirm", action="store_true")
+    review_finding_update.add_argument("--decision-note", default="")
+    review_finding_update.add_argument("--last-seen-event-id", default="")
+    review_finding_update.add_argument("--context-token", default="")
     review_finding_update.set_defaults(func=handlers.cmd_review_finding_update)
 
 

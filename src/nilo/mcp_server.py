@@ -45,6 +45,15 @@ from .snapshot import compact_snapshot, current_git_snapshot, snapshot_columns
 from .store import Store
 from .task_logic import projected_task_status
 from .timeutil import iso_age_seconds, now_iso
+from .transitions import (
+    TransitionError,
+    create_task_from_todo as transition_create_task_from_todo,
+    import_review_result as transition_import_review_result,
+    promote_todo_to_roadmap_proposal as transition_promote_todo_to_roadmap_proposal,
+    record_verification_run as transition_record_verification_run,
+    triage_todo as transition_triage_todo,
+    update_review_finding as transition_update_review_finding,
+)
 from .workspace_resolver import WorkspaceResolutionError, list_workspace_entries, resolve_workspace_context
 
 
@@ -532,6 +541,8 @@ TOOLS = [
                 "actor": {"type": "string"},
                 "last_seen_event_id": {"type": "string"},
                 "context_token": {"type": "string"},
+                "human_confirm": {"type": "boolean"},
+                "decision_source": {"type": "string"},
             },
             ["finding_id", "status", "reason", "actor"],
         ),
@@ -646,6 +657,9 @@ TOOLS = [
                 "status": {"type": "string"},
                 "reason": {"type": "string"},
                 "commitment_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "human_confirm": {"type": "boolean"},
+                "decision_source": {"type": "string"},
                 "context_token": {"type": "string"},
             },
             ["todo_id", "status", "reason"],
@@ -659,6 +673,7 @@ TOOLS = [
                 "todo_id": {"type": "string"},
                 "reason": {"type": "string"},
                 "title": {"type": "string"},
+                "actor": {"type": "string"},
                 "context_token": {"type": "string"},
             },
             ["todo_id", "reason"],
@@ -676,6 +691,7 @@ TOOLS = [
                 "type": {"type": "string"},
                 "risk": {"type": "string"},
                 "title": {"type": "string"},
+                "actor": {"type": "string"},
                 "context_token": {"type": "string"},
             },
             ["todo_id", "type", "risk"],
@@ -1454,42 +1470,22 @@ def mcp_import_review_result(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"review request must be claimed or in_progress before import: {review_id} [{request['status']}]")
     if reviewer != request["reviewer"]:
         raise McpToolError(f"reviewer mismatch for review {review_id}: expected {request['reviewer']}, got {reviewer}")
-    previous_event = require_fresh_task_context(store, task_id, arguments)
-    verdict, summary, findings = parse_review_result(body_md)
-    created_at = now_iso()
-    result = {
-        "id": make_id("review_result"),
-        "task_id": task_id,
-        "review_request_id": review_id,
-        "reviewer": reviewer or request["reviewer"],
-        "verdict": verdict,
-        "summary": mask_secrets(summary),
-        "based_on_event_id": request.get("based_on_event_id", ""),
-        "based_on_snapshot": request.get("based_on_snapshot", {}),
-        "body_md": mask_secrets(body_md),
-        "created_at": created_at,
-    }
-    store.insert("review_results", result)
-    stored_findings = []
-    for finding in findings:
-        row = {
-            "id": make_id("finding"),
-            "task_id": task_id,
-            "review_request_id": review_id,
-            "review_result_id": result["id"],
-            "title": mask_secrets(finding["title"]),
-            "severity": finding["severity"],
-            "status": finding["status"],
-            "file_path": mask_secrets(finding["file_path"]),
-            "line": mask_secrets(finding["line"]),
-            "blocking": finding["blocking"],
-            "description": mask_secrets(finding["description"]),
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-        store.insert("review_findings", row)
-        stored_findings.append(row)
-    store.update("review_requests", review_id, {"status": "completed", "updated_at": created_at})
+    observed_event_id = observed_task_event_id(arguments, task_id)
+    previous_event = require_fresh_task_event(store, task_id, observed_event_id)
+    try:
+        transition = transition_import_review_result(
+            store,
+            task_id,
+            review_id,
+            body_md=body_md,
+            reviewer=reviewer,
+            last_seen_event_id=observed_event_id,
+            cwd=Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd())),
+        )
+    except TransitionError as exc:
+        raise McpToolError(exc.message) from exc
+    result = store.get("review_results", transition.created_ids["review_result"])
+    stored_findings = store.list_where("review_findings", "review_result_id=?", (result["id"],))
     return {
         "task_id": task_id,
         "review_result": result,
@@ -1504,25 +1500,23 @@ def mcp_update_review_finding(store: Store, arguments: dict) -> dict:
     status = require_string(arguments, "status")
     reason = require_string(arguments, "reason")
     actor = require_string(arguments, "actor")
-    if status not in VALID_FINDING_STATUSES:
-        raise McpToolError(f"invalid finding status: {status}")
     finding = store.get("review_findings", finding_id)
     if not finding:
         raise McpToolError(f"review finding not found: {finding_id}")
     previous_event = require_fresh_task_context(store, finding["task_id"], arguments)
-    updated_at = now_iso()
-    update = {
-        "id": make_id("finding_update"),
-        "finding_id": finding_id,
-        "task_id": finding["task_id"],
-        "previous_status": finding["status"],
-        "new_status": status,
-        "reason": reason,
-        "actor": actor,
-        "created_at": updated_at,
-    }
-    store.insert("review_finding_updates", update)
-    store.update("review_findings", finding_id, {"status": status, "updated_at": updated_at})
+    try:
+        transition = transition_update_review_finding(
+            store,
+            finding_id,
+            status=status,
+            reason=reason,
+            actor=actor,
+            human_confirm=optional_bool(arguments, "human_confirm", False),
+            decision_source=optional_string(arguments, "decision_source"),
+        )
+    except TransitionError as exc:
+        raise McpToolError(exc.message) from exc
+    update = store.get("review_finding_updates", transition.created_ids["review_finding_update"])
     return {
         "task_id": finding["task_id"],
         "review_finding": store.get("review_findings", finding_id),
@@ -1656,7 +1650,10 @@ def mcp_record_verification_run(store: Store, arguments: dict) -> dict:
         "finished_at": finished_at,
         "created_at": finished_at,
     }
-    store.insert("verification_runs", row)
+    try:
+        transition_record_verification_run(store, task_id, row=row, actor="ai")
+    except TransitionError as exc:
+        raise McpToolError(exc.message) from exc
     return {"task_id": task_id, "verification_run": row, "previous_event": latest_event, "latest_event": store.latest_task_status_event(task_id)}
 
 
@@ -1770,10 +1767,20 @@ def mcp_triage_todo(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"todo not found: {todo_id}")
     require_fresh_todo_context(todo, arguments)
     commitment_id = optional_string(arguments, "commitment_id")
-    values = {"status": status, "triaged_at": now_iso(), "triage_reason": reason}
-    if commitment_id:
-        values["roadmap_commitment_id"] = commitment_id
-    store.update("todos", todo_id, values)
+    actor = optional_string(arguments, "actor", "ai") or "ai"
+    try:
+        transition_triage_todo(
+            store,
+            todo_id,
+            status=status,
+            reason=reason,
+            actor=actor,
+            human_confirm=optional_bool(arguments, "human_confirm", False),
+            decision_source=optional_string(arguments, "decision_source"),
+            commitment_id=commitment_id,
+        )
+    except TransitionError as exc:
+        raise McpToolError(exc.message) from exc
     updated = store.get("todos", todo_id)
     return {"todo": updated, "context_token": todo_context_token(updated)}
 
@@ -1822,13 +1829,17 @@ def mcp_promote_todo_to_roadmap_proposal(store: Store, arguments: dict) -> dict:
         "accepted_at": "",
         "created_at": created_at,
     }
-    store.insert("roadmap_commitments", commitment)
-    store.insert("roadmap_revisions", revision)
-    store.update(
-        "todos",
-        todo_id,
-        {"status": "superseded", "roadmap_revision_id": revision_id, "triaged_at": created_at, "triage_reason": reason},
-    )
+    try:
+        transition_promote_todo_to_roadmap_proposal(
+            store,
+            todo_id,
+            commitment=commitment,
+            revision=revision,
+            actor=optional_string(arguments, "actor", "ai") or "ai",
+            reason=reason,
+        )
+    except TransitionError as exc:
+        raise McpToolError(exc.message) from exc
     updated = store.get("todos", todo_id)
     return {
         "todo": updated,
@@ -1878,17 +1889,16 @@ def mcp_create_task_from_todo(store: Store, arguments: dict) -> dict:
         "base_commit": None,
         "created_at": created_at,
     }
-    store.insert("tasks", task)
-    store.update(
-        "todos",
-        todo_id,
-        {
-            "status": "converted_to_task",
-            "converted_task_id": task_id,
-            "triaged_at": created_at,
-            "triage_reason": f"converted to task {task_id}",
-        },
-    )
+    try:
+        transition_create_task_from_todo(
+            store,
+            todo_id,
+            task=task,
+            actor=optional_string(arguments, "actor", "ai") or "ai",
+            reason=f"converted to task {task_id}",
+        )
+    except TransitionError as exc:
+        raise McpToolError(exc.message) from exc
     updated = store.get("todos", todo_id)
     return {
         "todo": updated,

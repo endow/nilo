@@ -36,6 +36,9 @@ def register_todo(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
     todo_triage.add_argument("--item", required=True)
     todo_triage.add_argument("--status", choices=TODO_STATUSES, required=True)
     todo_triage.add_argument("--reason", required=True)
+    todo_triage.add_argument("--actor", choices=["human", "ai"], required=True)
+    todo_triage.add_argument("--human-confirm", action="store_true")
+    todo_triage.add_argument("--decision-source", default="")
     todo_triage.add_argument("--commitment", default="")
     todo_triage.add_argument("--roadmap-revision", default="")
     todo_triage.set_defaults(func=handlers.cmd_todo_triage)
@@ -45,6 +48,7 @@ def register_todo(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
     todo_start.add_argument("--title", default="")
     todo_start.add_argument("--type", dest="task_type", choices=TASK_TYPES, default="implementation")
     todo_start.add_argument("--risk", choices=["low", "medium", "high"], default="medium")
+    todo_start.add_argument("--actor", required=True)
     todo_start.set_defaults(func=handlers.cmd_todo_start)
 
     todo_promote = todo_sub.add_parser("promote")
@@ -52,4 +56,5 @@ def register_todo(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
     todo_promote.add_argument("--to", choices=["roadmap-proposal"], required=True)
     todo_promote.add_argument("--reason", required=True)
     todo_promote.add_argument("--title", default="")
+    todo_promote.add_argument("--actor", required=True)
     todo_promote.set_defaults(func=handlers.cmd_todo_promote)

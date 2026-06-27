@@ -200,8 +200,8 @@ class FailureLedgerTests(unittest.TestCase):
             self.insert_failure(db, "failure_ignore")
 
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "failure", "resolve", "failure_resolve", "--note", "fixed"])
-                main(["--db", str(db), "failure", "ignore", "failure_ignore", "--note", "external"])
+                main(["--db", str(db), "failure", "resolve", "failure_resolve", "--note", "fixed", "--by", "human", "--human-confirm", "--decision-note", "test human decision"])
+                main(["--db", str(db), "failure", "ignore", "failure_ignore", "--note", "external", "--by", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             store = Store(db)
             resolved = store.get("failure_logs", "failure_resolve")
@@ -213,10 +213,12 @@ class FailureLedgerTests(unittest.TestCase):
             self.assertTrue(resolved["resolved_at"])
             self.assertEqual(resolved["resolved_by"], "human")
             self.assertEqual(resolved["resolution_note"], "fixed")
+            self.assertEqual(resolved["decision_note"], "test human decision")
             self.assertEqual(ignored["status"], "ignored")
             self.assertTrue(ignored["resolved_at"])
             self.assertEqual(ignored["resolved_by"], "human")
             self.assertEqual(ignored["resolution_note"], "external")
+            self.assertEqual(ignored["decision_note"], "test human decision")
 
     def test_failure_summary_counts_all_rows_but_recent_high_is_open(self) -> None:
         with TemporaryDirectory() as directory:

@@ -4,8 +4,9 @@ import argparse
 import json
 
 from ..display_labels import category_label, field_label, severity_label, status_label
-from ..failure import list_failure_logs, summarize_failure_logs, update_failure_status
+from ..failure import list_failure_logs, summarize_failure_logs
 from ..store import Store
+from ..transitions import TransitionError, ignore_failure, resolve_failure
 
 
 def print_failure_row(failure: dict) -> None:
@@ -108,6 +109,7 @@ def cmd_failure_show(args: argparse.Namespace) -> None:
             "related_id",
             "snapshot",
             "resolution_note",
+            "decision_note",
             "created_at",
             "resolved_at",
             "resolved_by",
@@ -136,9 +138,18 @@ def cmd_failure_resolve(args: argparse.Namespace) -> None:
     store = Store(args.db)
     try:
         try:
-            failure = update_failure_status(store, args.failure_id, "resolved", note=args.note, by=args.by)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
+            resolve_failure(
+                store,
+                args.failure_id,
+                actor=args.by,
+                reason=args.note,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive" if args.by == "human" else "",
+                decision_note=args.decision_note,
+            )
+            failure = store.get("failure_logs", args.failure_id)
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print_status_update("failure_resolved", failure, args.json)
     finally:
         store.close()
@@ -148,9 +159,18 @@ def cmd_failure_ignore(args: argparse.Namespace) -> None:
     store = Store(args.db)
     try:
         try:
-            failure = update_failure_status(store, args.failure_id, "ignored", note=args.note, by=args.by)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
+            ignore_failure(
+                store,
+                args.failure_id,
+                actor=args.by,
+                reason=args.note,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+                decision_note=args.decision_note,
+            )
+            failure = store.get("failure_logs", args.failure_id)
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print_status_update("failure_ignored", failure, args.json)
     finally:
         store.close()

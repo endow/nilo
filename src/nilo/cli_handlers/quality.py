@@ -28,6 +28,7 @@ from ..snapshot import compact_snapshot, current_git_snapshot, review_result_sta
 from ..store import Store
 from ..task_logic import is_task_completed_status, projected_task_status
 from ..timeutil import now_iso
+from ..transitions import TransitionError, import_review_result, update_review_finding
 
 
 def parse_git_status_porcelain_z(stdout: str) -> list[str]:
@@ -714,43 +715,28 @@ def cmd_review_result_import(args: argparse.Namespace) -> None:
         except ProjectBoundaryError as exc:
             record_nilo_issue_for_task(store, task["project_id"], task["id"], "review import", exc, boundary)
             raise SystemExit(str(exc)) from exc
-        verdict, summary, findings = parse_review_result(body)
-        created_at = now_iso()
-        result = {
-            "id": make_id("review_result"),
-            "task_id": args.task,
-            "review_request_id": args.review,
-            "reviewer": args.reviewer or request["reviewer"],
-            "verdict": verdict,
-            "summary": summary,
-            "based_on_event_id": request.get("based_on_event_id", ""),
-            "based_on_snapshot": request.get("based_on_snapshot", {}),
-            "body_md": mask_secrets(body),
-            "created_at": created_at,
-        }
-        store.insert("review_results", result)
-        for finding in findings:
-            store.insert(
-                "review_findings",
-                {
-                    "id": make_id("finding"),
-                    "task_id": args.task,
-                    "review_request_id": args.review,
-                    "review_result_id": result["id"],
-                    "title": finding["title"],
-                    "severity": finding["severity"],
-                    "status": finding["status"],
-                    "file_path": finding["file_path"],
-                    "line": finding["line"],
-                    "blocking": finding["blocking"],
-                    "description": finding["description"],
-                    "created_at": created_at,
-                    "updated_at": created_at,
-                },
+        last_seen = _require_cli_fresh_task_context(
+            store,
+            args.task,
+            getattr(args, "last_seen_event_id", ""),
+            getattr(args, "context_token", ""),
+        )
+        try:
+            result = import_review_result(
+                store,
+                args.task,
+                args.review,
+                body_md=body,
+                reviewer=args.reviewer or request["reviewer"],
+                last_seen_event_id=last_seen,
+                cwd=Path.cwd(),
             )
-        store.update("review_requests", args.review, {"status": "completed", "updated_at": created_at})
-        print(f"review_result: {result['id']}")
-        print(f"verdict: {verdict}")
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
+        review_result = store.get("review_results", result.created_ids["review_result"])
+        findings = store.list_where("review_findings", "review_result_id=?", (review_result["id"],))
+        print(f"review_result: {review_result['id']}")
+        print(f"verdict: {review_result['verdict']}")
         if findings:
             print("findings:")
             for finding in findings:
@@ -980,25 +966,41 @@ def cmd_review_finding_update(args: argparse.Namespace) -> None:
         finding = store.get("review_findings", args.finding)
         if not finding:
             raise SystemExit(f"review finding not found: {args.finding}")
-        if args.status not in VALID_FINDING_STATUSES:
-            raise SystemExit(f"invalid finding status: {args.status}")
-        updated_at = now_iso()
-        store.insert(
-            "review_finding_updates",
-            {
-                "id": make_id("finding_update"),
-                "finding_id": finding["id"],
-                "task_id": finding["task_id"],
-                "previous_status": finding["status"],
-                "new_status": args.status,
-                "reason": args.reason,
-                "actor": args.actor,
-                "created_at": updated_at,
-            },
-        )
-        store.update("review_findings", finding["id"], {"status": args.status, "updated_at": updated_at})
+        _require_cli_fresh_task_context(store, finding["task_id"], getattr(args, "last_seen_event_id", ""), getattr(args, "context_token", ""))
+        try:
+            update_review_finding(
+                store,
+                finding["id"],
+                status=args.status,
+                reason=args.decision_note or args.reason,
+                actor=args.actor,
+                human_confirm=getattr(args, "human_confirm", False),
+                decision_source="human_interactive" if args.actor == "human" else "",
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"review_finding: {finding['id']}")
         print(f"previous_status: {finding['status']}")
         print(f"status: {args.status}")
     finally:
         store.close()
+
+
+def _event_id_from_cli_context(context_token: str, task_id: str) -> str:
+    if not context_token:
+        return ""
+    parts = context_token.split(":", 2)
+    if len(parts) != 3 or parts[0] != "task" or parts[1] != task_id:
+        raise SystemExit("invalid context_token")
+    return parts[2]
+
+
+def _require_cli_fresh_task_context(store: Store, task_id: str, last_seen_event_id: str, context_token: str) -> str:
+    observed = last_seen_event_id or _event_id_from_cli_context(context_token, task_id)
+    if not observed:
+        raise SystemExit("missing required argument: --context-token or --last-seen-event-id")
+    latest = store.latest_task_status_event(task_id)
+    current = latest["event_id"] if latest else ""
+    if observed != current:
+        raise SystemExit(f"stale task state: last_seen_event_id={observed}, current_event_id={current}")
+    return observed

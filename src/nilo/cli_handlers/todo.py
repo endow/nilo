@@ -7,6 +7,12 @@ from contextlib import redirect_stdout
 from ..cli_support import make_id
 from ..store import Store
 from ..timeutil import now_iso
+from ..transitions import (
+    TransitionError,
+    create_task_from_todo,
+    promote_todo_to_roadmap_proposal,
+    triage_todo,
+)
 from .task import cmd_task_create
 
 
@@ -143,16 +149,20 @@ def cmd_todo_triage(args: argparse.Namespace) -> None:
         if args.status not in TRIAGE_TODO_STATUSES:
             allowed = ", ".join(sorted(TRIAGE_TODO_STATUSES))
             raise SystemExit(f"todo status is not triage-settable: {args.status} (allowed: {allowed})")
-        values = {
-            "status": args.status,
-            "triaged_at": now_iso(),
-            "triage_reason": args.reason,
-        }
-        if args.commitment:
-            values["roadmap_commitment_id"] = args.commitment
-        if args.roadmap_revision:
-            values["roadmap_revision_id"] = args.roadmap_revision
-        store.update("todos", args.item, values)
+        try:
+            triage_todo(
+                store,
+                args.item,
+                status=args.status,
+                reason=args.reason,
+                actor=args.actor,
+                human_confirm=args.human_confirm,
+                decision_source=args.decision_source or ("human_interactive" if args.actor == "human" else ""),
+                commitment_id=args.commitment,
+                roadmap_revision_id=args.roadmap_revision,
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"todo: {args.item}")
         print(f"status: {args.status}")
         if args.commitment:
@@ -178,39 +188,31 @@ def cmd_todo_start(args: argparse.Namespace) -> None:
     finally:
         store.close()
 
-    create_args = argparse.Namespace(
-        db=args.db,
-        project=todo["project_id"],
-        title=title,
-        description=[description] if description else [],
-        acceptance=acceptance,
-        id=task_id,
-        parent_task=None,
-        split_index=None,
-        commitment=commitment_id,
-        roadmap_item="",
-        model="",
-        degradation="normal",
-        mode="normal",
-        task_type=args.task_type,
-        risk=args.risk,
-        requires_understanding_check=False,
-    )
-    with redirect_stdout(io.StringIO()):
-        cmd_task_create(create_args)
-
     store = Store(args.db)
     try:
-        store.update(
-            "todos",
-            args.item,
-            {
-                "status": "converted_to_task",
-                "converted_task_id": task_id,
-                "triaged_at": now_iso(),
-                "triage_reason": f"converted to task {task_id}",
-            },
-        )
+        row = {
+            "id": task_id,
+            "project_id": todo["project_id"],
+            "title": title,
+            "description": description,
+            "acceptance_criteria": acceptance,
+            "parent_task_id": None,
+            "split_index": None,
+            "task_type": args.task_type,
+            "risk_level": args.risk,
+            "requires_understanding_check": False,
+            "roadmap_commitment_id": commitment_id,
+            "roadmap_item_id": "",
+            "status": "planned",
+            "assigned_model_profile": "",
+            "degradation_mode": "normal",
+            "mode": "normal",
+            "base_commit": None,
+            "created_at": now_iso(),
+        }
+        create_task_from_todo(store, args.item, task=row, actor=args.actor, reason=f"converted to task {task_id}")
+    except TransitionError as exc:
+        raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
     finally:
         store.close()
     print(f"todo: {args.item}")
@@ -268,48 +270,36 @@ def cmd_todo_promote(args: argparse.Namespace) -> None:
         body = _roadmap_proposal_from_todo(todo, title)
         commitment_id = make_id("commitment")
         revision_id = make_id("roadmap_rev")
-        store.insert(
-            "roadmap_commitments",
-            {
-                "id": commitment_id,
-                "project_id": project["id"],
-                "title": title,
-                "intent": todo["description"] or todo["title"],
-                "success_criteria": [todo["acceptance_hint"]] if todo["acceptance_hint"] else [],
-                "non_goals": ["This proposal does not accept or close the roadmap commitment."],
-                "autonomy_scope": ["Create concrete tasks only after this proposal is accepted."],
-                "review_gates": ["Human acceptance is required before implementation tasks are created."],
-                "evidence_policy": [FOCUSED_EVIDENCE_POLICY],
-                "status": "pending",
-                "accepted_by": "",
-                "accepted_at": "",
-                "created_at": created_at,
-            },
-        )
-        store.insert(
-            "roadmap_revisions",
-            {
-                "id": revision_id,
-                "project_id": project["id"],
-                "proposed_commitment_id": commitment_id,
-                "status": "pending",
-                "body_md": body,
-                "source_path": f"todo:{todo['id']}",
-                "reason": args.reason,
-                "accepted_at": "",
-                "created_at": created_at,
-            },
-        )
-        store.update(
-            "todos",
-            args.item,
-            {
-                "status": "superseded",
-                "roadmap_revision_id": revision_id,
-                "triaged_at": created_at,
-                "triage_reason": args.reason,
-            },
-        )
+        commitment = {
+            "id": commitment_id,
+            "project_id": project["id"],
+            "title": title,
+            "intent": todo["description"] or todo["title"],
+            "success_criteria": [todo["acceptance_hint"]] if todo["acceptance_hint"] else [],
+            "non_goals": ["This proposal does not accept or close the roadmap commitment."],
+            "autonomy_scope": ["Create concrete tasks only after this proposal is accepted."],
+            "review_gates": ["Human acceptance is required before implementation tasks are created."],
+            "evidence_policy": [FOCUSED_EVIDENCE_POLICY],
+            "status": "pending",
+            "accepted_by": "",
+            "accepted_at": "",
+            "created_at": created_at,
+        }
+        revision = {
+            "id": revision_id,
+            "project_id": project["id"],
+            "proposed_commitment_id": commitment_id,
+            "status": "pending",
+            "body_md": body,
+            "source_path": f"todo:{todo['id']}",
+            "reason": args.reason,
+            "accepted_at": "",
+            "created_at": created_at,
+        }
+        try:
+            promote_todo_to_roadmap_proposal(store, args.item, commitment=commitment, revision=revision, actor=args.actor, reason=args.reason)
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"todo: {args.item}")
         print("status: superseded")
         print(f"roadmap_revision: {revision_id}")

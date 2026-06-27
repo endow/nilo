@@ -113,6 +113,12 @@ TASK_STATUS_MESSAGES: dict[str, dict[str, str]] = {
         "next_action": "必要に応じて完了記録と証跡を確認してください。",
         "severity": "info",
     },
+    "completion_needs_review": {
+        "state": "完了記録の確認が必要です。",
+        "summary": "完了記録はありますが、証跡・レビュー・失敗ログなどに確認すべき不整合があります。",
+        "next_action": "完了記録と監査結果を確認し、必要なら completion を invalidate してください。",
+        "severity": "warning",
+    },
 }
 
 
@@ -127,6 +133,7 @@ PROJECT_WORK_STATE_PRIORITY = [
     ("verification_timed_out", "検証がタイムアウトしています。"),
     ("verification_failed", "検証に失敗しています。"),
     ("review_approved", "人間の確認待ちです。"),
+    ("completion_needs_review", "完了記録の確認が必要です。"),
     ("needs_human_review", "人間の確認待ちです。"),
     ("verification_passed", "人間の完了判断待ちです。"),
     ("evidence_submitted", "人間の確認待ちです。"),

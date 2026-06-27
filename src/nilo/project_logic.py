@@ -8,7 +8,7 @@ from .design_residue import parse_design_residue
 from .display_labels import field_label, status_label
 from .human_status import human_next_action_text, human_project_work_state, human_task_status
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
-from .snapshot import current_git_snapshot, evidence_status
+from .snapshot import current_git_snapshot, evidence_status, review_result_status
 from .store import Store
 from .task_logic import is_task_completed_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
@@ -251,8 +251,11 @@ def diff_aware_verification_summary(report: dict | None, verification_run: dict 
 
 
 def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
+    from .state_audit import task_completion_invalid
+
     report = store.latest_for_task("agent_reports", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
+    review_result = store.latest_for_task("review_results", task["id"])
     current_snapshot = current_git_snapshot(Path.cwd())
     verification_status = "not_recorded"
     if verification_run:
@@ -274,6 +277,10 @@ def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
         "latest_verification_status": verification_status,
         "latest_verification_source": verification_run.get("source", "nilo_executed") if verification_run else "",
         "latest_verification_command": verification_run["command"] if verification_run else "",
+        "latest_review_result_id": review_result["id"] if review_result else "",
+        "latest_review_status": review_result_status(review_result, current_snapshot) if review_result else "missing",
+        "unresolved_review_findings": len(store.list_where("review_findings", "task_id=? AND status='unresolved'", (task["id"],))),
+        "completion_valid": is_task_completed_status(status) and not task_completion_invalid(store, task["id"]),
         "diff_verification": diff_aware_verification_summary(report, verification_run),
         "recipe_provenance": recipe_provenance_summary(store, task["id"]),
     }
@@ -283,10 +290,13 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
     related_tasks = related_tasks_for_commitment(tasks, commitment)
     task_evidence = [roadmap_task_evidence(store, task, statuses[task["id"]]) for task in related_tasks]
     has_task = bool(task_evidence)
-    has_report = any(item["latest_report_id"] for item in task_evidence)
-    has_passed_verification = any(item["latest_verification_status"] == "passed" for item in task_evidence)
+    has_report = all(item["latest_report_id"] for item in task_evidence) if task_evidence else False
+    has_passed_verification = all(item["latest_verification_status"] == "passed" and item["latest_evidence_status"] == "current" for item in task_evidence) if task_evidence else False
     has_failed_verification = any(item["latest_verification_status"] in ("failed", "timed_out") for item in task_evidence)
     has_diff_human_review = any(item["diff_verification"]["status"] == "needs_human_review" for item in task_evidence)
+    has_current_review = all(item["latest_review_status"] in {"current", "missing"} for item in task_evidence) if task_evidence else False
+    has_unresolved_findings = any(item["unresolved_review_findings"] for item in task_evidence)
+    all_completions_valid = all(item["completion_valid"] for item in task_evidence) if task_evidence else False
     active = [item for item in task_evidence if not is_task_completed_status(item["status"])]
 
     if not has_task:
@@ -300,7 +310,16 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
         unresolved = "related task has no passing verification"
     elif not has_report:
         overall_status = "needs_report"
-        unresolved = "related task has no agent report"
+        unresolved = "one or more related tasks have no agent report"
+    elif has_unresolved_findings:
+        overall_status = "needs_review"
+        unresolved = "related task has unresolved review findings"
+    elif not has_current_review:
+        overall_status = "needs_review"
+        unresolved = "related task review is stale"
+    elif not all_completions_valid:
+        overall_status = "needs_completion_audit"
+        unresolved = "related task completion is missing or invalid"
     elif has_diff_human_review:
         overall_status = "needs_human_review"
         unresolved = "diff-aware verification needs human review"
@@ -324,7 +343,16 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
             reason = "passing verification not recorded"
         elif not has_report:
             state = "needs_report"
-            reason = "agent report not imported"
+            reason = "one or more related tasks have no agent report"
+        elif has_unresolved_findings:
+            state = "needs_review"
+            reason = "related task has unresolved review findings"
+        elif not has_current_review:
+            state = "needs_review"
+            reason = "related task review is stale"
+        elif not all_completions_valid:
+            state = "needs_completion_audit"
+            reason = "related task completion is missing or invalid"
         elif has_diff_human_review:
             state = "needs_human_review"
             reason = "diff-aware verification found changed files without related test command"
@@ -373,6 +401,8 @@ def auto_close_ready_roadmap_commitments(
     reason: str,
     commitment_id: str | None = None,
 ) -> list[dict]:
+    from .transitions import TransitionError, close_roadmap_commitment
+
     tasks, statuses = project_tasks_and_statuses(store, project_id)
     closed = []
     for commitment in accepted_roadmap_commitments(store, project_id):
@@ -386,18 +416,19 @@ def auto_close_ready_roadmap_commitments(
         assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
         if not assessment["closure_ready"]:
             continue
-        closed_at = now_iso()
-        store.update(
-            "roadmap_commitments",
-            commitment["id"],
-            {
-                "status": "closed",
-                "closed_by": actor,
-                "closed_at": closed_at,
-                "closure_reason": reason,
-            },
-        )
-        closed.append({**commitment, "closed_by": actor, "closed_at": closed_at, "closure_reason": reason})
+        try:
+            close_roadmap_commitment(
+                store,
+                commitment["id"],
+                actor=actor,
+                reason=reason,
+                closure_ready=True,
+                force=False,
+            )
+        except TransitionError:
+            continue
+        updated = store.get("roadmap_commitments", commitment["id"]) or commitment
+        closed.append(updated)
     return closed
 
 
@@ -1343,7 +1374,8 @@ def review_worker_recovery_action(reviewer: str, review_id: str, availability: s
 def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     refresh_review_dispatch_state(store, project_id)
     tasks = store.list_where("tasks", "project_id=?", (project_id,))
-    statuses = {task["id"]: projected_task_status(store, task) for task in tasks}
+    current_snapshot = current_git_snapshot(Path.cwd())
+    statuses = {task["id"]: projected_task_status(store, task, current_snapshot=current_snapshot) for task in tasks}
     return tasks, statuses
 
 

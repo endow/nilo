@@ -20,6 +20,7 @@ from .secret import detect_secret_issues, mask_secrets
 from .snapshot import compact_snapshot, current_git_snapshot
 from .store import Store
 from .timeutil import now_iso
+from .transitions import TransitionError, import_review_result as transition_import_review_result
 
 
 DISPATCH_TERMINAL_STATUSES = {"review_completed", "review_failed", "needs_reviewer_worker", "needs_reviewer_config"}
@@ -562,10 +563,18 @@ def resolve_task_project(store: Store, task_id: str, project_id: str | None) -> 
     return task, resolved_project
 
 
-def create_review_request(store: Store, task_id: str, actor: str, reviewer: str, reason: str) -> dict:
+def create_review_request(
+    store: Store,
+    task_id: str,
+    actor: str,
+    reviewer: str,
+    reason: str,
+    *,
+    cwd: Path | None = None,
+) -> dict:
     created_at = now_iso()
     latest_event = store.latest_task_status_event(task_id)
-    snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
+    snapshot = compact_snapshot(current_git_snapshot(cwd or Path.cwd()))
     row = {
         "id": make_id("review"),
         "task_id": task_id,
@@ -902,7 +911,7 @@ def run_reviewer_process(config: ReviewerConfig, cwd: Path, env: dict[str, str],
         ) from None
 
 
-def import_dispatch_review_result(store: Store, request: dict, reviewer: str, body_md: str) -> tuple[dict, list[dict]]:
+def import_dispatch_review_result(store: Store, request: dict, reviewer: str, body_md: str, *, last_seen_event_id: str, cwd: Path | None = None) -> tuple[dict, list[dict]]:
     if request["status"] not in {"claimed", "in_progress"}:
         raise DispatchError(
             "review_importing",
@@ -922,7 +931,7 @@ def import_dispatch_review_result(store: Store, request: dict, reviewer: str, bo
             {"type": "fix_reviewer_output", "reviewer": reviewer},
             stdout=body_md,
         )
-    verdict, summary, findings = parse_review_result(body_md)
+    verdict, _summary, _findings = parse_review_result(body_md)
     if verdict not in VALID_DISPATCH_VERDICTS:
         raise DispatchError(
             "review_output_received",
@@ -930,40 +939,20 @@ def import_dispatch_review_result(store: Store, request: dict, reviewer: str, bo
             {"type": "fix_reviewer_output", "reviewer": reviewer},
             stdout=body_md,
         )
-    created_at = now_iso()
-    result = {
-        "id": make_id("review_result"),
-        "task_id": request["task_id"],
-        "review_request_id": request["id"],
-        "reviewer": reviewer,
-        "verdict": verdict,
-        "summary": mask_secrets(summary),
-        "based_on_event_id": request.get("based_on_event_id", ""),
-        "based_on_snapshot": request.get("based_on_snapshot", {}),
-        "body_md": mask_secrets(body_md),
-        "created_at": created_at,
-    }
-    store.insert("review_results", result)
-    stored_findings = []
-    for finding in findings:
-        row = {
-            "id": make_id("finding"),
-            "task_id": request["task_id"],
-            "review_request_id": request["id"],
-            "review_result_id": result["id"],
-            "title": mask_secrets(finding["title"]),
-            "severity": finding["severity"],
-            "status": finding["status"],
-            "file_path": mask_secrets(finding["file_path"]),
-            "line": mask_secrets(finding["line"]),
-            "blocking": finding["blocking"],
-            "description": mask_secrets(finding["description"]),
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-        store.insert("review_findings", row)
-        stored_findings.append(row)
-    store.update("review_requests", request["id"], {"status": "completed", "updated_at": created_at})
+    try:
+        transition = transition_import_review_result(
+            store,
+            request["task_id"],
+            request["id"],
+            body_md=body_md,
+            reviewer=reviewer,
+            last_seen_event_id=last_seen_event_id,
+            cwd=cwd,
+        )
+    except TransitionError as exc:
+        raise DispatchError("review_importing", exc.message, {"type": "retry_dispatch", "review_request_id": request["id"]}) from exc
+    result = store.get("review_results", transition.created_ids["review_result"])
+    stored_findings = store.list_where("review_findings", "review_result_id=?", (result["id"],))
     return result, stored_findings
 
 
@@ -1212,7 +1201,7 @@ def dispatch_review(
             register_dispatch_reviewer(store, reviewer, config, command_line)
         update_dispatch(store, dispatch_id, status="reviewer_available")
 
-        request = create_review_request(store, task["id"], actor, reviewer, reason)
+        request = create_review_request(store, task["id"], actor, reviewer, reason, cwd=repo_root)
         update_dispatch(store, dispatch_id, status="review_requested", review_request_id=request["id"])
         close_previous_active_reviews(
             store,
@@ -1242,6 +1231,7 @@ def dispatch_review(
             {"status": "in_progress", "updated_at": now_iso()},
         )
         request = store.get("review_requests", request["id"])
+        import_seen_event = store.latest_task_status_event(request["task_id"])
         cwd, env, resolved = reviewer_process_context(config, variables, repo_root)
         command_line = resolved.preview
         update_dispatch(store, dispatch_id, status="review_running", command=resolved.executable, args=resolved.command[1:])
@@ -1263,7 +1253,14 @@ def dispatch_review(
                 stderr=process.stderr,
             )
         update_dispatch(store, dispatch_id, status="review_output_received", exit_code=process.returncode, stdout=process.stdout, stderr=process.stderr)
-        result, findings = import_dispatch_review_result(store, request, reviewer, process.stdout)
+        result, findings = import_dispatch_review_result(
+            store,
+            request,
+            reviewer,
+            process.stdout,
+            last_seen_event_id=import_seen_event["event_id"] if import_seen_event else "",
+            cwd=repo_root,
+        )
         update_dispatch(store, dispatch_id, status="review_imported")
         refreshed = store.get("review_requests", request["id"])
         if not refreshed or refreshed["status"] != "completed":
@@ -1336,10 +1333,18 @@ def dispatch_review(
         )
 
 
-def create_quick_review_request(store: Store, task_id: str, actor: str, reviewer: str, reason: str) -> dict:
+def create_quick_review_request(
+    store: Store,
+    task_id: str,
+    actor: str,
+    reviewer: str,
+    reason: str,
+    *,
+    cwd: Path | None = None,
+) -> dict:
     created_at = now_iso()
     latest_event = store.latest_task_status_event(task_id)
-    snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
+    snapshot = compact_snapshot(current_git_snapshot(cwd or Path.cwd()))
     row = {
         "id": make_id("review"),
         "task_id": task_id,
@@ -1399,7 +1404,8 @@ def quick_review(
     reviewer = canonical_reviewer_name(reviewer)
     task, resolved_project = resolve_task_project(store, task_id, project_id)
     effective_config_path = config_path or repo_root / ".nilo" / "reviewers.toml"
-    request = create_quick_review_request(store, task["id"], actor, reviewer, reason) if should_import else ephemeral_quick_review_request(task["id"], actor, reviewer, reason)
+    request = create_quick_review_request(store, task["id"], actor, reviewer, reason, cwd=repo_root) if should_import else ephemeral_quick_review_request(task["id"], actor, reviewer, reason)
+    import_seen_event = store.latest_task_status_event(task["id"]) if should_import else None
     prompt_path: Path | None = None
     try:
         config = load_reviewer_config(effective_config_path, reviewer, auto_configure=auto_configure and config_path is None)
@@ -1467,7 +1473,14 @@ def quick_review(
                 "reason": "reviewer output was not a parseable ReviewResult",
             }
         try:
-            result, findings = import_dispatch_review_result(store, request, reviewer, process.stdout)
+            result, findings = import_dispatch_review_result(
+                store,
+                request,
+                reviewer,
+                process.stdout,
+                last_seen_event_id=import_seen_event["event_id"] if import_seen_event else "",
+                cwd=repo_root,
+            )
         except DispatchError as exc:
             fail_quick_review_request(store, request, actor, exc.reason)
             return {

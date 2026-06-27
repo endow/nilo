@@ -86,6 +86,20 @@ def register_test_reviewer(db: Path, reviewer: str) -> None:
         store.close()
 
 
+def claim_review_for_import(db: Path, request_id: str) -> str:
+    store = Store(db)
+    try:
+        request = store.get("review_requests", request_id)
+        assert request is not None
+        now = now_iso()
+        store.update("review_requests", request_id, {"status": "claimed", "updated_at": now})
+        latest = store.latest_task_status_event(request["task_id"])
+        assert latest is not None
+        return str(latest["event_id"])
+    finally:
+        store.close()
+
+
 class CliTests(unittest.TestCase):
     def table_names(self, db: Path) -> set[str]:
         conn = sqlite3.connect(db)
@@ -788,10 +802,10 @@ completion_contract:
                     main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
                 first_output = io.StringIO()
                 with redirect_stdout(first_output):
-                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes"])
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=recipes", "--type", "documentation"])
                 second_output = io.StringIO()
                 with redirect_stdout(second_output):
-                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=guides"])
+                    main(["--db", str(db), "recipe", "run", "docs-update", "--project", root.name, "--var", "topic=guides", "--type", "documentation"])
 
                 first_task_id = first_output.getvalue().strip()
                 second_task_id = second_output.getvalue().strip()
@@ -815,6 +829,8 @@ completion_contract:
                             "--actor",
                             "human",
                             "--human-confirm",
+                        "--decision-note",
+                        "test human decision",
                         ]
                     )
 
@@ -832,6 +848,8 @@ completion_contract:
                             "--actor",
                             "human",
                             "--human-confirm",
+                        "--decision-note",
+                        "test human decision",
                         ]
                     )
             finally:
@@ -1306,7 +1324,7 @@ variables:
 
                 done_output = io.StringIO()
                 with redirect_stdout(done_output):
-                    main(["--db", str(db), "done", "--reason", "facade smoke accepted", "--actor", "human", "--human-confirm"])
+                    main(["--db", str(db), "done", "--reason", "facade smoke accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 self.assertIn("status: completed_by_user", done_output.getvalue())
 
                 with redirect_stdout(io.StringIO()):
@@ -1362,13 +1380,13 @@ variables:
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_active", "--title", "Active task"])
-                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task"])
-                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human", "--human-confirm"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task", "--type", "documentation"])
+                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_open", "Open todo"])
                 main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_ready", "Ready todo"])
-                main(["--db", str(db), "todo", "triage", "--item", "todo_ready", "--status", "ready", "--reason", "ready"])
+                main(["--db", str(db), "todo", "triage", "--item", "todo_ready", "--status", "ready", "--reason", "ready", "--actor", "ai"])
                 main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_rejected", "Rejected todo"])
-                main(["--db", str(db), "todo", "triage", "--item", "todo_rejected", "--status", "rejected", "--reason", "rejected"])
+                main(["--db", str(db), "todo", "triage", "--item", "todo_rejected", "--status", "rejected", "--reason", "rejected", "--actor", "human", "--human-confirm", "--decision-source", "human_interactive"])
 
             store = Store(db)
             try:
@@ -1401,11 +1419,12 @@ variables:
                 main(["--db", str(db), "queue", "--project", "project_test"])
             body = output.getvalue()
 
-            self.assertIn("queue: total=3 tasks=1 todos=2", body)
+            self.assertIn("queue: total=4 tasks=2 todos=2", body)
+            self.assertIn("unresolved_project_state: failures=1", body)
+            self.assertIn("task_done [完了記録の確認が必要] documentation medium Done task", body)
             self.assertIn("task_active [計画済み] implementation medium Active task", body)
             self.assertIn("todo_open [未解決] normal Open todo", body)
             self.assertIn("todo_ready [着手可能] normal Ready todo", body)
-            self.assertNotIn("task_done", body)
             self.assertNotIn("todo_rejected", body)
             self.assertNotIn("failure_queue", body)
             self.assertNotIn("historical failure", body)
@@ -1496,14 +1515,16 @@ variables:
             with redirect_stdout(audit_output):
                 main(["--db", str(db), "queue", "--project", "project_test", "--audit"])
             audit_body = audit_output.getvalue()
-            self.assertIn("task_done [invalid_completion]", audit_body)
-            self.assertIn("suspicious_human_completion", audit_body)
+            self.assertIn("invalid_completions=", audit_body)
+            self.assertIn("task_done [完了記録の確認が必要]", audit_body)
 
             doctor_output = io.StringIO()
             with redirect_stdout(doctor_output):
                 main(["--db", str(db), "doctor", "completions", "--project", "project_test"])
-            self.assertIn("completion_audit: 1 issue(s)", doctor_output.getvalue())
-            self.assertIn("completion_bad", doctor_output.getvalue())
+            doctor_body = doctor_output.getvalue()
+            self.assertIn("completion_audit:", doctor_body)
+            self.assertIn("completion_bad", doctor_body)
+            self.assertIn("completion_human_decision_note_missing", doctor_body)
 
     def test_task_completion_invalidate_reopens_projected_status_without_deleting_audit_record(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1546,6 +1567,8 @@ variables:
                         "completion_bad",
                         "--reason",
                         "not actually approved by a human",
+                        "--actor",
+                        "human",
                     ]
                 )
             status_output = io.StringIO()
@@ -2107,7 +2130,7 @@ variables:
 
                 no_commitment_output = io.StringIO()
                 with redirect_stdout(no_commitment_output):
-                    main(["--db", str(db), "todo", "triage", "--item", todo_id, "--status", "ready", "--reason", "単発依頼として実行対象にする"])
+                    main(["--db", str(db), "todo", "triage", "--item", todo_id, "--status", "ready", "--reason", "単発依頼として実行対象にする", "--actor", "ai"])
                 self.assertIn("status: ready", no_commitment_output.getvalue())
 
                 with self.assertRaises(SystemExit) as terminal:
@@ -2123,6 +2146,8 @@ variables:
                             "converted_to_task",
                             "--reason",
                             "terminal status は start 経由のみ",
+                            "--actor",
+                            "ai",
                         ]
                     )
                 self.assertIn("todo status is not triage-settable: converted_to_task", str(terminal.exception))
@@ -2143,6 +2168,8 @@ variables:
                             "commitment_test",
                             "--reason",
                             "参照メモとして紐づける",
+                            "--actor",
+                            "ai",
                         ]
                     )
                 self.assertIn("status: ready", triage_output.getvalue())
@@ -2270,17 +2297,17 @@ variables:
                     store.close()
 
                 with self.assertRaises(SystemExit) as raised:
-                    main(["--db", str(db), "todo", "start", "--item", "todo_open"])
+                    main(["--db", str(db), "todo", "start", "--item", "todo_open", "--actor", "ai"])
                 self.assertIn("todo is not startable: open", str(raised.exception))
 
                 pending_output = io.StringIO()
                 with redirect_stdout(pending_output):
-                    main(["--db", str(db), "todo", "start", "--item", "todo_pending_commitment"])
+                    main(["--db", str(db), "todo", "start", "--item", "todo_pending_commitment", "--actor", "ai"])
                 self.assertIn("status: converted_to_task", pending_output.getvalue())
 
                 start_output = io.StringIO()
                 with redirect_stdout(start_output):
-                    main(["--db", str(db), "todo", "start", "--item", "todo_ready", "--type", "documentation", "--risk", "low"])
+                    main(["--db", str(db), "todo", "start", "--item", "todo_ready", "--type", "documentation", "--risk", "low", "--actor", "ai"])
                 body = start_output.getvalue()
                 task_id = next(line.split(": ", 1)[1] for line in body.splitlines() if line.startswith("task: "))
                 self.assertIn("status: converted_to_task", body)
@@ -2361,7 +2388,7 @@ variables:
                     store.close()
 
                 with self.assertRaises(SystemExit) as raised:
-                    main(["--db", str(db), "todo", "promote", "--item", "todo_ready", "--to", "roadmap-proposal", "--reason", "needs roadmap"])
+                    main(["--db", str(db), "todo", "promote", "--item", "todo_ready", "--to", "roadmap-proposal", "--reason", "needs roadmap", "--actor", "ai"])
                 self.assertIn("todo is not promotable: ready", str(raised.exception))
 
                 promote_output = io.StringIO()
@@ -2378,6 +2405,8 @@ variables:
                             "roadmap-proposal",
                             "--reason",
                             "needs accepted roadmap scope",
+                            "--actor",
+                            "ai",
                         ]
                     )
                 body = promote_output.getvalue()
@@ -3027,6 +3056,8 @@ variables:
                         "task_test",
                         "--title",
                         "CLIフローを確認する",
+                        "--type",
+                        "documentation",
                     ]
                 )
                 main(["--db", str(db), "instruct", "--task", "task_test"])
@@ -3250,7 +3281,34 @@ variables:
             self.assertNotIn("大きな作業の可能性", after_report_body)
 
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "task", "complete", "--task", "task_large", "--reason", "human accepted", "--actor", "human", "--human-confirm"])
+                main(["--db", str(db), "check", "--task", "task_large", "python --version"])
+                store = Store(db)
+                try:
+                    high_failures = store.list_where(
+                        "failure_logs",
+                        "task_id=? AND status='open' AND severity='high'",
+                        ("task_large",),
+                    )
+                finally:
+                    store.close()
+                for failure in high_failures:
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "failure",
+                            "resolve",
+                            failure["id"],
+                            "--note",
+                            "verified and accepted",
+                            "--by",
+                            "human",
+                            "--human-confirm",
+                            "--decision-note",
+                            "test human decision",
+                        ]
+                    )
+                main(["--db", str(db), "task", "complete", "--task", "task_large", "--reason", "human accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             store = Store(db)
             try:
                 self.assertIsNotNone(store.latest_for_task("task_completions", "task_large"))
@@ -3808,8 +3866,8 @@ project status からロードマップ現在地を読めるようにする。
 
             accept_output = io.StringIO()
             with redirect_stdout(accept_output):
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "ロードマップ現在地を先に扱うため", "--actor", "ai"])
-            self.assertIn("accepted_by: ai", accept_output.getvalue())
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "ロードマップ現在地を先に扱うため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+            self.assertIn("accepted_by: human", accept_output.getvalue())
 
             status_output = io.StringIO()
             with redirect_stdout(status_output):
@@ -3824,7 +3882,7 @@ project status からロードマップ現在地を読めるようにする。
             summary = json.loads(summary_output.getvalue())
             self.assertEqual(summary["roadmap_position"], "accepted commitment: Phase 2.5 Roadmap Projection")
             self.assertEqual(summary["roadmap_commitments"][0]["title"], "Phase 2.5 Roadmap Projection")
-            self.assertEqual(summary["roadmap_commitments"][0]["accepted_by"], "ai")
+            self.assertEqual(summary["roadmap_commitments"][0]["accepted_by"], "human")
             self.assertEqual(summary["pending_roadmap_revisions"], [])
 
             roadmap_file = root / "ROADMAP.md"
@@ -4041,7 +4099,7 @@ project status からロードマップ現在地を読めるようにする。
                     for line in import_output.getvalue().splitlines()
                     if line.startswith("proposed_commitment: ")
                 )
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "test"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "test", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -4199,7 +4257,13 @@ project status からロードマップ現在地を読めるようにする。
                 store.close()
 
             complete_output = io.StringIO()
-            with redirect_stdout(complete_output):
+            current_snapshot = {"git_head": "", "git_diff_hash": "", "working_tree_dirty": False}
+            with (
+                redirect_stdout(complete_output),
+                patch("nilo.transitions.current_git_snapshot", return_value=current_snapshot),
+                patch("nilo.state_audit.current_git_snapshot", return_value=current_snapshot),
+                patch("nilo.project_logic.current_git_snapshot", return_value=current_snapshot),
+            ):
                 main(
                     [
                         "--db",
@@ -4213,6 +4277,8 @@ project status からロードマップ現在地を読めるようにする。
                         "--actor",
                         "human",
                         "--human-confirm",
+                    "--decision-note",
+                    "test human decision",
                     ]
                 )
             self.assertIn("closed_roadmap_commitments:", complete_output.getvalue())
@@ -4281,7 +4347,7 @@ completed criterion を満たした。
                     for line in first.getvalue().splitlines()
                     if line.startswith("proposed_commitment: ")
                 )
-                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "first"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "first", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -4312,7 +4378,33 @@ completed criterion を満たした。
                         f'"{sys.executable}" "{script}"',
                     ]
                 )
-                main(["--db", str(db), "task", "complete", "--task", "task_complete", "--reason", "human accepted evidence", "--actor", "human", "--human-confirm"])
+                store = Store(db)
+                try:
+                    high_failures = store.list_where(
+                        "failure_logs",
+                        "task_id=? AND status='open' AND severity='high'",
+                        ("task_complete",),
+                    )
+                finally:
+                    store.close()
+                for failure in high_failures:
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "failure",
+                            "resolve",
+                            failure["id"],
+                            "--note",
+                            "verified and accepted",
+                            "--by",
+                            "human",
+                            "--human-confirm",
+                            "--decision-note",
+                            "test human decision",
+                        ]
+                    )
+                main(["--db", str(db), "task", "complete", "--task", "task_complete", "--reason", "human accepted evidence", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 second = io.StringIO()
                 with redirect_stdout(second):
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(incomplete_proposal)])
@@ -4326,7 +4418,7 @@ completed criterion を満たした。
                     for line in second.getvalue().splitlines()
                     if line.startswith("proposed_commitment: ")
                 )
-                main(["--db", str(db), "roadmap", "accept", "--revision", second_revision, "--reason", "second"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", second_revision, "--reason", "second", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -4386,7 +4478,7 @@ completed criterion を満たした。
                     for line in imported.getvalue().splitlines()
                     if line.startswith("proposed_commitment: ")
                 )
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_unrelated", "--title", "Unrelated active task"])
 
             output = io.StringIO()
@@ -4451,7 +4543,7 @@ completed criterion を満たした。
             self.assertNotIn("warning:", linked_output.getvalue())
 
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             stale_output = io.StringIO()
             with redirect_stdout(stale_output), patch(
@@ -4537,6 +4629,11 @@ Reduce roadmap transaction friction.
                         str(proposal),
                         "--reason",
                         "human chose this direction",
+                        "--actor",
+                        "human",
+                        "--human-confirm",
+                        "--decision-note",
+                        "test human decision",
                         "--roadmap-file",
                         str(roadmap_file),
                     ]
@@ -4603,6 +4700,11 @@ Reduce roadmap transaction friction.
                             str(discussion),
                             "--reason",
                             "human chose this direction",
+                            "--actor",
+                            "human",
+                            "--human-confirm",
+                            "--decision-note",
+                            "test human decision",
                             "--roadmap-file",
                             str(roadmap_file),
                         ]
@@ -4758,7 +4860,7 @@ This malformed proposal has no top-level title.
                 with redirect_stdout(first_output):
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(first)])
                 first_revision = next(line.split(": ", 1)[1] for line in first_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
-                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "最初の承認"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "最初の承認", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             with self.assertRaises(SystemExit) as raised:
                 second_output = io.StringIO()
@@ -4807,7 +4909,7 @@ This malformed proposal has no top-level title.
                 with redirect_stdout(first_output):
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(first)])
                 first_revision = next(line.split(": ", 1)[1] for line in first_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
-                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "最初の承認"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision, "--reason", "最初の承認", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             store = Store(db)
             accepted = store.list_where("roadmap_commitments", "project_id=? AND status='accepted'", ("project_test",))[0]
@@ -4860,7 +4962,7 @@ This malformed proposal has no top-level title.
                 with redirect_stdout(first_output):
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(first)])
                 first_revision = next(line.split(": ", 1)[1] for line in first_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
-                main(["--db", str(db), "roadmap", "reject", "--revision", first_revision, "--reason", "却下する", "--actor", "ai"])
+                main(["--db", str(db), "roadmap", "reject", "--revision", first_revision, "--reason", "却下する", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             with self.assertRaises(SystemExit) as raised:
                 with redirect_stdout(io.StringIO()):
@@ -4940,9 +5042,9 @@ This malformed proposal has no top-level title.
 
             reject_output = io.StringIO()
             with redirect_stdout(reject_output):
-                main(["--db", str(db), "roadmap", "reject", "--revision", revision_id, "--reason", "誤 import のため", "--actor", "ai"])
+                main(["--db", str(db), "roadmap", "reject", "--revision", revision_id, "--reason", "誤 import のため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             self.assertIn(f"rejected_revision: {revision_id}", reject_output.getvalue())
-            self.assertIn("rejected_by: ai", reject_output.getvalue())
+            self.assertIn("rejected_by: human", reject_output.getvalue())
 
             store = Store(db)
             revision = store.get("roadmap_revisions", revision_id)
@@ -4950,10 +5052,10 @@ This malformed proposal has no top-level title.
             store.close()
             self.assertEqual(revision["status"], "rejected")
             self.assertEqual(revision["reason"], "誤 import のため")
-            self.assertEqual(revision["decided_by"], "ai")
+            self.assertEqual(revision["decided_by"], "human")
             self.assertTrue(revision["accepted_at"])
             self.assertEqual(commitment["status"], "rejected")
-            self.assertEqual(commitment["accepted_by"], "ai")
+            self.assertEqual(commitment["accepted_by"], "human")
             self.assertTrue(commitment["accepted_at"])
 
             roadmap_status = io.StringIO()
@@ -5009,11 +5111,11 @@ non-pending reject を確認するため。
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
             revision_id = next(line.split(": ", 1)[1] for line in import_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "承認する", "--actor", "ai"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "承認する", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             with self.assertRaises(SystemExit):
                 with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                    main(["--db", str(db), "roadmap", "reject", "--revision", revision_id, "--reason", "取り下げる", "--actor", "ai"])
+                    main(["--db", str(db), "roadmap", "reject", "--revision", revision_id, "--reason", "取り下げる", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
     def test_store_migrates_roadmap_revision_source_path_column(self) -> None:
         with TemporaryDirectory() as directory:
@@ -5274,7 +5376,7 @@ project status からロードマップ現在地を読めるようにする。
                     main(["--db", str(db), "roadmap", "task-plan", "--commitment", commitment_id])
 
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "タスク候補へ分解するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "タスク候補へ分解するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             stdout_output = io.StringIO()
             with redirect_stdout(stdout_output):
@@ -5344,7 +5446,7 @@ project status からロードマップ現在地を読めるようにする。
                     revision = store.get("roadmap_revisions", revision_id)
                     commitment_id = revision["proposed_commitment_id"]
                     store.close()
-                    main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "評価するため"])
+                    main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "評価するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                     main(
                         [
                             "--db",
@@ -5373,9 +5475,9 @@ project status からロードマップ現在地を読めるようにする。
             body = output.getvalue()
             self.assertIn("# Roadmap Assessment", body)
             self.assertIn(f"### {commitment_id} Phase 2.5 Roadmap Projection", body)
-            self.assertIn("- status: evidence_present", body)
-            self.assertIn("- closure_ready: true", body)
-            self.assertIn("- [evidence_present] accepted commitment の達成状況を確認できる", body)
+            self.assertIn("- status: needs_verification", body)
+            self.assertIn("- closure_ready: false", body)
+            self.assertIn("- [needs_verification] accepted commitment の達成状況を確認できる", body)
             self.assertIn("related_tasks: task_assess", body)
             self.assertIn("latest_verification:", body)
             self.assertIn("(passed)", body)
@@ -5384,13 +5486,13 @@ project status からロードマップ現在地を読めるようにする。
             with redirect_stdout(summary_output):
                 main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
             summary = json.loads(summary_output.getvalue())
-            self.assertEqual(summary["roadmap_assessments"][0]["status"], "evidence_present")
-            self.assertTrue(summary["roadmap_assessments"][0]["closure_ready"])
+            self.assertEqual(summary["roadmap_assessments"][0]["status"], "needs_verification")
+            self.assertFalse(summary["roadmap_assessments"][0]["closure_ready"])
             self.assertEqual(summary["roadmap_assessments"][0]["related_tasks"][0]["task_id"], "task_assess")
             self.assertEqual(summary["roadmap_agent_state"]["commitment_id"], commitment_id)
             self.assertEqual(summary["roadmap_agent_state"]["work_status"], "active")
-            self.assertEqual(summary["roadmap_agent_state"]["evidence_status"], "complete")
-            self.assertEqual(summary["roadmap_agent_state"]["verification_status"], "complete")
+            self.assertEqual(summary["roadmap_agent_state"]["evidence_status"], "incomplete")
+            self.assertEqual(summary["roadmap_agent_state"]["verification_status"], "incomplete")
             self.assertEqual(summary["roadmap_agent_state"]["closure_status"], "not_ready")
             self.assertNotIn("close_roadmap_commitment", summary["roadmap_agent_state"]["ai_allowed_actions"])
             self.assertNotIn("draft_next_roadmap_proposal", summary["roadmap_agent_state"]["ai_allowed_actions"])
@@ -5418,7 +5520,7 @@ project status からロードマップ現在地を読めるようにする。
             with redirect_stdout(text_summary_output):
                 main(["--db", str(db), "project", "summary", "--project", "project_test"])
             text_summary_body = text_summary_output.getvalue()
-            self.assertIn("closure_ready: true", text_summary_body)
+            self.assertIn("closure_ready: false", text_summary_body)
             self.assertNotIn("roadmap_agent_state:", text_summary_body)
             self.assertNotIn("roadmap_agent_next_actions:", text_summary_body)
             self.assertNotIn("action_id: close_roadmap_commitment", text_summary_body)
@@ -5476,7 +5578,7 @@ project status からロードマップ現在地を読めるようにする。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "次へ進めるため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "次へ進めるため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -5533,17 +5635,45 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "closure を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "closure を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_close", "--title", "Implement closure", "--commitment", commitment_id])
                 main(["--db", str(db), "instruct", "--task", "task_close"])
                 main(["--db", str(db), "report", "import", "--task", "task_close", "--file", str(report)])
                 main(["--db", str(db), "verification", "run", "--task", "task_close", "--command", f'"{sys.executable}" "{script}"'])
+                store = Store(db)
+                try:
+                    high_failures = store.list_where(
+                        "failure_logs",
+                        "task_id=? AND status='open' AND severity='high'",
+                        ("task_close",),
+                    )
+                finally:
+                    store.close()
+                for failure in high_failures:
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "failure",
+                            "resolve",
+                            failure["id"],
+                            "--note",
+                            "verified and accepted",
+                            "--by",
+                            "human",
+                            "--human-confirm",
+                            "--decision-note",
+                            "test human decision",
+                        ]
+                    )
+                with patch("nilo.cli.auto_close_ready_roadmap_commitments", return_value=[]):
+                    main(["--db", str(db), "task", "complete", "--task", "task_close", "--reason", "verified", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             close_output = io.StringIO()
             with redirect_stdout(close_output):
-                main(["--db", str(db), "roadmap", "close", "--commitment", commitment_id, "--reason", "ai closed roadmap commitment", "--actor", "ai"])
+                main(["--db", str(db), "roadmap", "close", "--commitment", commitment_id, "--reason", "ai closed roadmap commitment", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
             self.assertIn(f"closed_commitment: {commitment_id}", close_output.getvalue())
-            self.assertIn("closed_by: ai", close_output.getvalue())
+            self.assertIn("closed_by: human", close_output.getvalue())
 
             roadmap_output = io.StringIO()
             with redirect_stdout(roadmap_output):
@@ -5561,7 +5691,7 @@ close 済み commitment を表示できるようにした。
             summary = json.loads(summary_output.getvalue())
             self.assertEqual(summary["roadmap_commitments"], [])
             self.assertEqual(summary["closed_roadmap_commitments"][0]["id"], commitment_id)
-            self.assertEqual(summary["closed_roadmap_commitments"][0]["closed_by"], "ai")
+            self.assertEqual(summary["closed_roadmap_commitments"][0]["closed_by"], "human")
             self.assertEqual(summary["closed_roadmap_commitments"][0]["closure_reason"], "ai closed roadmap commitment")
             self.assertTrue(summary["closed_roadmap_commitments"][0]["closed_at"])
             self.assertIsNone(summary["roadmap_agent_state"])
@@ -5598,10 +5728,10 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "closure rejection を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "closure rejection を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
 
             with self.assertRaises(SystemExit) as raised:
-                main(["--db", str(db), "roadmap", "close", "--commitment", commitment_id, "--reason", "too early"])
+                main(["--db", str(db), "roadmap", "close", "--commitment", commitment_id, "--reason", "too early", "--actor", "ai"])
             self.assertIn("not closure-ready", str(raised.exception))
 
     def test_roadmap_assess_marks_related_test_detected_for_simple_mapping(self) -> None:
@@ -5628,7 +5758,7 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -5682,11 +5812,14 @@ close 済み commitment を表示できるようにした。
             store.close()
 
             output = io.StringIO()
-            with redirect_stdout(output):
+            with redirect_stdout(output), patch(
+                "nilo.project_logic.current_git_snapshot",
+                return_value={"git_head": "abc", "git_diff_hash": "", "working_tree_dirty": False},
+            ):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("- status: evidence_present", body)
-            self.assertIn("- closure_ready: true", body)
+            self.assertIn("- status: needs_completion_audit", body)
+            self.assertIn("- closure_ready: false", body)
             self.assertIn("diff_verification: related_test_detected", body)
             self.assertIn("matched_tests: src/nilo/cli.py -> tests/test_cli.py", body)
 
@@ -5714,7 +5847,7 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -5768,10 +5901,13 @@ close 済み commitment を表示できるようにした。
             store.close()
 
             output = io.StringIO()
-            with redirect_stdout(output):
+            with redirect_stdout(output), patch(
+                "nilo.project_logic.current_git_snapshot",
+                return_value={"git_head": "abc", "git_diff_hash": "", "working_tree_dirty": False},
+            ):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("- status: needs_human_review", body)
+            self.assertIn("- status: needs_completion_audit", body)
             self.assertIn("- closure_ready: false", body)
             self.assertIn("diff_verification: needs_human_review", body)
             self.assertIn("missing_tests: src/nilo/cli.py -> tests/test_cli.py", body)
@@ -5800,7 +5936,7 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "human summary を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "human summary を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -5859,7 +5995,7 @@ close 済み commitment を表示できるようにした。
             body = output.getvalue()
             self.assertIn("# 現在の状態", body)
             self.assertIn("次に判断すること", body)
-            self.assertIn("テスト失敗ではありません", body)
+            self.assertIn("テストは通っています", body)
             self.assertIn("人間確認待ち", body)
             self.assertIn("変更ファイルとテストコマンド", body)
             self.assertIn("task_diff", body)
@@ -5888,7 +6024,7 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -5942,11 +6078,14 @@ close 済み commitment を表示できるようにした。
             store.close()
 
             output = io.StringIO()
-            with redirect_stdout(output):
+            with redirect_stdout(output), patch(
+                "nilo.project_logic.current_git_snapshot",
+                return_value={"git_head": "abc", "git_diff_hash": "", "working_tree_dirty": False},
+            ):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("- status: evidence_present", body)
-            self.assertIn("- closure_ready: true", body)
+            self.assertIn("- status: needs_completion_audit", body)
+            self.assertIn("- closure_ready: false", body)
             self.assertIn("diff_verification: related_test_detected", body)
             self.assertIn("matched_tests: src/nilo/cli.py -> tests/test_cli.py", body)
 
@@ -5974,7 +6113,7 @@ close 済み commitment を表示できるようにした。
                 revision = store.get("roadmap_revisions", revision_id)
                 commitment_id = revision["proposed_commitment_id"]
                 store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため"])
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "diff-aware を確認するため", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
                 main(
                     [
                         "--db",
@@ -6028,10 +6167,13 @@ close 済み commitment を表示できるようにした。
             store.close()
 
             output = io.StringIO()
-            with redirect_stdout(output):
+            with redirect_stdout(output), patch(
+                "nilo.project_logic.current_git_snapshot",
+                return_value={"git_head": "abc", "git_diff_hash": "", "working_tree_dirty": False},
+            ):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("- status: needs_human_review", body)
+            self.assertIn("- status: needs_completion_audit", body)
             self.assertIn("- closure_ready: false", body)
             self.assertIn("diff_verification: needs_human_review", body)
             self.assertIn("diff_reason: no simple source/test mapping for changed source files", body)
@@ -6697,6 +6839,7 @@ close 済み commitment を表示できるようにした。
                         "CLIフローを確認する",
                     ]
                 )
+                main(["--db", str(db), "check", "--task", "task_test", "python --version"])
                 main(
                     [
                         "--db",
@@ -6815,6 +6958,7 @@ close 済み commitment を表示できるようにした。
                         "CLIフローを確認する",
                     ]
                 )
+                main(["--db", str(db), "verification", "run", "--task", "task_test", "--command", "python --version"])
                 main(
                     [
                         "--db",
@@ -7521,6 +7665,7 @@ close 済み commitment を表示できるようにした。
                         "CLIフローを確認する",
                     ]
                 )
+                main(["--db", str(db), "verification", "run", "--task", "task_test", "--command", "python --version"])
                 main(
                     [
                         "--db",
@@ -7534,6 +7679,8 @@ close 済み commitment を表示できるようにした。
                         "--actor",
                         "human",
                         "--human-confirm",
+                        "--decision-note",
+                        "test human decision",
                     ]
                 )
                 output = io.StringIO()
@@ -7583,7 +7730,7 @@ close 済み commitment を表示できるようにした。
                         "human",
                     ]
                 )
-            self.assertIn("--human-confirm", str(raised.exception))
+            self.assertIn("--decision-note", str(raised.exception))
             store = Store(db)
             completion = store.latest_for_task("task_completions", "task_test")
             store.close()
@@ -7675,7 +7822,7 @@ close 済み commitment を表示できるようにした。
             completion = store.latest_for_task("task_completions", "task_test")
             store.close()
             self.assertIsNone(completion)
-            self.assertIn("current verification run", str(raised.exception))
+            self.assertIn("verification run", str(raised.exception))
 
     def test_task_complete_can_record_ai_completion_after_successful_verification(self) -> None:
         with TemporaryDirectory() as directory:
@@ -7739,6 +7886,8 @@ close 済み commitment を表示できるようにした。
                             "task_test",
                             "--title",
                             "handoff を更新する",
+                            "--type",
+                            "documentation",
                         ]
                     )
                     main(
@@ -7752,6 +7901,8 @@ close 済み commitment を表示できるようにした。
                             "--actor",
                             "human",
                             "--human-confirm",
+                        "--decision-note",
+                        "test human decision",
                         ]
                     )
             finally:
@@ -7778,6 +7929,8 @@ close 済み commitment を表示できるようにした。
                         "task_test",
                         "--title",
                         "承認後コミットを確認する",
+                        "--type",
+                        "documentation",
                     ]
                 )
                 output = io.StringIO()
@@ -7797,6 +7950,8 @@ close 済み commitment を表示できるようにした。
                             "--actor",
                             "human",
                             "--human-confirm",
+                            "--decision-note",
+                            "test human decision",
                             "--commit",
                             "--commit-message",
                             "Complete approval guidance",
@@ -8089,9 +8244,10 @@ close 済み commitment を表示できるようにした。
             self.assertIn("## Verification History", prepare_body)
             self.assertIn("python -m unittest discover tests", prepare_body)
 
+            last_seen_event_id = claim_review_for_import(db, request_id)
             import_output = io.StringIO()
             with redirect_stdout(import_output):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
             self.assertIn("verdict: changes_requested", import_output.getvalue())
 
             review_status = io.StringIO()
@@ -8648,8 +8804,24 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "参考レビュー"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "review",
+                        "import",
+                        "--task",
+                        "task_test",
+                        "--review",
+                        request_id,
+                        "--file",
+                        str(review),
+                        "--last-seen-event-id",
+                        last_seen_event_id,
+                    ]
+                )
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -8888,8 +9060,9 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "claude-code", "--reason", "review me"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
 
             with self.assertRaises(SystemExit) as raised:
                 with redirect_stdout(io.StringIO()):
@@ -8919,8 +9092,9 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "claude-code", "--reason", "review me"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
 
             wait_output = io.StringIO()
             with redirect_stdout(wait_output):
@@ -9833,8 +10007,9 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "確認"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
 
             with self.assertRaises(SystemExit) as raised:
                 with redirect_stdout(io.StringIO()):
@@ -9906,12 +10081,16 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "確認"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
 
             store = Store(db)
-            finding = store.latest_for_task("review_findings", "task_test")
-            store.close()
+            try:
+                finding = store.latest_for_task("review_findings", "task_test")
+                finding_update_seen_event_id = store.latest_task_status_event("task_test")["event_id"]
+            finally:
+                store.close()
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -9984,12 +10163,16 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "確認"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
 
             store = Store(db)
-            finding = store.latest_for_task("review_findings", "task_test")
-            store.close()
+            try:
+                finding = store.latest_for_task("review_findings", "task_test")
+                finding_update_seen_event_id = store.latest_task_status_event("task_test")["event_id"]
+            finally:
+                store.close()
 
             update_output = io.StringIO()
             with redirect_stdout(update_output):
@@ -10007,7 +10190,9 @@ close 済み commitment を表示できるようにした。
                         "--reason",
                         "テストを追加して修正済み",
                         "--actor",
-                        "codex",
+                        "ai",
+                        "--last-seen-event-id",
+                        finding_update_seen_event_id,
                     ]
                 )
             self.assertIn("previous_status: unresolved", update_output.getvalue())
@@ -10023,16 +10208,18 @@ close 済み commitment を表示できるようにした。
             self.assertIn("- addressed: 1", status_body)
             self.assertIn("[addressed] high blocking", status_body)
             self.assertIn("update_history:", status_body)
-            self.assertIn("codex: unresolved -> addressed; テストを追加して修正済み", status_body)
+            self.assertIn("ai: unresolved -> addressed; テストを追加して修正済み", status_body)
 
             task_status_output = io.StringIO()
             with redirect_stdout(task_status_output):
                 main(["--db", str(db), "task", "show", "--task", "task_test", "--ai"])
             self.assertNotIn("[review_changes_requested]", task_status_output.getvalue())
 
-            with redirect_stdout(io.StringIO()), patch(
-                "nilo.task_logic.current_git_snapshot",
-                return_value={"git_head": "abc123", "git_diff_hash": "", "working_tree_dirty": False},
+            current_snapshot = {"git_head": "abc123", "git_diff_hash": "", "working_tree_dirty": False}
+            with (
+                redirect_stdout(io.StringIO()),
+                patch("nilo.transitions.current_git_snapshot", return_value=current_snapshot),
+                patch("nilo.state_audit.current_git_snapshot", return_value=current_snapshot),
             ):
                 main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "finding 対応済み", "--actor", "ai"])
 
@@ -10045,7 +10232,7 @@ close 済み commitment を表示できるようにした。
             self.assertEqual(updates[0]["previous_status"], "unresolved")
             self.assertEqual(updates[0]["new_status"], "addressed")
             self.assertEqual(updates[0]["reason"], "テストを追加して修正済み")
-            self.assertEqual(updates[0]["actor"], "codex")
+            self.assertEqual(updates[0]["actor"], "ai")
             self.assertIsNotNone(completion)
 
     def test_review_status_shows_summary_and_empty_update_history(self) -> None:
@@ -10079,8 +10266,9 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "summary"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -10121,11 +10309,15 @@ close 済み commitment を表示できるようにした。
                 with redirect_stdout(request_output):
                     main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "json"])
             request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review)])
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
             store = Store(db)
-            finding = store.latest_for_task("review_findings", "task_test")
-            store.close()
+            try:
+                finding = store.latest_for_task("review_findings", "task_test")
+                finding_update_seen_event_id = store.latest_task_status_event("task_test")["event_id"]
+            finally:
+                store.close()
             with redirect_stdout(io.StringIO()):
                 main(
                     [
@@ -10141,7 +10333,9 @@ close 済み commitment を表示できるようにした。
                         "--reason",
                         "JSON確認用に更新",
                         "--actor",
-                        "codex",
+                        "ai",
+                        "--last-seen-event-id",
+                        finding_update_seen_event_id,
                     ]
                 )
 
@@ -10680,7 +10874,23 @@ close 済み commitment を表示できるようにした。
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "understanding", "prepare", "--task", "task_test"])
                 main(["--db", str(db), "understanding", "import", "--task", "task_test", "--file", str(understanding)])
-                main(["--db", str(db), "understanding", "approve", "--task", "task_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "understanding",
+                        "approve",
+                        "--task",
+                        "task_test",
+                        "--actor",
+                        "human",
+                        "--reason",
+                        "人間が理解内容を確認した",
+                        "--human-confirm",
+                        "--decision-note",
+                        "test human decision",
+                    ]
+                )
                 status_output = io.StringIO()
                 with redirect_stdout(status_output):
                     main(["--db", str(db), "task", "status", "--task", "task_test"])

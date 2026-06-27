@@ -15,6 +15,13 @@ from ..roadmap_render import (
 )
 from ..store import Store
 from ..timeutil import now_iso
+from ..transitions import (
+    TransitionError,
+    accept_roadmap_revision,
+    adopt_roadmap_proposal,
+    close_roadmap_commitment,
+    reject_roadmap_revision,
+)
 
 
 def is_roadmap_discussion_context(markdown: str) -> bool:
@@ -171,42 +178,24 @@ def cmd_roadmap_adopt(args: argparse.Namespace) -> None:
         if duplicates:
             details = ", ".join(f"{item['id']} [{item['status']}] {item['title']}" for item in duplicates)
             raise SystemExit(f"duplicate roadmap commitment detected before adopt: {details}")
-        store.insert(
-            "roadmap_commitments",
-            {
-                "id": commitment_id,
-                "project_id": project["id"],
-                "title": proposal["title"],
-                "intent": proposal["intent"],
-                "success_criteria": proposal["success_criteria"],
-                "non_goals": proposal["non_goals"],
-                "autonomy_scope": proposal["autonomy_scope"],
-                "review_gates": proposal["review_gates"],
-                "evidence_policy": proposal["evidence_policy"],
-                "status": "accepted",
-                "accepted_by": args.actor,
-                "accepted_at": created_at,
-                "created_at": created_at,
-            },
-        )
-        store.insert(
-            "roadmap_revisions",
-            {
-                "id": revision_id,
-                "project_id": project["id"],
-                "proposed_commitment_id": commitment_id,
-                "status": "accepted",
-                "body_md": markdown,
-                "source_path": source_path,
-                "reason": args.reason,
-                "decided_by": args.actor,
-                "accepted_at": created_at,
-                "created_at": created_at,
-            },
-        )
+        try:
+            result = adopt_roadmap_proposal(
+                store,
+                project_id=project["id"],
+                proposal=proposal,
+                body_md=markdown,
+                source_path=source_path,
+                actor=args.actor,
+                reason=args.reason,
+                decision_note=args.decision_note,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         output = render_and_write_human_roadmap(store, project, args.roadmap_file)
-        print(f"accepted_revision: {revision_id}")
-        print(f"accepted_commitment: {commitment_id}")
+        print(f"accepted_revision: {result.created_ids['roadmap_revision']}")
+        print(f"accepted_commitment: {result.created_ids['roadmap_commitment']}")
         print(f"accepted_by: {args.actor}")
         print(f"written: {output}")
     finally:
@@ -230,17 +219,18 @@ def cmd_roadmap_accept(args: argparse.Namespace) -> None:
         if duplicates:
             details = ", ".join(f"{item['id']} [{item['status']}] {item['title']}" for item in duplicates)
             raise SystemExit(f"duplicate roadmap commitment detected before accept: {details}")
-        accepted_at = now_iso()
-        store.update(
-            "roadmap_revisions",
-            revision["id"],
-            {"status": "accepted", "reason": args.reason, "decided_by": args.actor, "accepted_at": accepted_at},
-        )
-        store.update(
-            "roadmap_commitments",
-            commitment["id"],
-            {"status": "accepted", "accepted_by": args.actor, "accepted_at": accepted_at},
-        )
+        try:
+            accept_roadmap_revision(
+                store,
+                revision["id"],
+                actor=args.actor,
+                reason=args.reason,
+                decision_note=args.decision_note,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"accepted_revision: {revision['id']}")
         print(f"accepted_commitment: {commitment['id']}")
         print(f"accepted_by: {args.actor}")
@@ -259,17 +249,18 @@ def cmd_roadmap_reject(args: argparse.Namespace) -> None:
         commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
         if not commitment:
             raise SystemExit(f"roadmap commitment not found: {revision['proposed_commitment_id']}")
-        rejected_at = now_iso()
-        store.update(
-            "roadmap_revisions",
-            revision["id"],
-            {"status": "rejected", "reason": args.reason, "decided_by": args.actor, "accepted_at": rejected_at},
-        )
-        store.update(
-            "roadmap_commitments",
-            commitment["id"],
-            {"status": "rejected", "accepted_by": args.actor, "accepted_at": rejected_at},
-        )
+        try:
+            reject_roadmap_revision(
+                store,
+                revision["id"],
+                actor=args.actor,
+                reason=args.reason,
+                decision_note=args.decision_note,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"rejected_revision: {revision['id']}")
         print(f"rejected_commitment: {commitment['id']}")
         print(f"rejected_by: {args.actor}")
@@ -292,20 +283,23 @@ def cmd_roadmap_close(args: argparse.Namespace) -> None:
         if not assessment["closure_ready"] and not args.force:
             reason = assessment["unresolved_reason"] or "commitment is not closure-ready"
             raise SystemExit(f"roadmap commitment is not closure-ready: {reason}")
-        closed_at = now_iso()
-        store.update(
-            "roadmap_commitments",
-            commitment["id"],
-            {
-                "status": "closed",
-                "closed_by": args.actor,
-                "closed_at": closed_at,
-                "closure_reason": args.reason,
-            },
-        )
+        try:
+            result = close_roadmap_commitment(
+                store,
+                commitment["id"],
+                actor=args.actor,
+                reason=args.reason,
+                decision_note=args.decision_note,
+                closure_ready=assessment["closure_ready"],
+                force=args.force,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive" if args.force or args.actor == "human" else "",
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"closed_commitment: {commitment['id']}")
         print(f"closed_by: {args.actor}")
-        print(f"closed_at: {closed_at}")
+        print(f"status: {result.new_status}")
     finally:
         store.close()
 

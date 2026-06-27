@@ -35,7 +35,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
     if evidence == "missing" and latest_report:
         evidence = "present"
     unresolved = unresolved_review_findings(store, task_id)
-    status = projected_task_status(store, task)
+    status = projected_task_status(store, task, current_snapshot=snapshot)
     latest_event = store.latest_task_status_event(task_id)
     latest_event_id = latest_event["event_id"] if latest_event else ""
     unexecuted = p.unexecuted_verifications_for_task(status, verification_run)

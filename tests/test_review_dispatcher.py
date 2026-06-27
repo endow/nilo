@@ -14,7 +14,7 @@ from unittest.mock import patch
 from nilo.mcp_server import call_tool
 from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
 from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_REVIEW_PROMPT
-from nilo.review_dispatcher import dispatch_review, find_executable, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
+from nilo.review_dispatcher import dispatch_review, find_executable, import_dispatch_review_result, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
 from nilo.review_dispatcher import doctor_reviewer_config
 from nilo.reviewer_registry import reviewer_is_registered_available
 from nilo.store import Store
@@ -129,6 +129,56 @@ approved
 
 
 class ReviewDispatcherTests(unittest.TestCase):
+    def test_dispatch_review_import_rejects_stale_task_event_seen_before_reviewer_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                created_at = now_iso()
+                store.insert(
+                    "review_requests",
+                    {
+                        "id": "review_test",
+                        "task_id": "task_test",
+                        "requester": "codex",
+                        "reviewer": "claude-code",
+                        "status": "in_progress",
+                        "reason": "review",
+                        "based_on_event_id": "",
+                        "based_on_snapshot": {"git_head": "head", "git_diff_hash": "diff", "working_tree_dirty": True},
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                    },
+                )
+                seen_event = store.latest_task_status_event("task_test")
+                store.insert(
+                    "agent_reports",
+                    {
+                        "id": "report_after_reviewer_started",
+                        "task_id": "task_test",
+                        "agent": "codex",
+                        "claimed_status": "agent_reported",
+                        "changed_files": [],
+                        "body_md": "new state",
+                        "created_at": "2099-01-01T00:00:00+00:00",
+                    },
+                )
+
+                with self.assertRaises(DispatchError) as raised:
+                    import_dispatch_review_result(
+                        store,
+                        store.get("review_requests", "review_test"),
+                        "claude-code",
+                        review_result(),
+                        last_seen_event_id=seen_event["event_id"],
+                        cwd=Path(directory),
+                    )
+            finally:
+                store.close()
+
+        self.assertIn("stale task state", raised.exception.reason)
+
     def test_mcp_registers_and_lists_local_reviewer_abstraction(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"

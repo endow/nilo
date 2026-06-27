@@ -17,10 +17,18 @@ def outcome_status(decision: str) -> str:
     }.get(decision, "reviewed_by_user")
 
 
-def projected_task_status(store, task: dict) -> str:
+def projected_task_status(store, task: dict, *, current_snapshot: dict | None = None) -> str:
     latest = store.latest_task_status_event(task["id"])
     if not latest:
         return task["status"]
+    if latest["source"] == "completion":
+        if completion_structural_issues(store, task):
+            return "completion_needs_review"
+        if current_snapshot is not None:
+            from .state_audit import task_completion_invalid
+
+            if task_completion_invalid(store, task["id"], current_snapshot=current_snapshot):
+                return "completion_needs_review"
     if latest["source"] == "review_finding_update" and not unresolved_review_findings(store, task["id"]):
         latest_review = store.latest_for_task("review_results", task["id"])
         if latest_review and latest_review["verdict"] == "approved":
@@ -44,6 +52,28 @@ def active_task_completion(store, task_id: str) -> dict | None:
         (task_id,),
     )
     return completions[0] if completions else None
+
+
+def completion_structural_issues(store, task: dict) -> list[str]:
+    completion = active_task_completion(store, task["id"])
+    if not completion:
+        return []
+    issues: list[str] = []
+    actor = completion.get("actor") or completion.get("completed_by") or ""
+    if actor == "human" and not (completion.get("human_decision_note") or "").strip():
+        issues.append("human_decision_note_missing")
+    if actor == "ai" and unresolved_review_findings(store, task["id"]):
+        issues.append("ai_unresolved_review_findings")
+    if task.get("task_type") == "implementation" and not completion.get("accepted_verification_run_ids"):
+        issues.append("missing_accepted_verification")
+    high_failures = store.list_where(
+        "failure_logs",
+        "task_id=? AND status='open' AND severity='high'",
+        (task["id"],),
+    )
+    if high_failures:
+        issues.append("open_high_failure")
+    return issues
 
 
 def human_completion_note_is_suspicious(completion: dict) -> bool:

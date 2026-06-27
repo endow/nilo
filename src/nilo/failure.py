@@ -139,27 +139,6 @@ def summarize_failure_logs(
     }
 
 
-def update_failure_status(store: Store, failure_id: str, status: str, *, note: str = "", by: str = "human") -> dict[str, Any]:
-    if status not in FAILURE_STATUSES:
-        raise ValueError(f"unknown failure status: {status}")
-    failure = store.get("failure_logs", failure_id)
-    if not failure:
-        raise ValueError(f"failure not found: {failure_id}")
-    store.update(
-        "failure_logs",
-        failure_id,
-        {
-            "status": status,
-            "resolved_at": now_iso(),
-            "resolved_by": by,
-            "resolution_note": note or "",
-        },
-    )
-    updated = store.get("failure_logs", failure_id)
-    assert updated is not None
-    return updated
-
-
 def compact_failure_message(message: str, limit: int = 200) -> str:
     first_line = (message or "").splitlines()[0] if message else ""
     if len(first_line) <= limit:

@@ -14,6 +14,7 @@ from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, 
 from ..store import Store
 from ..task_logic import active_task_completion, completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
+from ..transitions import TransitionError, complete_task, invalidate_task_completion
 
 
 def cmd_task_create(args: argparse.Namespace) -> str:
@@ -287,41 +288,30 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        if not getattr(args, "actor", None):
-            raise SystemExit("task completion requires --actor ai or --actor human")
-        if args.actor == "human" and not getattr(args, "human_confirm", False):
-            raise SystemExit("human completion requires --human-confirm after an explicit human decision")
-        if args.actor == "ai":
-            require_ai_completion_evidence(store, args.task)
         boundary = resolve_project_boundary(db_path=args.db)
         try:
             require_write_fence(boundary)
         except ProjectBoundaryError as exc:
             record_nilo_issue_for_task(store, task["project_id"], task["id"], "task complete", exc, boundary)
             raise SystemExit(str(exc)) from exc
-        now = now_iso()
-        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
-        latest_verification = store.latest_for_task("verification_runs", args.task)
-        latest_review = store.latest_for_task("review_results", args.task)
-        row = {
-            "id": make_id("completion"),
-            "task_id": args.task,
-            "actor": args.actor,
-            "completed_by": args.actor,
-            "completed_snapshot": snapshot,
-            "completion_note": args.reason,
-            "accepted_verification_run_ids": [latest_verification["id"]] if latest_verification else [],
-            "accepted_review_result_ids": [latest_review["id"]] if latest_review else [],
-            "human_decision_note": args.reason if args.actor == "human" else "",
-            "completed_with_reservations": False,
-            "completed_at": now,
-            "reason": args.reason,
-            "created_at": now,
-        }
-        store.insert("task_completions", row)
+        try:
+            if args.actor == "human" and not (getattr(args, "decision_note", "") or "").strip():
+                raise TransitionError("decision_note_required", "human completion requires --decision-note with the human acceptance note")
+            result = complete_task(
+                store,
+                args.task,
+                actor=args.actor,
+                reason=args.reason,
+                human_confirm=getattr(args, "human_confirm", False),
+                decision_source="human_interactive" if args.actor == "human" else "",
+                decision_note=getattr(args, "decision_note", "") or "",
+                cwd=Path.cwd(),
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"status: {completion_status(args.actor)}")
         print(f"completed_by: {args.actor}")
-        print(f"task_completion: {row['id']}")
+        print(f"task_completion: {result.created_ids['task_completion']}")
         closed_commitments = c.auto_close_ready_roadmap_commitments(
             store,
             task["project_id"],
@@ -372,15 +362,10 @@ def cmd_task_completion_invalidate(args: argparse.Namespace) -> None:
         except ProjectBoundaryError as exc:
             record_nilo_issue_for_task(store, task["project_id"], task["id"], "task completion invalidate", exc, boundary)
             raise SystemExit(str(exc)) from exc
-        store.update(
-            "task_completions",
-            args.completion,
-            {
-                "invalidated_at": now_iso(),
-                "invalidated_by": args.actor,
-                "invalidation_reason": args.reason,
-            },
-        )
+        try:
+            invalidate_task_completion(store, args.completion, actor=args.actor, reason=args.reason)
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print(f"status: invalidated")
         print(f"task_completion: {args.completion}")
     finally:
