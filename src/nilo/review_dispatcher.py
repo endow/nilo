@@ -177,8 +177,7 @@ def resolve_command_parts(command: list[str], env: dict[str, str] | None = None)
                 {"type": "fix_reviewer_command", "command": command[0]},
                 stderr=message,
             )
-        shim_command = subprocess.list2cmdline([resolved, *command[1:]])
-        normalized = [shell, "/d", "/s", "/c", shim_command]
+        normalized = [shell, "/d", "/c", "call", resolved, *command[1:]]
     if sys.platform == "win32" and resolved.lower().endswith(".ps1"):
         powershell = find_executable("powershell.exe", env) or find_executable("pwsh.exe", env)
         if not powershell:

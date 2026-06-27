@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import unittest
@@ -556,9 +557,35 @@ class ReviewDispatcherTests(unittest.TestCase):
                 )
 
         self.assertEqual(resolved.executable, str(shim))
-        self.assertEqual(resolved.command[:4], [str(cmd_exe), "/d", "/s", "/c"])
-        self.assertIn(str(shim), resolved.command[4])
-        self.assertIn("prompt with spaces", resolved.command[4])
+        self.assertEqual(resolved.command[:5], [str(cmd_exe), "/d", "/c", "call", str(shim)])
+        self.assertIn("prompt with spaces", resolved.command)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows .cmd argument forwarding test")
+    def test_windows_cmd_shim_forwards_quoted_prompt_argument(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            capture = root / "capture.py"
+            captured = root / "captured.json"
+            prompt = 'Read the prompt at C:\\repo\\.nilo\\reviews\\review_prompt.md and keep "quotes" intact.'
+            capture.write_text(
+                "import json, sys\n"
+                f"open({str(captured)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            shim = bin_dir / "claude.cmd"
+            shim.write_text(f"@echo off\r\n\"{sys.executable}\" \"{capture}\" %*\r\n", encoding="utf-8")
+            resolved = resolve_command_parts(
+                ["claude", "-p", "--output-format", "text", prompt],
+                {"PATH": str(bin_dir), "ComSpec": os.environ.get("ComSpec", "")},
+            )
+
+            process = subprocess.run(resolved.command, cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            captured_args = json.loads(captured.read_text(encoding="utf-8"))
+
+        self.assertEqual(captured_args, ["-p", "--output-format", "text", prompt])
 
     def test_run_reviewer_process_converts_oserror_to_dispatch_error(self) -> None:
         config = ReviewerConfig(

@@ -384,11 +384,12 @@ TOOLS = [
     },
     {
         "name": "dispatch_review",
-        "description": "High-level: run AI review through request/start/import/confirm.",
+        "description": "High-level MCP AI review; CLI fallback requires opt-in.",
         "metadata": {
             "api_level": "high_level",
             "recommended_for": "normal AI-to-AI review",
-            "workflow": "request, start, claim, run, import, confirm",
+            "workflow": "mcp request, start, claim, run, import, confirm",
+            "cli_fallback": "disabled unless allow_cli_fallback=true",
         },
         "inputSchema": json_schema(
             {
@@ -1974,7 +1975,7 @@ def mcp_dispatch_review(store: Store, arguments: dict) -> dict:
     if not isinstance(allow_cli_fallback, bool):
         raise McpToolError("argument must be a boolean: allow_cli_fallback")
     config_path = optional_string(arguments, "config_path")
-    if not allow_cli_fallback and not config_path and not auto_configure:
+    if not allow_cli_fallback:
         latest_event = store.latest_task_status_event(task_id)
         requested = request_task_review(
             store,

@@ -884,7 +884,8 @@ class McpServerTests(unittest.TestCase):
             {
                 "api_level": "high_level",
                 "recommended_for": "normal AI-to-AI review",
-                "workflow": "request, start, claim, run, import, confirm",
+                "workflow": "mcp request, start, claim, run, import, confirm",
+                "cli_fallback": "disabled unless allow_cli_fallback=true",
             },
         )
 
@@ -2621,6 +2622,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -2660,6 +2662,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "codex",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -2695,6 +2698,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": False,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -2752,6 +2756,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -2806,6 +2811,46 @@ MCP でも承認待ちの計画を人間向けに返す。
         self.assertFalse(config_exists)
         self.assertIn("register_reviewer", result["next_action"])
         self.assertIn("claim_next_review", result["claude_code_prompt"])
+
+    def test_dispatch_review_auto_configure_does_not_enable_cli_fallback_without_opt_in(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            write_fake_claude_cli(bin_dir, root)
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                os.environ["PATH"] = str(bin_dir) + os.pathsep + previous_path
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--title", "Auto config dispatch task"])
+                task_id = call_tool("get_agent_work_context", {"project_id": "project_test"}, db)["active_tasks"][0]["id"]
+
+                result = call_tool(
+                    "dispatch_review",
+                    {
+                        "task_id": task_id,
+                        "actor": "codex",
+                        "reviewer": "claude-code",
+                        "project_id": "project_test",
+                        "auto_start": True,
+                        "auto_configure": True,
+                    },
+                    db,
+                )
+                config_exists = (root / ".nilo" / "reviewers.toml").exists()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+        self.assertEqual(result["operation"], "dispatch_review")
+        self.assertEqual(result["mode"], "mcp_reviewer_workflow")
+        self.assertEqual(result["status"], "reviewer_unavailable")
+        self.assertFalse(config_exists)
+        self.assertIn("register_reviewer", result["next_action"])
 
     def test_dispatch_review_auto_configures_claude_code_only_when_requested(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2964,6 +3009,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -3022,6 +3068,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -3081,6 +3128,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
@@ -3121,6 +3169,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(root / "missing-reviewers.toml"),
                     },
                     db,
@@ -3172,6 +3221,7 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "claude-code",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "allow_cli_fallback": True,
                         "config_path": str(config),
                     },
                     db,
