@@ -802,11 +802,38 @@ completion_contract:
 
                 complete_output = io.StringIO()
                 with redirect_stdout(complete_output):
-                    main(["--db", str(db), "task", "complete", "--task", first_task_id, "--reason", "accepted despite warning"])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "complete",
+                            "--task",
+                            first_task_id,
+                            "--reason",
+                            "accepted despite warning",
+                            "--actor",
+                            "human",
+                            "--human-confirm",
+                        ]
+                    )
 
                 done_output = io.StringIO()
                 with redirect_stdout(done_output):
-                    main(["--db", str(db), "done", "--task", second_task_id, "--reason", "daily accepted despite warning"])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "done",
+                            "--task",
+                            second_task_id,
+                            "--reason",
+                            "daily accepted despite warning",
+                            "--actor",
+                            "human",
+                            "--human-confirm",
+                        ]
+                    )
             finally:
                 os.chdir(previous_cwd)
 
@@ -1279,7 +1306,7 @@ variables:
 
                 done_output = io.StringIO()
                 with redirect_stdout(done_output):
-                    main(["--db", str(db), "done", "--reason", "facade smoke accepted"])
+                    main(["--db", str(db), "done", "--reason", "facade smoke accepted", "--actor", "human", "--human-confirm"])
                 self.assertIn("status: completed_by_user", done_output.getvalue())
 
                 with redirect_stdout(io.StringIO()):
@@ -1336,7 +1363,7 @@ variables:
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_active", "--title", "Active task"])
                 main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task"])
-                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human"])
+                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human", "--human-confirm"])
                 main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_open", "Open todo"])
                 main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_ready", "Ready todo"])
                 main(["--db", str(db), "todo", "triage", "--item", "todo_ready", "--status", "ready", "--reason", "ready"])
@@ -1395,9 +1422,143 @@ variables:
 
             data = json.loads(output.getvalue())
             self.assertEqual(data["project_id"], "project_test")
-            self.assertEqual(data["counts"], {"tasks": 0, "todos": 0, "total": 0})
+            self.assertEqual(data["counts"]["tasks"], 0)
+            self.assertEqual(data["counts"]["todos"], 0)
+            self.assertEqual(data["counts"]["total"], 0)
             self.assertEqual(data["tasks"], [])
             self.assertEqual(data["todos"], [])
+
+    def test_queue_warns_when_task_todo_empty_but_project_state_remains(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+            store = Store(db)
+            try:
+                store.insert(
+                    "failure_logs",
+                    {
+                        "id": "failure_open",
+                        "project_id": "project_test",
+                        "task_id": "task_missing",
+                        "report_id": "",
+                        "category": "evidence_missing",
+                        "message": "missing changed_files",
+                        "severity": "high",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                    },
+                )
+            finally:
+                store.close()
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "queue", "--project", "project_test"])
+            body = output.getvalue()
+            self.assertIn("queue: total=0 tasks=0 todos=0", body)
+            self.assertIn("task/todo queue is empty, but unresolved project state remains", body)
+            self.assertIn("failures=1", body)
+
+    def test_queue_audit_and_doctor_detect_invalid_completed_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Suspicious completion"])
+            store = Store(db)
+            try:
+                store.insert(
+                    "task_completions",
+                    {
+                        "id": "completion_bad",
+                        "task_id": "task_done",
+                        "actor": "human",
+                        "completed_by": "human",
+                        "completed_snapshot": {},
+                        "completion_note": "daily workflow accepted",
+                        "accepted_verification_run_ids": [],
+                        "accepted_review_result_ids": [],
+                        "human_decision_note": "",
+                        "completed_with_reservations": 0,
+                        "completed_at": "2099-01-01T00:00:00+00:00",
+                        "reason": "daily workflow accepted",
+                        "created_at": "2099-01-01T00:00:00+00:00",
+                    },
+                )
+            finally:
+                store.close()
+
+            queue_output = io.StringIO()
+            with redirect_stdout(queue_output):
+                main(["--db", str(db), "queue", "--project", "project_test"])
+            self.assertNotIn("completion_audit:", queue_output.getvalue())
+
+            audit_output = io.StringIO()
+            with redirect_stdout(audit_output):
+                main(["--db", str(db), "queue", "--project", "project_test", "--audit"])
+            audit_body = audit_output.getvalue()
+            self.assertIn("task_done [invalid_completion]", audit_body)
+            self.assertIn("suspicious_human_completion", audit_body)
+
+            doctor_output = io.StringIO()
+            with redirect_stdout(doctor_output):
+                main(["--db", str(db), "doctor", "completions", "--project", "project_test"])
+            self.assertIn("completion_audit: 1 issue(s)", doctor_output.getvalue())
+            self.assertIn("completion_bad", doctor_output.getvalue())
+
+    def test_task_completion_invalidate_reopens_projected_status_without_deleting_audit_record(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task"])
+            store = Store(db)
+            try:
+                store.insert(
+                    "task_completions",
+                    {
+                        "id": "completion_bad",
+                        "task_id": "task_done",
+                        "actor": "human",
+                        "completed_by": "human",
+                        "completed_snapshot": {},
+                        "completion_note": "daily workflow accepted",
+                        "accepted_verification_run_ids": [],
+                        "accepted_review_result_ids": [],
+                        "human_decision_note": "",
+                        "completed_with_reservations": 0,
+                        "completed_at": "2099-01-01T00:00:00+00:00",
+                        "reason": "daily workflow accepted",
+                        "created_at": "2099-01-01T00:00:00+00:00",
+                    },
+                )
+            finally:
+                store.close()
+
+            with redirect_stdout(io.StringIO()):
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "completion",
+                        "invalidate",
+                        "--completion",
+                        "completion_bad",
+                        "--reason",
+                        "not actually approved by a human",
+                    ]
+                )
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "task", "status", "--task", "task_done"])
+            self.assertIn("状態: 計画済み", status_output.getvalue())
+            store = Store(db)
+            try:
+                completion = store.get("task_completions", "completion_bad")
+            finally:
+                store.close()
+            self.assertTrue(completion["invalidated_at"])
+            self.assertEqual(completion["invalidation_reason"], "not actually approved by a human")
 
     def test_ai_context_surfaces_are_compact_and_json_serializable(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3089,7 +3250,7 @@ variables:
             self.assertNotIn("大きな作業の可能性", after_report_body)
 
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "task", "complete", "--task", "task_large", "--reason", "human accepted", "--actor", "human"])
+                main(["--db", str(db), "task", "complete", "--task", "task_large", "--reason", "human accepted", "--actor", "human", "--human-confirm"])
             store = Store(db)
             try:
                 self.assertIsNotNone(store.latest_for_task("task_completions", "task_large"))
@@ -4051,6 +4212,7 @@ project status からロードマップ現在地を読めるようにする。
                         "verified",
                         "--actor",
                         "human",
+                        "--human-confirm",
                     ]
                 )
             self.assertIn("closed_roadmap_commitments:", complete_output.getvalue())
@@ -4150,7 +4312,7 @@ completed criterion を満たした。
                         f'"{sys.executable}" "{script}"',
                     ]
                 )
-                main(["--db", str(db), "task", "complete", "--task", "task_complete", "--reason", "human accepted evidence"])
+                main(["--db", str(db), "task", "complete", "--task", "task_complete", "--reason", "human accepted evidence", "--actor", "human", "--human-confirm"])
                 second = io.StringIO()
                 with redirect_stdout(second):
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(incomplete_proposal)])
@@ -6093,7 +6255,7 @@ close 済み commitment を表示できるようにした。
             self.assertIn("task_unverified: verification run not recorded", body)
             self.assertIn("## 次のステップ", body)
             self.assertIn("task_verified: 差分、変更ファイル一覧、検証結果、未解決事項を確認する", body)
-            self.assertIn("task_verified: 承認する場合は task complete で完了を記録し、コミットも任せる場合だけ --commit を付ける", body)
+            self.assertIn("task_verified: AIが完了記録する場合は task complete --actor ai で記録し、コミットも任せる場合だけ --commit を付ける", body)
 
             store = Store(db)
             self.assertIsNone(store.latest_for_task("task_completions", "task_verified"))
@@ -6545,6 +6707,9 @@ close 済み commitment を表示できるようにした。
                         "task_test",
                         "--reason",
                         "証跡は揃っているが文言は後で見直す",
+                        "--human-confirm",
+                        "--decision-note",
+                        "人間が証跡を確認して留保付きで受け入れた",
                         "--concern",
                         "エラーメッセージの統一感が弱い",
                     ]
@@ -6564,6 +6729,24 @@ close 済み commitment を表示できるようにした。
             self.assertTrue(completion["completed_snapshot"]["git_diff_hash"])
             self.assertIn("状態: 人間が完了", output.getvalue())
             self.assertIn("留保付き完了: はい", output.getvalue())
+
+    def test_outcome_accept_requires_human_confirm_and_decision_note(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "CLIフローを確認する"])
+
+            with self.assertRaises(SystemExit) as raised:
+                main(["--db", str(db), "outcome", "accept", "--task", "task_test", "--reason", "accepted", "--decision-note", "human note"])
+            self.assertIn("--human-confirm", str(raised.exception))
+            store = Store(db)
+            try:
+                completion = store.latest_for_task("task_completions", "task_test")
+            finally:
+                store.close()
+            self.assertIsNone(completion)
 
     def test_outcome_reject_records_failure_log_without_status_event(self) -> None:
         with TemporaryDirectory() as directory:
@@ -7348,6 +7531,9 @@ close 済み commitment を表示できるようにした。
                         "task_test",
                         "--reason",
                         "人間が成果物を確認して完了と判断した",
+                        "--actor",
+                        "human",
+                        "--human-confirm",
                     ]
                 )
                 output = io.StringIO()
@@ -7360,6 +7546,48 @@ close 済み commitment を表示できるようにした。
             self.assertEqual(completion["actor"], "human")
             self.assertEqual(completion["reason"], "人間が成果物を確認して完了と判断した")
             self.assertIn("状態: 人間が完了", output.getvalue())
+
+    def test_task_complete_rejects_missing_actor_and_unconfirmed_human_completion(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "完了ガードを確認する",
+                    ]
+                )
+            with self.assertRaises(SystemExit):
+                main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "accepted"])
+            with self.assertRaises(SystemExit) as raised:
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "complete",
+                        "--task",
+                        "task_test",
+                        "--reason",
+                        "accepted",
+                        "--actor",
+                        "human",
+                    ]
+                )
+            self.assertIn("--human-confirm", str(raised.exception))
+            store = Store(db)
+            completion = store.latest_for_task("task_completions", "task_test")
+            store.close()
+            self.assertIsNone(completion)
 
     def test_task_complete_rejects_ai_completion_without_evidence(self) -> None:
         with TemporaryDirectory() as directory:
@@ -7521,6 +7749,9 @@ close 済み commitment を表示できるようにした。
                             "task_test",
                             "--reason",
                             "人間が成果物を確認して完了と判断した",
+                            "--actor",
+                            "human",
+                            "--human-confirm",
                         ]
                     )
             finally:
@@ -7563,6 +7794,9 @@ close 済み commitment を表示できるようにした。
                             "task_test",
                             "--reason",
                             "人間が成果物を確認して完了と判断した",
+                            "--actor",
+                            "human",
+                            "--human-confirm",
                             "--commit",
                             "--commit-message",
                             "Complete approval guidance",

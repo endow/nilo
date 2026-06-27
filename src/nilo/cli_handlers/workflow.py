@@ -33,7 +33,7 @@ from ..project_boundary import (
 )
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status
 from ..store import Store
-from ..task_logic import outcome_status, unresolved_review_findings
+from ..task_logic import active_task_completion, completion_audit_issues, outcome_status, unresolved_review_findings
 from ..timeutil import now_iso
 from ..update_check import check_for_update, is_disabled, update_message
 from ..upgrade import run_upgrade
@@ -290,6 +290,51 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
         print(f"- failure_summary_chars: {failure_summary_chars}")
         print(f"- stale_evidence_count: {stale_evidence_count}")
         print(f"- unresolved_review_count: {unresolved_review_count}")
+    finally:
+        store.close()
+
+
+def cmd_doctor_completions(args: argparse.Namespace) -> None:
+    import json
+
+    project_id = args.project or Path.cwd().name
+    store = Store(args.db)
+    try:
+        project = store.get("projects", project_id)
+        if not project:
+            raise SystemExit(f"project not found: {project_id}")
+        findings = []
+        snapshot = current_git_snapshot(Path.cwd())
+        for task in store.list_where("tasks", "project_id=?", (project_id,)):
+            completion = active_task_completion(store, task["id"])
+            if not completion:
+                continue
+            issues = completion_audit_issues(store, task, current_snapshot=snapshot)
+            if not issues:
+                continue
+            findings.append(
+                {
+                    "task_id": task["id"],
+                    "task_title": task["title"],
+                    "task_type": task["task_type"],
+                    "completion_id": completion["id"],
+                    "actor": completion["actor"],
+                    "completed_at": completion.get("completed_at", ""),
+                    "issues": issues,
+                }
+            )
+        result = {"project_id": project_id, "count": len(findings), "findings": findings}
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        print(f"project: {project_id} ({project['name']})")
+        print(f"completion_audit: {len(findings)} issue(s)")
+        if findings:
+            print("No automatic changes were made. Use `nilo task completion invalidate --completion <id> --reason \"...\"` after human review.")
+        for finding in findings:
+            print(f"- {finding['task_id']} completion={finding['completion_id']} actor={finding['actor']} {finding['task_title']}")
+            for issue in finding["issues"]:
+                print(f"  - {issue}")
     finally:
         store.close()
 
@@ -562,6 +607,11 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
         concerns = args.concern or []
         decision = args.decision
         if decision in ("accepted", "accepted_with_concerns"):
+            if not getattr(args, "human_confirm", False):
+                raise SystemExit("outcome accept requires --human-confirm after an explicit human decision")
+            decision_note = (getattr(args, "decision_note", "") or "").strip()
+            if not decision_note:
+                raise SystemExit("outcome accept requires --decision-note with the human acceptance note")
             boundary = resolve_project_boundary(db_path=args.db)
             try:
                 require_write_fence(boundary)
@@ -579,7 +629,7 @@ def cmd_outcome_record(args: argparse.Namespace) -> None:
             "completion_note": args.reason,
             "accepted_verification_run_ids": [latest_verification["id"]] if accepted and latest_verification else [],
             "accepted_review_result_ids": [latest_review["id"]] if accepted and latest_review else [],
-            "human_decision_note": "\n".join([args.reason, *concerns]).strip(),
+            "human_decision_note": "\n".join([getattr(args, "decision_note", "") or args.reason, *concerns]).strip(),
             "completed_with_reservations": decision == "accepted_with_concerns",
             "reason": args.reason,
             "completed_at": now_iso(),

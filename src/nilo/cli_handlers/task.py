@@ -12,7 +12,7 @@ from ..human_status import human_next_action_text
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
-from ..task_logic import completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
+from ..task_logic import active_task_completion, completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
 
 
@@ -169,7 +169,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         understanding = store.latest_for_task("understanding_checks", args.task)
         if understanding:
             print(f"{field_label('latest_understanding_check')}: {understanding['id']} ({status_label(understanding['status'])})")
-        completion = store.latest_for_task("task_completions", args.task)
+        completion = active_task_completion(store, args.task)
         if completion:
             print(f"{field_label('completed_reason')}: {completion['reason']}")
             print(f"{field_label('completed_with_reservations')}: {bool_label(bool(completion.get('completed_with_reservations')))}")
@@ -287,6 +287,10 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
+        if not getattr(args, "actor", None):
+            raise SystemExit("task completion requires --actor ai or --actor human")
+        if args.actor == "human" and not getattr(args, "human_confirm", False):
+            raise SystemExit("human completion requires --human-confirm after an explicit human decision")
         if args.actor == "ai":
             require_ai_completion_evidence(store, args.task)
         boundary = resolve_project_boundary(db_path=args.db)
@@ -347,6 +351,38 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             print("next_actions:")
             print("- commit accepted changes")
             print(f"- suggested command: git add {' '.join(changed_files)} && git commit -m \"Complete {task['title']}\"")
+    finally:
+        store.close()
+
+
+def cmd_task_completion_invalidate(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        completion = store.get("task_completions", args.completion)
+        if not completion:
+            raise SystemExit(f"task completion not found: {args.completion}")
+        if completion.get("invalidated_at"):
+            raise SystemExit(f"task completion already invalidated: {args.completion}")
+        task = store.get("tasks", completion["task_id"])
+        if not task:
+            raise SystemExit(f"task not found for completion: {completion['task_id']}")
+        boundary = resolve_project_boundary(db_path=args.db)
+        try:
+            require_write_fence(boundary)
+        except ProjectBoundaryError as exc:
+            record_nilo_issue_for_task(store, task["project_id"], task["id"], "task completion invalidate", exc, boundary)
+            raise SystemExit(str(exc)) from exc
+        store.update(
+            "task_completions",
+            args.completion,
+            {
+                "invalidated_at": now_iso(),
+                "invalidated_by": args.actor,
+                "invalidation_reason": args.reason,
+            },
+        )
+        print(f"status: invalidated")
+        print(f"task_completion: {args.completion}")
     finally:
         store.close()
 

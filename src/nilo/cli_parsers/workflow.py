@@ -63,6 +63,9 @@ def register_outcome(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
         outcome_parser.add_argument("--task", required=True)
         outcome_parser.add_argument("--reason", required=True)
         outcome_parser.add_argument("--concern", action="append", default=[])
+        if decision in ("accepted", "accepted_with_concerns"):
+            outcome_parser.add_argument("--human-confirm", action="store_true", help="Required after a human completion decision.")
+            outcome_parser.add_argument("--decision-note", required=True, help="Human-written acceptance note. AI workers must not invent this.")
         outcome_parser.set_defaults(func=handlers.cmd_outcome_record, decision=decision)
 
 

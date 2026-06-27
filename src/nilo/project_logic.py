@@ -1862,7 +1862,7 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
     if task["status"] == "verification_passed":
         return [
             f"{task['id']}: 差分、変更ファイル一覧、検証結果、未解決事項を確認する",
-            f"{task['id']}: 承認する場合は task complete で完了を記録し、コミットも任せる場合だけ --commit を付ける",
+            f"{task['id']}: AIが完了記録する場合は task complete --actor ai で記録し、コミットも任せる場合だけ --commit を付ける",
         ]
     if (
         task["task_type"] == "verification"
@@ -1870,7 +1870,7 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
         and task["latest_verification_run"] != "none"
         and task["verification_working_tree"] == "clean"
     ):
-        return [f"{task['id']}: clean な verification task として task complete を実行する"]
+        return [f"{task['id']}: clean な verification task として task complete --actor ai を実行する"]
     return []
     if task["status"] == "planned":
         return [f"{task['id']}: generate instructions"]
@@ -1879,7 +1879,7 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
     if task["status"] == "verification_passed":
         return [
             f"{task['id']}: review the diff, changed files, verification output, and unresolved caveats",
-            f"{task['id']}: if accepted, run task complete; add --commit only when Nilo should commit too",
+            f"{task['id']}: if accepted by AI, run task complete --actor ai; add --commit only when Nilo should commit too",
         ]
     if (
         task["task_type"] == "verification"
@@ -1887,7 +1887,7 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
         and task["latest_verification_run"] != "none"
         and task["verification_working_tree"] == "clean"
     ):
-        return [f"{task['id']}: run task complete for the clean verification task"]
+        return [f"{task['id']}: run task complete --actor ai for the clean verification task"]
     return []
 
 

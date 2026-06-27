@@ -30,6 +30,8 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     queue = sub.add_parser("queue")
     add_project_option(queue)
     queue.add_argument("--json", action="store_true")
+    queue.add_argument("--verbose", action="store_true")
+    queue.add_argument("--audit", action="store_true")
     queue.set_defaults(func=handlers.cmd_facade_queue)
 
     start = sub.add_parser("start")
@@ -56,7 +58,8 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     add_project_option(done)
     add_task_option(done)
     done.add_argument("--reason", default="daily workflow accepted")
-    done.add_argument("--actor", choices=["ai", "human"], default="human")
+    done.add_argument("--actor", choices=["ai", "human"], required=True)
+    done.add_argument("--human-confirm", action="store_true", help="Required when recording a human completion decision.")
     done.add_argument("--commit", action="store_true")
     done.add_argument("--commit-message")
     done.set_defaults(func=handlers.cmd_facade_done)

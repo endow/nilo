@@ -148,6 +148,60 @@ class ProjectBoundaryTests(unittest.TestCase):
 
         self.assertIn("project binding mismatch", str(raised.exception).lower())
 
+    def test_completion_invalidate_uses_project_write_fence(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory) / "Chiffon"
+            other = Path(directory) / "Other"
+            self.init_git(repo)
+            other.mkdir()
+            self.write_binding(repo, project_name="Chiffon", project_root=other, repository_id="Chiffon")
+            db = repo / ".nilo" / "nilo.db"
+            self.create_project_task(db, "Chiffon")
+            store = Store(db)
+            try:
+                store.insert(
+                    "task_completions",
+                    {
+                        "id": "completion_test",
+                        "task_id": "task_test",
+                        "actor": "human",
+                        "completed_by": "human",
+                        "completed_snapshot": {},
+                        "completion_note": "done",
+                        "accepted_verification_run_ids": [],
+                        "accepted_review_result_ids": [],
+                        "human_decision_note": "done",
+                        "completed_with_reservations": 0,
+                        "completed_at": now_iso(),
+                        "reason": "done",
+                        "created_at": now_iso(),
+                    },
+                )
+            finally:
+                store.close()
+            previous = Path.cwd()
+            try:
+                os.chdir(repo)
+                with self.assertRaises(SystemExit) as raised:
+                    with redirect_stdout(io.StringIO()):
+                        main(
+                            [
+                                "--db",
+                                str(db),
+                                "task",
+                                "completion",
+                                "invalidate",
+                                "--completion",
+                                "completion_test",
+                                "--reason",
+                                "bad completion",
+                            ]
+                        )
+            finally:
+                os.chdir(previous)
+
+        self.assertIn("project binding mismatch", str(raised.exception).lower())
+
     def test_tool_owner_changes_do_not_block_unrelated_project_completion(self) -> None:
         with TemporaryDirectory() as directory:
             project = Path(directory) / "Chiffon"
@@ -162,7 +216,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(project)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
             finally:
                 os.chdir(previous)
 
@@ -246,7 +300,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(repo)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
             finally:
                 os.chdir(previous)
 
@@ -270,7 +324,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(repo)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
             finally:
                 os.chdir(previous)
 
@@ -296,7 +350,7 @@ class ProjectBoundaryTests(unittest.TestCase):
             try:
                 os.chdir(project)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done"])
+                    main(["--db", str(db), "task", "complete", "--task", "task_test", "--reason", "done", "--actor", "human", "--human-confirm"])
             finally:
                 os.chdir(previous)
 

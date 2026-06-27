@@ -17,7 +17,9 @@ from ..project_boundary import (
     boundary_warning_lines,
     resolve_project_boundary,
 )
+from ..snapshot import current_git_snapshot
 from ..store import Store
+from ..task_logic import active_task_completion, completion_audit_issues
 from ..timeutil import now_iso
 from .task import cmd_task_complete, cmd_task_create
 from .workflow import cmd_outcome_record, cmd_report_import, cmd_verification_run
@@ -46,16 +48,78 @@ def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
     return None
 
 
-def work_queue_data(store: Store, project_id: str) -> dict:
+def unresolved_project_state(store: Store, project_id: str, *, verbose: bool = False) -> dict:
+    task_ids = [task["id"] for task in store.list_where("tasks", "project_id=?", (project_id,))]
+    task_id_set = set(task_ids)
+    accepted_commitments = store.list_where("roadmap_commitments", "project_id=? AND status='accepted'", (project_id,))
+    open_failures = store.list_where("failure_logs", "project_id=? AND status='open'", (project_id,))
+    unresolved_findings = [
+        finding for finding in store.list_where("review_findings", "status='unresolved'") if finding["task_id"] in task_id_set
+    ]
+    evidence_issues = [
+        evidence
+        for evidence in store.list_where("evidence_checks", "status IN ('needs_human_review', 'evidence_missing')")
+        if evidence["task_id"] in task_id_set
+    ]
+    review_dispatches = store.list_where(
+        "review_dispatches",
+        "project_id=? AND status NOT IN ('review_completed', 'review_failed')",
+        (project_id,),
+    )
+    overdrive_runs = store.list_where(
+        "overdrive_runs",
+        "project_id=? AND status NOT IN ('completed', 'closed', 'cancelled')",
+        (project_id,),
+    )
+    data = {
+        "roadmap_commitments": len(accepted_commitments),
+        "failures": len(open_failures),
+        "review_findings": len(unresolved_findings),
+        "evidence_issues": len(evidence_issues),
+        "review_dispatches": len(review_dispatches),
+        "overdrive_runs": len(overdrive_runs),
+    }
+    if verbose:
+        data["details"] = {
+            "roadmap_commitments": [{"id": item["id"], "title": item["title"]} for item in accepted_commitments],
+            "failures": [{"id": item["id"], "task_id": item["task_id"], "severity": item["severity"], "category": item["category"]} for item in open_failures],
+            "review_findings": [{"id": item["id"], "task_id": item["task_id"], "severity": item["severity"], "title": item["title"]} for item in unresolved_findings],
+            "evidence_issues": [{"id": item["id"], "task_id": item["task_id"], "status": item["status"]} for item in evidence_issues],
+            "review_dispatches": [{"id": item["id"], "task_id": item["task_id"], "reviewer": item["reviewer"], "status": item["status"]} for item in review_dispatches],
+            "overdrive_runs": [{"id": item["id"], "status": item["status"], "roadmap_commitment_id": item["roadmap_commitment_id"]} for item in overdrive_runs],
+        }
+    return data
+
+
+def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbose: bool = False) -> dict:
     from .. import cli as c
 
     project = store.get("projects", project_id)
     if not project:
         raise SystemExit(f"project not found: {project_id}")
     tasks = []
+    completion_audit_tasks = []
+    snapshot = current_git_snapshot(Path.cwd()) if audit else None
     for task in store.list_where("tasks", "project_id=?", (project_id,)):
         status = c.projected_task_status(store, task)
         if c.is_task_completed_status(status):
+            if audit:
+                audit_issues = completion_audit_issues(store, task, current_snapshot=snapshot)
+                if not audit_issues:
+                    continue
+                completion = active_task_completion(store, task["id"])
+                completion_audit_tasks.append(
+                    {
+                        "id": task["id"],
+                        "title": task["title"],
+                        "status": "invalid_completion",
+                        "projected_status": status,
+                        "task_type": task["task_type"],
+                        "risk_level": task["risk_level"],
+                        "completion_id": completion["id"] if completion else "",
+                        "audit_issues": audit_issues,
+                    }
+                )
             continue
         tasks.append(
             {
@@ -66,6 +130,8 @@ def work_queue_data(store: Store, project_id: str) -> dict:
                 "risk_level": task["risk_level"],
             }
         )
+    if audit:
+        tasks.extend(completion_audit_tasks)
     todos = []
     for todo in store.list_where("todos", "project_id=?", (project_id,)):
         if todo["status"] not in QUEUE_TODO_STATUSES:
@@ -79,6 +145,8 @@ def work_queue_data(store: Store, project_id: str) -> dict:
                 "kind": todo["kind"],
             }
         )
+    unresolved = unresolved_project_state(store, project_id, verbose=verbose)
+    unresolved_total = sum(value for key, value in unresolved.items() if isinstance(value, int))
     return {
         "project_id": project_id,
         "project_name": project["name"],
@@ -86,9 +154,13 @@ def work_queue_data(store: Store, project_id: str) -> dict:
             "tasks": len(tasks),
             "todos": len(todos),
             "total": len(tasks) + len(todos),
+            "completion_audit_tasks": len(completion_audit_tasks),
+            "unresolved_project_state": unresolved_total,
         },
         "tasks": tasks,
         "todos": todos,
+        "completion_audit_tasks": completion_audit_tasks,
+        "unresolved_project_state": unresolved,
     }
 
 
@@ -265,18 +337,32 @@ def cmd_facade_queue(args: argparse.Namespace) -> None:
     project_id = default_project_id(args)
     store = Store(args.db)
     try:
-        data = work_queue_data(store, project_id)
+        verbose = bool(getattr(args, "verbose", False))
+        data = work_queue_data(store, project_id, audit=bool(getattr(args, "audit", False)), verbose=verbose or bool(getattr(args, "json", False)))
         if getattr(args, "json", False):
             print(json.dumps(data, ensure_ascii=False, indent=2))
             return
         print(f"{field_label('project')}: {data['project_id']} ({data['project_name']})")
         print(f"queue: total={data['counts']['total']} tasks={data['counts']['tasks']} todos={data['counts']['todos']}")
+        unresolved = data["unresolved_project_state"]
+        unresolved_summary = (
+            f"failures={unresolved['failures']} review_findings={unresolved['review_findings']} "
+            f"evidence_issues={unresolved['evidence_issues']} roadmap_commitments={unresolved['roadmap_commitments']} "
+            f"review_dispatches={unresolved['review_dispatches']} overdrive_runs={unresolved['overdrive_runs']}"
+        )
+        if data["counts"]["total"] == 0 and data["counts"]["unresolved_project_state"]:
+            print(f"task/todo queue is empty, but unresolved project state remains: {unresolved_summary}")
+        else:
+            print(f"unresolved_project_state: {unresolved_summary}")
+        if data["counts"]["completion_audit_tasks"] and not getattr(args, "audit", False):
+            print(f"completion_audit: {data['counts']['completion_audit_tasks']} completed task(s) need audit; rerun with --audit")
         print(f"{field_label('tasks')}:")
         if data["tasks"]:
             for task in data["tasks"]:
+                issue_suffix = f" issues={','.join(task.get('audit_issues', []))}" if task.get("audit_issues") else ""
                 print(
                     f"- {task['id']} [{status_label(task['status'])}] "
-                    f"{task['task_type']} {task['risk_level']} {task['title']}"
+                    f"{task['task_type']} {task['risk_level']} {task['title']}{issue_suffix}"
                 )
         else:
             print("- なし")
@@ -286,6 +372,13 @@ def cmd_facade_queue(args: argparse.Namespace) -> None:
                 print(f"- {todo['id']} [{status_label(todo['status'])}] {todo['priority']} {todo['title']}")
         else:
             print("- なし")
+        if verbose and unresolved.get("details"):
+            print("unresolved_details:")
+            for kind, items in unresolved["details"].items():
+                print(f"- {kind}: {len(items)}")
+                for item in items[:20]:
+                    fields = " ".join(f"{key}={value}" for key, value in item.items())
+                    print(f"  - {fields}")
     finally:
         store.close()
 
@@ -363,6 +456,7 @@ def cmd_facade_done(args: argparse.Namespace) -> None:
             task=task_id,
             reason=args.reason,
             actor=args.actor,
+            human_confirm=args.human_confirm,
             commit=args.commit,
             commit_message=args.commit_message,
         )

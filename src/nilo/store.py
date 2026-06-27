@@ -267,6 +267,9 @@ CREATE TABLE IF NOT EXISTS task_completions (
   human_decision_note TEXT NOT NULL DEFAULT '',
   completed_with_reservations INTEGER NOT NULL DEFAULT 0,
   completed_at TEXT NOT NULL DEFAULT '',
+  invalidated_at TEXT NOT NULL DEFAULT '',
+  invalidated_by TEXT NOT NULL DEFAULT '',
+  invalidation_reason TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -433,6 +436,9 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("task_completions", "human_decision_note", "TEXT NOT NULL DEFAULT ''"),
     ("task_completions", "completed_with_reservations", "INTEGER NOT NULL DEFAULT 0"),
     ("task_completions", "completed_at", "TEXT NOT NULL DEFAULT ''"),
+    ("task_completions", "invalidated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("task_completions", "invalidated_by", "TEXT NOT NULL DEFAULT ''"),
+    ("task_completions", "invalidation_reason", "TEXT NOT NULL DEFAULT ''"),
     ("review_requests", "withdrawn_reason", "TEXT NOT NULL DEFAULT ''"),
     ("review_requests", "withdrawn_actor", "TEXT NOT NULL DEFAULT ''"),
     ("review_requests", "withdrawn_at", "TEXT NOT NULL DEFAULT ''"),
@@ -527,7 +533,7 @@ class Store:
               UNION ALL
               SELECT id AS event_id, 'verification_run' AS source, CASE WHEN timed_out=1 THEN 'verification_timed_out' WHEN exit_code=0 THEN 'verification_passed' ELSE 'verification_failed' END AS status, created_at, rowid AS event_rowid, 55 AS priority FROM verification_runs WHERE task_id=?
               UNION ALL
-              SELECT id AS event_id, 'completion' AS source, CASE WHEN actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, created_at, rowid AS event_rowid, 70 AS priority FROM task_completions WHERE task_id=?
+              SELECT id AS event_id, 'completion' AS source, CASE WHEN actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, created_at, rowid AS event_rowid, 70 AS priority FROM task_completions WHERE task_id=? AND COALESCE(invalidated_at, '')=''
             )
             ORDER BY created_at DESC, priority DESC, event_rowid DESC
             LIMIT 1

@@ -37,6 +37,33 @@ def completion_status(actor: str) -> str:
     return "completed_by_ai" if actor == "ai" else "completed_by_user"
 
 
+def active_task_completion(store, task_id: str) -> dict | None:
+    completions = store.list_where(
+        "task_completions",
+        "task_id=? AND COALESCE(invalidated_at, '')=''",
+        (task_id,),
+    )
+    return completions[0] if completions else None
+
+
+def human_completion_note_is_suspicious(completion: dict) -> bool:
+    if completion.get("actor") != "human":
+        return False
+    note = (completion.get("human_decision_note") or "").strip()
+    if not note:
+        return True
+    lowered = note.lower()
+    suspicious_fragments = [
+        "human accepted",
+        "verification evidence accepted",
+        "daily workflow accepted",
+        "accepted investigation report",
+        "accepted refreshed",
+        "superseded by completed",
+    ]
+    return any(fragment in lowered for fragment in suspicious_fragments)
+
+
 def ai_completion_has_evidence(store, task_id: str) -> bool:
     verification_run = store.latest_for_task("verification_runs", task_id)
     return evidence_status(verification_run, current_git_snapshot(Path.cwd())) == "current"
@@ -65,6 +92,31 @@ def require_ai_completion_evidence(store, task_id: str) -> None:
         "AI completion requires a current verification run with exit_code=0 "
         "for the current git snapshot"
     )
+
+
+def completion_audit_issues(store, task: dict, *, cwd: Path | None = None, current_snapshot: dict | None = None) -> list[str]:
+    completion = active_task_completion(store, task["id"])
+    if not completion:
+        return []
+    cwd = cwd or Path.cwd()
+    verification_run = store.latest_for_task("verification_runs", task["id"])
+    current_snapshot = current_snapshot or current_git_snapshot(cwd)
+    evidence = evidence_status(verification_run, current_snapshot)
+    unresolved = unresolved_review_findings(store, task["id"])
+    issues: list[str] = []
+    if evidence != "current":
+        issues.append(f"evidence_{evidence}")
+    if unresolved:
+        issues.append(f"unresolved_review_findings:{len(unresolved)}")
+    if human_completion_note_is_suspicious(completion):
+        issues.append("suspicious_human_completion")
+    accepted_verifications = completion.get("accepted_verification_run_ids") or []
+    if task.get("task_type") == "implementation" and not accepted_verifications:
+        issues.append("missing_accepted_verification")
+    completed_snapshot = completion.get("completed_snapshot") or {}
+    if completed_snapshot and completed_snapshot.get("git_diff_hash") != current_snapshot.get("git_diff_hash"):
+        issues.append("completion_snapshot_changed")
+    return issues
 
 
 def split_task_specs(task: dict) -> list[tuple[str, str]]:
