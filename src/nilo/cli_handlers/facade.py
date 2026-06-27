@@ -10,6 +10,7 @@ from ..ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_a
 from ..display_labels import field_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
+from ..project_logic import refresh_review_dispatch_state
 from ..project_boundary import (
     ProjectBoundaryError,
     assert_self_development_allowed,
@@ -243,6 +244,7 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         project = store.get("projects", project_id)
         if not project:
             raise SystemExit(f"project not found: {project_id}")
+        refresh_review_dispatch_state(store, project_id)
         active_task = first_active_task_for_project(store, project_id)
         if active_task:
             print_facade_next_for_task(store, active_task["id"])
