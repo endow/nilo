@@ -97,7 +97,7 @@ TASK_STATUS_MESSAGES: dict[str, dict[str, str]] = {
     },
     "needs_human_review": {
         "state": "人間の確認待ちです。",
-        "summary": "Nilo が自動では完了可否を判断しきれないため、人間の確認が必要です。",
+        "summary": "現在タスクの完了条件診断では、人間の確認が必要です。",
         "next_action": "証跡、差分、検証結果を確認し、完了として受け入れるか判断してください。",
         "severity": "warning",
     },

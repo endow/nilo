@@ -46,6 +46,8 @@ STATUS_LABELS_JA = {
     "addressed": "対応済み",
     "accepted-risk": "リスク受け入れ",
     "allowed": "許可",
+    "completion_allowed": "完了可能",
+    "completion_blocked": "条件未充足",
     "no_active_task": "作業中のタスクなし",
     "understanding_required": "理解確認待ち",
     "understanding_reported": "理解確認報告あり",
@@ -150,7 +152,7 @@ FIELD_LABELS_JA = {
     "by_category": "分類別",
     "by_status": "状態別",
     "recent_high_failures": "直近の重大失敗",
-    "completion": "完了可否",
+    "completion": "現在タスク完了診断",
     "blocking_reasons": "ブロック理由",
     "none": "なし",
 }

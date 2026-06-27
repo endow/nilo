@@ -88,7 +88,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
                 print(f"{field_label('status')}: {ai_value_label(task_summary['state'])}")
                 print(f"{field_label('evidence')}: {ai_value_label(data['evidence']['status'])}")
                 print(f"{field_label('unresolved_review_count')}: {data['review']['unresolved_count']}")
-                print(f"{field_label('completion')}: {ai_value_label('allowed' if data['completion']['allowed'] else 'blocked')}")
+                print(f"{field_label('completion')}: {ai_value_label('completion_allowed' if data['completion']['allowed'] else 'completion_blocked')}")
                 print(f"{field_label('blocking_reasons')}:")
                 if data["completion"]["blocking_reasons"]:
                     for reason in data["completion"]["blocking_reasons"]:

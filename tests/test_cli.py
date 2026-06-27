@@ -1333,7 +1333,16 @@ variables:
                 self.assertIn("状態: 計画済み (planned)", body)
                 self.assertIn("証跡: 未提出 (missing)", body)
                 self.assertIn("未解決レビュー指摘数: 1", body)
+                self.assertIn("現在タスク完了診断: 条件未充足 (completion_blocked)", body)
+                self.assertNotIn("完了可否", body)
                 self.assertLess(len(body), 700)
+
+                task_status_text = io.StringIO()
+                with redirect_stdout(task_status_text):
+                    main(["--db", str(db), "task", "status", "--task", "task_ai", "--ai"])
+                task_status_body = task_status_text.getvalue()
+                self.assertIn("現在タスク完了診断: 条件未充足 (completion_blocked)", task_status_body)
+                self.assertNotIn("完了可否", task_status_body)
 
                 status_json = io.StringIO()
                 with redirect_stdout(status_json):
@@ -1416,6 +1425,29 @@ variables:
                 self.assertIn("register_reviewer", doctor_body)
                 self.assertIn(f"status_ai_max_chars: {AI_CONTEXT_TEXT_MAX_CHARS}", doctor_body)
                 self.assertIn("status_ai_within_budget: True", doctor_body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_ai_status_without_active_task_does_not_show_completion_diagnosis(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+
+                status_text = io.StringIO()
+                with redirect_stdout(status_text):
+                    main(["--db", str(db), "status", "--ai"])
+
+                body = status_text.getvalue()
+                self.assertIn("状態: 作業中のタスクなし (no_active_task)", body)
+                self.assertIn("現在のタスク: なし", body)
+                self.assertNotIn("現在タスク完了診断", body)
+                self.assertNotIn("完了可否", body)
             finally:
                 os.chdir(previous_cwd)
 

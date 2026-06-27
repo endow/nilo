@@ -207,7 +207,7 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
                 f"git: head={git_head} diff_hash={diff_hash} dirty={git['dirty']}",
                 f"{field_label('evidence')}: {ai_value_label(evidence['status'])}",
                 f"{field_label('unresolved_review_count')}: {review['unresolved_count']}",
-                f"{field_label('completion')}: {ai_value_label('allowed' if completion['allowed'] else 'blocked')}",
+                f"{field_label('completion')}: {ai_value_label('completion_allowed' if completion['allowed'] else 'completion_blocked')}",
             ]
         )
         if completion["blocking_reasons"]:
