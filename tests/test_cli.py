@@ -1498,7 +1498,7 @@ variables:
                 "project_name": "Project Test",
                 "current_task": None,
                 "next_required_actions": [
-                    "no active task; ask the user for the next concrete task or design direction"
+                    'no active task; create or select a Nilo task before implementation; if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; ask the user for the next concrete task or design direction'
                 ],
                 "failure_summary": {
                     "open_failures": 0,
@@ -3238,6 +3238,7 @@ variables:
             status_body = status_output.getvalue()
             expected_guardrail = (
                 "no active task; create or select a Nilo task before implementation; "
+                'if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; '
                 "ask the user for the next concrete task or design direction"
             )
             self.assertIn("roadmap_position: roadmap not configured; no open design residue detected", status_body)
@@ -5172,6 +5173,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn(f"create tasks from accepted commitment {commitment_id}", body)
             self.assertIn(
                 "no active task; create or select a Nilo task before implementation; "
+                'if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; '
                 f"ask the user for the next concrete task within roadmap commitment {commitment_id}",
                 body,
             )
@@ -9882,6 +9884,22 @@ close 済み commitment を表示できるようにした。
             run = store.latest_for_task("verification_runs", "task_test")
             store.close()
             self.assertEqual(run["metadata"]["verification_mode"], "quick")
+
+    def test_facade_check_without_active_task_explains_recovery_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            with self.assertRaises(SystemExit) as raised:
+                main(["--db", str(db), "check", "python --version", "--project", "project_test"])
+
+            message = str(raised.exception)
+            self.assertIn("active task not found for project: project_test", message)
+            self.assertIn("Before implementation, create or select a Nilo task", message)
+            self.assertIn('nilo start "<short title>" --project project_test', message)
+            self.assertIn("rerun `nilo check ...` or pass `--task <task_id>`", message)
 
     def test_status_surfaces_dirty_verification_working_tree(self) -> None:
         with TemporaryDirectory() as directory:

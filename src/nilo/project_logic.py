@@ -797,22 +797,32 @@ def project_level_next_actions(
         if assessment["status"] == "task_plan_required":
             return [
                 no_active_task_action(
-                    f"ask the user for the next concrete task within roadmap commitment {commitment['id']}"
+                    f"ask the user for the next concrete task within roadmap commitment {commitment['id']}",
+                    project_id,
                 )
             ]
         if assessment["status"] != "evidence_present":
-            return [no_active_task_action(f"roadmap evidence needs internal review ({assessment['unresolved_reason']})")]
+            return [
+                no_active_task_action(
+                    f"roadmap evidence needs internal review ({assessment['unresolved_reason']})",
+                    project_id,
+                )
+            ]
         if assessment["closure_ready"]:
-            return [no_active_task_action("current roadmap scope is satisfied, ask the user for the next direction")]
-        return [no_active_task_action("ask the user for the next concrete task")]
+            return [no_active_task_action("current roadmap scope is satisfied, ask the user for the next direction", project_id)]
+        return [no_active_task_action("ask the user for the next concrete task", project_id)]
     open_residue = [item for item in design_residue if item["status"] != "resolved"]
     if open_residue:
         return [f"create a task for open design residue: {open_residue[0]['summary']}"]
-    return [no_active_task_action("ask the user for the next concrete task or design direction")]
+    return [no_active_task_action("ask the user for the next concrete task or design direction", project_id)]
 
 
-def no_active_task_action(next_step: str) -> str:
-    return f"no active task; create or select a Nilo task before implementation; {next_step}"
+def no_active_task_action(next_step: str, project_id: str) -> str:
+    return (
+        "no active task; create or select a Nilo task before implementation; "
+        f'if the user already gave a concrete implementation request, run `nilo start "<short title>" --project {project_id}` before code edits; '
+        f"{next_step}"
+    )
 
 
 def todo_status_counts(store: Store, project_id: str) -> dict[str, int]:

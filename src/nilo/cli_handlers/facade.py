@@ -33,6 +33,15 @@ def active_tasks_for_project(store: Store, project_id: str) -> tuple[list[dict],
     return [task for task in tasks if not c.is_task_completed_status(statuses[task["id"]])], statuses
 
 
+def no_active_task_recovery_message(project_id: str) -> str:
+    return (
+        f"active task not found for project: {project_id}. "
+        "Before implementation, create or select a Nilo task. "
+        f'For a concrete implementation request, run `nilo start "<short title>" --project {project_id}`, '
+        "then rerun `nilo check ...` or pass `--task <task_id>`."
+    )
+
+
 def resolve_task_id(args: argparse.Namespace, store: Store) -> str:
     if getattr(args, "task", None):
         task = store.get("tasks", args.task)
@@ -46,7 +55,7 @@ def resolve_task_id(args: argparse.Namespace, store: Store) -> str:
         raise SystemExit(f"project not found: {project_id}")
     active_tasks, _ = active_tasks_for_project(store, project_id)
     if not active_tasks:
-        raise SystemExit(f"active task not found for project: {project_id}")
+        raise SystemExit(no_active_task_recovery_message(project_id))
     if len(active_tasks) > 1:
         ids = ", ".join(task["id"] for task in active_tasks[:5])
         raise SystemExit(f"multiple active tasks; pass --task explicitly: {ids}")
