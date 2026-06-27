@@ -1393,7 +1393,8 @@ variables:
                 self.assertIn("Use quick for narrow smoke checks", help_body)
                 self.assertIn("Treat timeouts as guardrails", help_body)
                 self.assertIn("Work size:", help_body)
-                self.assertIn("Large work must be routed through roadmap first.", help_body)
+                self.assertIn("recommend roadmap planning to the human", help_body)
+                self.assertIn("Wait for human approval before creating a roadmap.", help_body)
                 self.assertIn("nilo roadmap discuss", help_body)
                 self.assertIn("nilo roadmap task-plan", help_body)
                 self.assertIn("MCP is not the normal entrypoint", help_body)
@@ -2821,6 +2822,8 @@ variables:
             body = next_output.getvalue()
             self.assertIn("この依頼は大きめ", body)
             self.assertIn("作業計画", body)
+            self.assertIn("推奨", body)
+            self.assertIn("承認", body)
             self.assertIn("Task 化", body)
 
             report = Path(directory) / "report.md"
@@ -3011,6 +3014,8 @@ variables:
             body = next_output.getvalue()
             self.assertIn("この依頼は大きめ", body)
             self.assertIn("作業計画", body)
+            self.assertIn("推奨", body)
+            self.assertIn("承認", body)
 
     def test_help_ai_describes_higher_roadmap_threshold(self) -> None:
         output = io.StringIO()

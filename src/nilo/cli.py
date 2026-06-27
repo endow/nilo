@@ -338,8 +338,9 @@ MCP identity guard:
 - 実装前に、その指示が小さい作業か大きい作業かを判定する。
 - 小さく明確な作業だけ、通常 task として進める。
 - 複数ファイルだけでは roadmap 扱いにしない。ひとまとまりの明確なバグ修正は通常 task として進める。
-- DB schema/migration、CLI、AI向け出力、docs/tests、安全性に関わる作業は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap に通す。
-- 大きな作業は `nilo roadmap discuss`、人間の `nilo roadmap accept`、`nilo roadmap task-plan` の順で分解してから進める。
+- DB schema/migration、CLI、AI向け出力、docs/tests、安全性に関わる作業は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を推奨する。
+- 大きな作業だと判断した場合でも自動では roadmap を作らず、人間に作業計画化を推奨して判断を待つ。
+- 人間が承認した場合だけ `nilo roadmap discuss` で作業計画を作り、人間の `nilo roadmap accept` 後に `nilo roadmap task-plan` で Task 化する。
 
 質問抑制:
 - Nilo の出力や状態から安全に一意推定できる不足値は人間に質問しない。

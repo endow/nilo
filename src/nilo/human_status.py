@@ -202,13 +202,16 @@ def human_next_action_text(action: str) -> str:
         return "作業計画を確認し、これで進めてよいか判断してください。承認後、この計画をもとに Task 化します。修正したい場合は、どこを変えるか指示してください。"
     if action.startswith("create a task for open design residue:"):
         return "未解決の設計残差についてタスクを作成してください。"
-    if action.startswith("possible large work; use `nilo roadmap discuss`"):
+    if action.startswith("possible large work; recommend roadmap planning"):
         return (
-            "この依頼は大きめなので、実装前に作業計画として整理してください。"
-            "計画を確認して承認されたら、その計画をもとに Task 化します。"
+            "この依頼は大きめなので、実装前に作業計画として整理することを推奨します。"
+            "人間が承認したら作業計画を作り、その計画をもとに Task 化します。"
         )
-    if action.startswith("requires_roadmap todo から RoadmapProposal を作成する"):
-        return "この依頼は大きめなので、実装前に作業計画として整理してください。"
+    if action.startswith("requires_roadmap todo は作業計画を推奨して人間の承認を待つ"):
+        return (
+            "この依頼は大きめなので、実装前に作業計画として整理することを推奨します。"
+            "人間の承認を待ってから作業計画を作成してください。"
+        )
     if action.startswith("ready todo から task を作成する"):
         return "実行できる依頼を具体的な Task にします。"
     if action.startswith("create tasks from accepted commitment"):

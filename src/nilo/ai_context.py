@@ -174,7 +174,12 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
     lines.append("作業規模の判定:")
     lines.append("- 小さく明確な修正は通常 task として進める。")
     lines.append("- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。")
-    lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を先に使う。")
+    if current:
+        lines.append("- CLI等の複数機能・複数実装トラックは roadmap 推奨。自動作成せず承認後に作る。")
+    else:
+        lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を推奨する。")
+        lines.append("- 大きい作業だと判断した場合でも自動では roadmap を作らず、人間に作業計画化を推奨して判断を待つ。")
+        lines.append("- 人間が承認した場合だけ `nilo roadmap discuss` で作業計画を作る。")
     lines.append("語彙ルール:")
     if current:
         lines.append("- タスク化=Task 作成、Todo=受付だけ。")
@@ -185,7 +190,7 @@ def render_ai_context_text(data: dict[str, Any]) -> str:
         lines.append("- type / risk / acceptance は意図が明確なら補完し、補完できないほど曖昧な場合だけ Todo に入れる。")
     lines.append("ロードマップ承認待ちの応答ルール:")
     if current:
-        lines.append("- 大きい作業は内部用語だけで説明せず、作業計画の確認・承認・Task 化を案内する。")
+        lines.append("- 大きい作業は内部用語だけで説明せず、作業計画の推奨・人間判断・承認後の Task 化を案内する。")
     else:
         lines.append("- pending Roadmap / RoadmapProposal / RoadmapRevision をユーザーに内部用語だけで説明しない。")
         lines.append("- まず「作業が大きいので、先に作業計画を作った」と説明する。")

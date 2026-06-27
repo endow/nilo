@@ -16,8 +16,7 @@ from .timeutil import iso_age_seconds, now_iso
 
 REVIEW_CLAIM_STALE_AFTER_SECONDS = 900
 ROADMAP_GUIDANCE_ACTION = (
-    "possible large work; use `nilo roadmap discuss` before continuing direct implementation, "
-    "then split accepted roadmap commitment with `nilo roadmap task-plan`"
+    "possible large work; recommend roadmap planning to the human and wait for approval before creating it"
 )
 LARGE_WORK_STRONG_KEYWORDS = (
     "schema",
@@ -830,8 +829,8 @@ def todo_next_actions(store: Store, project_id: str) -> list[str]:
     requires_roadmap = list(reversed(store.list_where("todos", "project_id=? AND status='requires_roadmap'", (project_id,))))
     if requires_roadmap:
         return [
-            "requires_roadmap todo から RoadmapProposal を作成する: "
-            f"nilo todo promote --item {requires_roadmap[0]['id']} --to roadmap-proposal --reason \"...\""
+            "requires_roadmap todo は作業計画を推奨して人間の承認を待つ: "
+            f"承認後に nilo todo promote --item {requires_roadmap[0]['id']} --to roadmap-proposal --reason \"...\""
         ]
     open_todos = list(reversed(store.list_where("todos", "project_id=? AND status='open'", (project_id,))))
     if open_todos:

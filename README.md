@@ -73,11 +73,11 @@ Nilo の状態を確認してから進めて。
 
 AI 側は Nilo を読んで、現在地、作業指示、完了条件、検証、報告を扱います。人間が毎回細かいコマンドを覚える必要はありません。
 
-### 大きな作業は roadmap に通す
+### 大きな作業では roadmap を推奨する
 
 Nilo では、小さな修正は task としてそのまま進めます。
 
-複数モジュールにまたがる変更、DB schema / migration、CLI 追加、AI向け状態表示の変更、README / docs / tests まで含む変更は、先に roadmap で整理します。
+複数モジュールにまたがる変更、DB schema / migration、CLI 追加、AI向け状態表示の変更、README / docs / tests まで含む変更では、AI は roadmap で整理することを推奨します。人間が承認した場合だけ roadmap を作り、承認後に task へ分解します。
 
 ```bash
 nilo roadmap discuss

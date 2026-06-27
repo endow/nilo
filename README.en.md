@@ -192,11 +192,11 @@ Update the README. Check Nilo's state before you start.
 
 The agent should check the current state, create or continue a task, read the instructions, run verification, and report back through Nilo.
 
-### Route Large Work Through Roadmap
+### Recommend Roadmap For Large Work
 
 Small changes can proceed as normal tasks.
 
-Large work should go through roadmap first: multi-module changes, schema/migration changes, CLI behavior changes, AI-facing output changes, or work that requires docs and tests together.
+For large work, AI agents recommend roadmap planning instead of creating it automatically: multi-module changes, schema/migration changes, CLI behavior changes, AI-facing output changes, or work that requires docs and tests together. Nilo creates the roadmap only after human approval, then splits the accepted plan into tasks.
 
 ```bash
 nilo roadmap discuss
