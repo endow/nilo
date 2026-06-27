@@ -134,7 +134,7 @@ def _latest_verified_completion_evidence(store: Store, task_id: str, cwd: Path) 
     verification = store.latest_for_task("verification_runs", task_id)
     snapshot = current_git_snapshot(cwd)
     if not verification:
-        raise TransitionError("verification_missing", "AI completion requires a verification run", "run `nilo check` first")
+        raise TransitionError("verification_missing", "AI completion requires a current verification run", "run `nilo check` first")
     status = evidence_status(verification, snapshot)
     if status != "current":
         raise TransitionError("verification_not_current", f"AI completion requires current evidence, got {status}")

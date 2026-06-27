@@ -282,9 +282,10 @@ class FailurePatternPurgeTests(unittest.TestCase):
             )
             store.close()
 
-            with patch(
-                "nilo.task_logic.current_git_snapshot",
-                return_value={"git_head": "", "git_diff_hash": "", "working_tree_dirty": False},
+            snapshot = {"git_head": "", "git_diff_hash": "", "working_tree_dirty": False}
+            with patch("nilo.task_logic.current_git_snapshot", return_value=snapshot), patch(
+                "nilo.transitions.current_git_snapshot",
+                return_value=snapshot,
             ):
                 main(["--db", str(db), "task", "complete", "--task", "task_review", "--actor", "ai", "--reason", "done"])
 
