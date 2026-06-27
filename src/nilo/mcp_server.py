@@ -399,6 +399,7 @@ TOOLS = [
                 "reason": {"type": "string"},
                 "auto_start": {"type": "boolean"},
                 "auto_configure": {"type": "boolean"},
+                "allow_cli_fallback": {"type": "boolean"},
                 "config_path": {"type": "string"},
             },
             ["task_id", "actor", "reviewer"],
@@ -1960,21 +1961,56 @@ def request_task_review(store: Store, arguments: dict) -> dict:
 
 def mcp_dispatch_review(store: Store, arguments: dict) -> dict:
     task_id = require_string(arguments, "task_id")
+    actor = require_string(arguments, "actor")
+    reviewer = require_string(arguments, "reviewer")
+    reason = optional_string(arguments, "reason", "dispatched agent review") or "dispatched agent review"
     auto_start = arguments.get("auto_start")
     if auto_start is not None and not isinstance(auto_start, bool):
         raise McpToolError("argument must be a boolean: auto_start")
-    auto_configure = arguments.get("auto_configure", True)
+    auto_configure = arguments.get("auto_configure", False)
     if not isinstance(auto_configure, bool):
         raise McpToolError("argument must be a boolean: auto_configure")
+    allow_cli_fallback = arguments.get("allow_cli_fallback", False)
+    if not isinstance(allow_cli_fallback, bool):
+        raise McpToolError("argument must be a boolean: allow_cli_fallback")
     config_path = optional_string(arguments, "config_path")
+    if not allow_cli_fallback and not config_path and not auto_configure:
+        latest_event = store.latest_task_status_event(task_id)
+        requested = request_task_review(
+            store,
+            {
+                **arguments,
+                "requester": actor,
+                "reviewer": reviewer,
+                "reason": reason,
+                "last_seen_event_id": arguments.get("last_seen_event_id") or (latest_event["event_id"] if latest_event else ""),
+            },
+        )
+        review_request = requested["result"]["review_request"]
+        return {
+            "operation": "dispatch_review",
+            "mode": "mcp_reviewer_workflow",
+            "status": review_request["status"],
+            "actor": actor,
+            "reviewer": review_request["reviewer"],
+            "task_id": task_id,
+            "project_id": optional_string(arguments, "project_id") or "",
+            "review_request_id": review_request["id"],
+            "reviewer_availability": requested["reviewer_availability"],
+            "reviewer_dispatch_capable": requested["reviewer_dispatch_capable"],
+            "next_action": requested["next_action"],
+            "claude_code_prompt": requested["claude_code_prompt"],
+            "result": requested["result"],
+            "refreshed_context": requested["refreshed_context"],
+        }
     try:
         return dispatch_review(
             store,
-            actor=require_string(arguments, "actor"),
-            reviewer=require_string(arguments, "reviewer"),
+            actor=actor,
+            reviewer=reviewer,
             task_id=task_id,
             project_id=optional_string(arguments, "project_id"),
-            reason=optional_string(arguments, "reason", "dispatched agent review") or "dispatched agent review",
+            reason=reason,
             auto_start=auto_start,
             auto_configure=auto_configure,
             config_path=Path(config_path) if config_path else None,

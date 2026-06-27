@@ -1398,6 +1398,9 @@ variables:
                 self.assertIn("nilo roadmap discuss", help_body)
                 self.assertIn("nilo roadmap task-plan", help_body)
                 self.assertIn("MCP is not the normal entrypoint", help_body)
+                self.assertIn("prefer MCP `dispatch_review`", help_body)
+                self.assertIn("`register_reviewer` -> `claim_next_review` -> `import_review_result`", help_body)
+                self.assertIn("CLI reviewer process fallback reason", help_body)
                 self.assertIn("identity matches the current repository", help_body)
                 self.assertIn("CLI fallback", help_body)
                 self.assertNotIn("MCP lazy loading", help_body)
@@ -2309,6 +2312,10 @@ variables:
             self.assertIn("@.nilo/agent-instructions.md", claude)
             self.assertIn("nilo help ai", runtime)
             self.assertIn("MCP identity guard", runtime)
+            self.assertIn("必ず high-level `dispatch_review` を第一候補にする", runtime)
+            self.assertIn("`register_reviewer` -> `claim_next_review` -> `import_review_result`", runtime)
+            self.assertIn("`claude` / `codex` CLI の直接起動", runtime)
+            self.assertIn("CLI reviewer process fallback", runtime)
             self.assertIn("repository / project / git_root / db_path", runtime)
             self.assertIn("CLI fallback", runtime)
             self.assertIn("unresolved review finding", agents)
@@ -8685,7 +8692,7 @@ close 済み commitment を表示できるようにした。
         self.assertIn("claude_exit_code: 0", body)
         self.assertIn("review_status: requested", body)
 
-    def test_natural_language_cluade_code_review_dispatches_without_claude_cli(self) -> None:
+    def test_natural_language_cluade_code_review_prints_mcp_handoff_without_cli_dispatch(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -8707,17 +8714,31 @@ close 済み commitment を表示できるようにした。
             try:
                 request = store.latest_for_task("review_requests", "task_test")
                 result = store.latest_for_task("review_results", "task_test")
+                dispatches = store.list_where("review_dispatches")
             finally:
                 store.close()
 
-        self.assertEqual(request["reviewer"], "claude-code")
-        self.assertEqual(request["requester"], "codex")
-        self.assertEqual(request["reason"], "Cluade Codeにレビューしてもらって")
-        self.assertEqual(request["status"], "completed")
-        self.assertEqual(result["verdict"], "approved")
+        self.assertIsNone(request)
+        self.assertIsNone(result)
+        self.assertEqual(dispatches, [])
         body = output.getvalue()
-        self.assertIn('"status": "review_completed"', body)
-        self.assertIn('"next_action"', body)
+        self.assertIn("review_handoff: use Nilo MCP dispatch_review", body)
+        self.assertIn("review_handoff_reason: natural-language CLI entrypoint cannot call MCP tools directly", body)
+        self.assertIn("reviewer: claude-code", body)
+        self.assertIn("task: task_test", body)
+        self.assertIn('"reason": "Cluade Codeにレビューしてもらって"', body)
+        arguments_line = next(line for line in body.splitlines() if line.startswith("mcp_arguments: "))
+        self.assertEqual(
+            json.loads(arguments_line.removeprefix("mcp_arguments: ")),
+            {
+                "task_id": "task_test",
+                "project_id": root.name,
+                "actor": "codex",
+                "reviewer": "claude-code",
+                "reason": "Cluade Codeにレビューしてもらって",
+            },
+        )
+        self.assertIn("cli_fallback: use `nilo review dispatch` only after explaining why MCP review workflow is unavailable", body)
 
     def test_review_quick_imports_parseable_review_result(self) -> None:
         with TemporaryDirectory() as directory:
@@ -8747,6 +8768,7 @@ close 済み commitment を表示できるようにした。
 
         body = output.getvalue()
         self.assertIn("# ReviewResult", body)
+        self.assertIn("quick_usage: local CLI fallback / diagnostics only", body)
         self.assertIn("quick_status: review_imported", body)
         self.assertIn("quick_imported: true", body)
         self.assertEqual(request["status"], "completed")
@@ -8845,7 +8867,7 @@ close 済み commitment を表示できるようにした。
         self.assertIn("quick_status: raw_review", output.getvalue())
         self.assertEqual(requests, [])
 
-    def test_natural_language_light_review_routes_to_quick(self) -> None:
+    def test_natural_language_light_review_prints_mcp_handoff_not_quick_or_dispatch(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -8867,14 +8889,17 @@ close 済み commitment を表示できるようにした。
             try:
                 result = store.latest_for_task("review_results", "task_test")
                 dispatches = store.list_where("review_dispatches")
+                request = store.latest_for_task("review_requests", "task_test")
             finally:
                 store.close()
 
-        self.assertEqual(result["verdict"], "approved")
+        self.assertIsNone(result)
         self.assertEqual(dispatches, [])
-        self.assertIn("quick_status: review_imported", output.getvalue())
+        self.assertIsNone(request)
+        self.assertIn("quick requested; quick is local CLI fallback / diagnostics only", output.getvalue())
+        self.assertIn("mcp_tool: dispatch_review", output.getvalue())
 
-    def test_natural_language_formal_review_routes_to_dispatch(self) -> None:
+    def test_natural_language_formal_review_prints_mcp_handoff_not_dispatch(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -8898,8 +8923,8 @@ close 済み commitment を表示できるようにした。
             finally:
                 store.close()
 
-        self.assertEqual(len(dispatches), 1)
-        self.assertIn('"status": "review_completed"', output.getvalue())
+        self.assertEqual(dispatches, [])
+        self.assertIn("review_handoff: use Nilo MCP dispatch_review", output.getvalue())
 
     def test_review_dispatch_missing_config_returns_structured_next_action(self) -> None:
         with TemporaryDirectory() as directory:

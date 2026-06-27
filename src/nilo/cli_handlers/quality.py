@@ -429,6 +429,7 @@ def cmd_review_quick(args: argparse.Namespace) -> None:
         if result.get("stderr"):
             print("quick_stderr:")
             print(result["stderr"], end="" if result["stderr"].endswith("\n") else "\n")
+        print("quick_usage: local CLI fallback / diagnostics only; prefer Nilo MCP dispatch_review for normal AI review handoff")
         print(f"quick_status: {result['status']}")
         print(f"quick_imported: {str(bool(result.get('imported'))).lower()}")
         if result.get("review_request_id"):
@@ -581,6 +582,7 @@ def claude_instruction(project_id: str, task: dict, review_request: dict, dirty_
             f"状態確認が必要な場合は get_status(project_id=\"{project_id}\") または get_task_status を使って。",
             "MCP 経由で検証ログを書き戻す必要がある場合は record_verification を使って。",
             "コード変更はしないで。",
+            "通常のAI間レビュー依頼では claude/codex CLI を直接起動せず、Nilo MCP review workflow を優先する。",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -642,6 +644,7 @@ def cmd_review_human_launch_claude(args: argparse.Namespace) -> None:
             "reason": args.reason,
         }
         print_review_delegation(args.project, review_request, task, dirty_tree_review)
+        print("human_launch_note: human-requested Claude CLI helper; normal AI review handoff should use Nilo MCP dispatch_review")
         print_human_runner_command(args)
         print("claude_status: skipped (dry-run)")
         return
@@ -658,6 +661,7 @@ def cmd_review_human_launch_claude(args: argparse.Namespace) -> None:
     review_request, task, dirty_tree_review = create_review_delegation(delegate_args)
     instruction = claude_instruction(args.project, task, review_request, dirty_tree_review)
     print_review_delegation(args.project, review_request, task, dirty_tree_review)
+    print("human_launch_note: human-requested Claude CLI helper; normal AI review handoff should use Nilo MCP dispatch_review")
 
     command = claude_runner_command(args)
     print_human_runner_command(args)

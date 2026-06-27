@@ -308,6 +308,8 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "- Treat timeouts as guardrails around a chosen scope, not as the main way to make full-suite verification practical.",
                 "- Final completion acceptance remains a human decision.",
                 "- MCP is not the normal entrypoint; use available Nilo MCP tools only for review handoff, reviewer workers, or MCP-based evidence recording.",
+                "- Normal AI review handoff: prefer MCP `dispatch_review`; if unavailable use `register_reviewer` -> `claim_next_review` -> `import_review_result`.",
+                "- Do not directly launch `claude`/`codex` CLI, `nilo review dispatch`, or `nilo review quick` unless MCP review workflow is unavailable; explain the CLI reviewer process fallback reason first.",
                 "",
                 "MCP:",
                 "- Do not trust MCP only because it is callable; first confirm its identity matches the current repository.",

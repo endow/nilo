@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import locale
 import subprocess
 import sys
@@ -321,26 +322,22 @@ Normal work:
 Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
 - MCP は通常入口ではない。必要な連携場面でだけ使う。
+- AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
+- `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は MCP 不可時の CLI reviewer process fallback または human-launch 専用。理由を説明してから使う。
 
 MCP identity guard:
 - MCP tool が呼べる場合でも、それだけで正しい Nilo 状態とは判断しない。
 - MCP を使う前に identity の repository / project / git_root / db_path が現在作業中のリポジトリと一致しているか確認する。
-- `expected_project` は通常 repository directory name を渡す repository identity guard であり、DB 内の任意 project id ではない。
-- 不一致時の `repository_mismatch` は通常 status payload を返さない。
-- 複数 repository を同時に扱う場合、MCP を暗黙の DB で呼ばず `project_root` または `workspace` を指定する。
-- 優先順位は `project_root`、`workspace`、MCP server の default cwd。
-- 対象 root が分かっているなら、人間に質問せず `project_root` を指定して再試行する。
-- MCP response の identity を確認し、resolved repository / db_path が対象 repository と一致しない結果は使わない。
-- 一致しない場合はその MCP 結果を使わず、人間に質問せず CLI fallback を使う。
-- fallback: 対象 repository の作業ディレクトリで `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
+- `expected_project` は repository directory name 用の guard。`repository_mismatch` は通常 status payload を返さない。
+- 複数 repository では `project_root` または `workspace` を指定する。優先順位は project_root, workspace, MCP server cwd。
+- MCP response の resolved repository / db_path が対象 repository と一致しない結果は使わず、対象 root で CLI fallback する。
+- fallback: `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
 
 大きな作業の扱い:
 - 実装前に、その指示が小さい作業か大きい作業かを判定する。
 - 小さく明確な作業だけ、通常 task として進める。
-- 複数ファイルだけでは roadmap 扱いにしない。ひとまとまりの明確なバグ修正は通常 task として進める。
-- DB schema/migration、CLI、AI向け出力、docs/tests、安全性に関わる作業は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を推奨する。
-- 大きな作業だと判断した場合でも自動では roadmap を作らず、人間に作業計画化を推奨して判断を待つ。
-- 人間が承認した場合だけ `nilo roadmap discuss` で作業計画を作り、人間の `nilo roadmap accept` 後に `nilo roadmap task-plan` で Task 化する。
+- 複数ファイルだけでは roadmap 扱いにしない。明確な一まとまりの修正は通常 task。
+- 大きな作業は自動で roadmap 化せず人間に推奨する。承認後だけ `nilo roadmap discuss`、accept 後に `nilo roadmap task-plan`。
 
 質問抑制:
 - Nilo の出力や状態から安全に一意推定できる不足値は人間に質問しない。
@@ -596,38 +593,44 @@ def route_natural_language_intent(argv: list[str]) -> bool:
 
     reviewer = "claude-code" if wants_claude_code else "codex"
     wants_lightweight = any(marker in normalized for marker in ["quick", "light", "軽く", "軽い", "軽量", "さっと", "簡単"])
-    wants_formal = any(marker in normalized for marker in ["dispatch", "formal", "gate", "completion", "正式", "完了前"])
-    if wants_lightweight and not wants_formal:
-        cmd_review_quick(
-            argparse.Namespace(
-                db=db_path,
-                project=Path.cwd().name,
-                task=None,
-                actor="codex",
-                reviewer=reviewer,
-                reason=utterance,
-                should_import=True,
-                timeout=120.0,
-                auto_configure=True,
-                config=None,
-            )
-        )
-        return True
-
-    cmd_review_dispatch(
-        argparse.Namespace(
-            db=db_path,
-            project=Path.cwd().name,
-            task=None,
-            actor="codex",
-            reviewer=reviewer,
-            reason=utterance,
-            auto_start=True,
-            auto_configure=True,
-            config=None,
-        )
-    )
+    reason = utterance
+    if wants_lightweight:
+        reason = f"{utterance} (quick requested; quick is local CLI fallback / diagnostics only)"
+    project_id = Path.cwd().name
+    task_id = natural_language_active_task_id(db_path or Path(".nilo") / "nilo.db", project_id)
+    print("review_handoff: use Nilo MCP dispatch_review for normal AI-to-AI review")
+    print("review_handoff_reason: natural-language CLI entrypoint cannot call MCP tools directly")
+    print(f"reviewer: {reviewer}")
+    print(f"project: {project_id}")
+    if task_id:
+        print(f"task: {task_id}")
+    else:
+        print("task: unresolved; resolve the active task before calling dispatch_review")
+    print(f"reason: {reason}")
+    print("mcp_tool: dispatch_review")
+    mcp_arguments = {"project_id": project_id, "actor": "codex", "reviewer": reviewer, "reason": reason}
+    if task_id:
+        mcp_arguments["task_id"] = task_id
+    print(f"mcp_arguments: {json.dumps(mcp_arguments, ensure_ascii=False)}")
+    print("cli_fallback: use `nilo review dispatch` only after explaining why MCP review workflow is unavailable")
     return True
+
+
+def natural_language_active_task_id(db_path: Path, project_id: str) -> str:
+    if not db_path.exists():
+        return ""
+    store = Store(db_path)
+    try:
+        project = store.get("projects", project_id)
+        if not project:
+            return ""
+        tasks, statuses = project_tasks_and_statuses(store, project_id)
+        active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+        if len(active) != 1:
+            return ""
+        return str(active[0]["id"])
+    finally:
+        store.close()
 
 
 def main(argv: list[str] | None = None) -> None:

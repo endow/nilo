@@ -466,6 +466,7 @@ class McpServerTests(unittest.TestCase):
                             "task_id": "task_missing",
                             "actor": "codex",
                             "reviewer": "claude-code",
+                            "allow_cli_fallback": True,
                         },
                     },
                 },
@@ -497,6 +498,7 @@ class McpServerTests(unittest.TestCase):
                                 "task_id": "task_missing",
                                 "actor": "codex",
                                 "reviewer": "claude-code",
+                                "allow_cli_fallback": True,
                             },
                         },
                     },
@@ -2763,7 +2765,7 @@ MCP でも承認待ちの計画を人間向けに返す。
         self.assertEqual(status["review_requests"][0]["status"], "completed")
         self.assertEqual(status["review_results"][0]["reviewer"], "claude-code")
 
-    def test_dispatch_review_auto_configures_claude_code_when_default_config_is_missing(self) -> None:
+    def test_dispatch_review_uses_mcp_reviewer_workflow_by_default_without_cli_config(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -2791,6 +2793,50 @@ MCP でも承認待ちの計画を人間向けに返す。
                     },
                     db,
                 )
+                config_exists = (root / ".nilo" / "reviewers.toml").exists()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+        self.assertEqual(result["operation"], "dispatch_review")
+        self.assertEqual(result["mode"], "mcp_reviewer_workflow")
+        self.assertEqual(result["status"], "reviewer_unavailable")
+        self.assertEqual(result["reviewer"], "claude-code")
+        self.assertEqual(result["reviewer_availability"], "missing")
+        self.assertFalse(config_exists)
+        self.assertIn("register_reviewer", result["next_action"])
+        self.assertIn("claim_next_review", result["claude_code_prompt"])
+
+    def test_dispatch_review_auto_configures_claude_code_only_when_requested(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            write_fake_claude_cli(bin_dir, root)
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                os.environ["PATH"] = str(bin_dir) + os.pathsep + previous_path
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--title", "Auto config dispatch task"])
+                task_id = call_tool("get_agent_work_context", {"project_id": "project_test"}, db)["active_tasks"][0]["id"]
+
+                result = call_tool(
+                    "dispatch_review",
+                    {
+                        "task_id": task_id,
+                        "actor": "codex",
+                        "reviewer": "claude-code",
+                        "project_id": "project_test",
+                        "auto_start": True,
+                        "auto_configure": True,
+                        "allow_cli_fallback": True,
+                    },
+                    db,
+                )
                 config_body = (root / ".nilo" / "reviewers.toml").read_text(encoding="utf-8")
             finally:
                 os.environ["PATH"] = previous_path
@@ -2800,8 +2846,9 @@ MCP でも承認待ちの計画を人間向けに返す。
         self.assertEqual(result["verdict"], "approved")
         self.assertIn("[reviewers.claude-code]", config_body)
         self.assertIn('command = "claude"', config_body)
+        self.assertIn("local_cli_fallback = true", config_body)
 
-    def test_dispatch_review_auto_configures_codex_when_default_config_is_missing(self) -> None:
+    def test_dispatch_review_auto_configures_codex_only_when_requested(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -2826,6 +2873,8 @@ MCP でも承認待ちの計画を人間向けに返す。
                         "reviewer": "codex",
                         "project_id": "project_test",
                         "auto_start": True,
+                        "auto_configure": True,
+                        "allow_cli_fallback": True,
                     },
                     db,
                 )
@@ -2838,6 +2887,7 @@ MCP でも承認待ちの計画を人間向けに返す。
         self.assertEqual(result["verdict"], "approved")
         self.assertIn("[reviewers.codex]", config_body)
         self.assertIn('command = "codex"', config_body)
+        self.assertIn("local_cli_fallback = true", config_body)
         self.assertIn('"exec"', config_body)
         self.assertIn("codex reviewer", config_body)
 

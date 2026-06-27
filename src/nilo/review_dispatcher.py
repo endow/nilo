@@ -37,6 +37,7 @@ DEFAULT_CODEX_REVIEW_PROMPT = (
     "# ReviewResult, ## Verdict, ## Summary, ## Findings. Use one of these verdicts: approved, commented, "
     "changes_requested, rejected. Do not modify files."
 )
+LEGACY_DEFAULT_PROMPT_MARKERS = ("Voile MCP", "Voile markdown review result")
 DEFAULT_QUICK_REVIEW_TIMEOUT_SECONDS = 120.0
 
 
@@ -60,6 +61,8 @@ class ReviewerConfig:
     model: str = ""
     api_key_env: str = ""
     confidence_threshold: float = 0.75
+    local_cli_fallback: bool = False
+    legacy_cli_fallback_config: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,6 +223,29 @@ def safe_default_args(reviewer: str) -> list[str]:
     return ["{prompt_file}"]
 
 
+def default_review_prompt(reviewer: str) -> str | None:
+    if reviewer == "claude-code":
+        return DEFAULT_CLAUDE_REVIEW_PROMPT
+    if reviewer == "codex":
+        return DEFAULT_CODEX_REVIEW_PROMPT
+    return None
+
+
+def normalize_legacy_default_args(reviewer: str, args: list[str]) -> tuple[list[str], bool]:
+    replacement = default_review_prompt(reviewer)
+    if replacement is None:
+        return args, False
+    normalized: list[str] = []
+    changed = False
+    for arg in args:
+        if "{prompt_file}" in arg and any(marker in arg for marker in LEGACY_DEFAULT_PROMPT_MARKERS):
+            normalized.append(replacement)
+            changed = True
+        else:
+            normalized.append(arg)
+    return normalized, changed
+
+
 def safe_default_config(path: Path, reviewer: str) -> ReviewerConfig | None:
     if reviewer not in {"claude-code", "codex"}:
         return None
@@ -229,6 +255,7 @@ def safe_default_config(path: Path, reviewer: str) -> ReviewerConfig | None:
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
     body = (
+        "# Local CLI reviewer process fallback. Prefer Nilo MCP dispatch_review for normal AI-to-AI review handoff.\n"
         f"[reviewers.{reviewer}]\n"
         'kind = "agent"\n'
         f"command = {json.dumps(command_name)}\n"
@@ -237,6 +264,7 @@ def safe_default_config(path: Path, reviewer: str) -> ReviewerConfig | None:
         "auto_start = true\n"
         "timeout_seconds = 600\n"
         "dispatch_capable = true\n"
+        "local_cli_fallback = true\n"
         "persist_prompt_file = true\n"
     )
     if path.exists() and path.read_text(encoding="utf-8").strip():
@@ -327,6 +355,7 @@ def load_reviewer_config(path: Path, reviewer: str, *, auto_configure: bool = Fa
             {"type": "fix_reviewer_config", "reviewer": reviewer},
             status="needs_reviewer_config",
         )
+    args, legacy_cli_fallback_config = normalize_legacy_default_args(reviewer, args)
     env = raw.get("env") or {}
     if not isinstance(env, dict):
         raise DispatchError(
@@ -363,6 +392,8 @@ def load_reviewer_config(path: Path, reviewer: str, *, auto_configure: bool = Fa
         model=model,
         api_key_env=str(raw.get("api_key_env") or ""),
         confidence_threshold=float(raw.get("confidence_threshold", 0.75)),
+        local_cli_fallback=bool(raw.get("local_cli_fallback", True)),
+        legacy_cli_fallback_config=legacy_cli_fallback_config,
     )
 
 
@@ -403,6 +434,7 @@ def doctor_reviewer_config(path: Path, reviewers: list[str] | None = None) -> di
         endpoint = ""
         model = ""
         capabilities = ["review_diff"]
+        legacy_cli_fallback_config = False
         if path.exists():
             try:
                 config = load_reviewer_config(path, canonical, auto_configure=False)
@@ -411,6 +443,7 @@ def doctor_reviewer_config(path: Path, reviewers: list[str] | None = None) -> di
                 endpoint = config.endpoint
                 model = config.model
                 capabilities = config.capabilities
+                legacy_cli_fallback_config = config.legacy_cli_fallback_config
                 if config.kind in {"openai_compatible", "local_llm"}:
                     command_name = config.kind
                     executable = endpoint
@@ -423,6 +456,12 @@ def doctor_reviewer_config(path: Path, reviewers: list[str] | None = None) -> di
                 config_error = exc.reason
         else:
             config_error = f"reviewer config not found: {path}"
+        if legacy_cli_fallback_config:
+            next_action = {"type": "migrate_legacy_reviewer_config", "path": str(path), "reviewer": canonical}
+        elif configured:
+            next_action = {"type": "none"}
+        else:
+            next_action = reviewer_config_next_action(path, canonical)
         checks.append(
             {
                 "reviewer": canonical,
@@ -436,8 +475,9 @@ def doctor_reviewer_config(path: Path, reviewers: list[str] | None = None) -> di
                 "capabilities": capabilities,
                 "endpoint": endpoint,
                 "model": model,
+                "legacy_cli_fallback_config": legacy_cli_fallback_config,
                 "config_error": config_error,
-                "next_action": reviewer_config_next_action(path, canonical) if not configured else {"type": "none"},
+                "next_action": next_action,
             }
         )
     return {"path": str(path), "exists": path.exists(), "reviewers": checks}
@@ -548,8 +588,11 @@ def register_dispatch_reviewer(store: Store, reviewer: str, config: ReviewerConf
     rows = store.list_where("review_reviewers", "reviewer=?", (reviewer,))
     existing = max(rows, key=lambda row: row["last_heartbeat_at"]) if rows else None
     metadata = {
-        "worker_path": "nilo review dispatch",
+        "worker_path": "nilo review dispatch (CLI reviewer process fallback)",
         "dispatch_capable": config.dispatch_capable,
+        "dispatch_capable_meaning": "local CLI reviewer process can be started by the fallback dispatcher; this is not the MCP dispatch_review tool",
+        "local_cli_fallback": config.local_cli_fallback,
+        "legacy_cli_fallback_config": config.legacy_cli_fallback_config,
         "source": "review_dispatcher",
         "command": command_line,
         "result_format": config.result_format,
@@ -1010,6 +1053,9 @@ def result_payload(
     non_blocking = [finding for finding in findings if not finding["blocking"]]
     payload: dict[str, Any] = {
         "status": status,
+        "operation": "cli_reviewer_process_fallback",
+        "mcp_preferred_tool": "dispatch_review",
+        "fallback_note": "Use this local CLI reviewer process only when the Nilo MCP review workflow is unavailable.",
         "actor": actor,
         "reviewer": reviewer,
         "task_id": task_id,

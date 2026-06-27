@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 from nilo.mcp_server import call_tool
 from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
-from nilo.review_dispatcher import dispatch_review, find_executable, resolve_command_parts, run_reviewer_process, safe_default_config
+from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_REVIEW_PROMPT
+from nilo.review_dispatcher import dispatch_review, find_executable, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
+from nilo.review_dispatcher import doctor_reviewer_config
 from nilo.reviewer_registry import reviewer_is_registered_available
 from nilo.store import Store
 from nilo.timeutil import now_iso
@@ -398,9 +400,11 @@ class ReviewDispatcherTests(unittest.TestCase):
         self.assertEqual(finding["file_path"], "src/nilo/review_dispatcher.py")
         self.assertEqual(finding["line"], "488")
 
-    def test_claude_code_safe_default_config(self) -> None:
+    def test_claude_code_safe_default_config_marks_cli_fallback(self) -> None:
         with TemporaryDirectory() as directory, patch("nilo.review_dispatcher.find_executable", return_value=sys.executable):
-            config = safe_default_config(Path(directory) / "reviewers.toml", "claude-code")
+            config_path = Path(directory) / "reviewers.toml"
+            config = safe_default_config(config_path, "claude-code")
+            body = config_path.read_text(encoding="utf-8")
 
         self.assertIsNotNone(config)
         self.assertEqual(config.command, "claude")
@@ -408,10 +412,15 @@ class ReviewDispatcherTests(unittest.TestCase):
         self.assertIn("claude-code reviewer", config.args[-1])
         self.assertTrue(config.auto_start)
         self.assertTrue(config.dispatch_capable)
+        self.assertTrue(config.local_cli_fallback)
+        self.assertIn("Local CLI reviewer process fallback", body)
+        self.assertIn("local_cli_fallback = true", body)
 
-    def test_codex_safe_default_config(self) -> None:
+    def test_codex_safe_default_config_marks_cli_fallback(self) -> None:
         with TemporaryDirectory() as directory, patch("nilo.review_dispatcher.find_executable", return_value=sys.executable):
-            config = safe_default_config(Path(directory) / "reviewers.toml", "codex")
+            config_path = Path(directory) / "reviewers.toml"
+            config = safe_default_config(config_path, "codex")
+            body = config_path.read_text(encoding="utf-8")
 
         self.assertIsNotNone(config)
         self.assertEqual(config.command, "codex")
@@ -419,6 +428,74 @@ class ReviewDispatcherTests(unittest.TestCase):
         self.assertIn("codex reviewer", config.args[-1])
         self.assertTrue(config.auto_start)
         self.assertTrue(config.dispatch_capable)
+        self.assertTrue(config.local_cli_fallback)
+        self.assertIn("Local CLI reviewer process fallback", body)
+        self.assertIn("local_cli_fallback = true", body)
+
+    def test_explicit_reviewer_config_defaults_to_cli_fallback_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "reviewers.toml"
+            config_path.write_text(
+                "[reviewers.claude-code]\n"
+                'command = "fake-reviewer"\n'
+                'args = ["{prompt_file}"]\n'
+                'auto_start = true\n',
+                encoding="utf-8",
+            )
+
+            config = load_reviewer_config(config_path, "claude-code")
+
+        self.assertTrue(config.local_cli_fallback)
+
+    def test_legacy_claude_cli_fallback_config_prompt_is_normalized(self) -> None:
+        legacy_prompt = (
+            "You are acting as the claude-code reviewer through Voile MCP. Read the review prompt at {prompt_file}. "
+            "Return exactly a Voile markdown review result."
+        )
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "reviewers.toml"
+            config_path.write_text(
+                "[reviewers.claude-code]\n"
+                'kind = "agent"\n'
+                'command = "claude"\n'
+                f"args = {json.dumps(['-p', legacy_prompt])}\n"
+                "auto_start = true\n"
+                "dispatch_capable = true\n",
+                encoding="utf-8",
+            )
+
+            config = load_reviewer_config(config_path, "claude-code")
+            doctor = doctor_reviewer_config(config_path, ["claude-code"])
+
+        self.assertEqual(config.args[-1], DEFAULT_CLAUDE_REVIEW_PROMPT)
+        self.assertNotIn("Voile", config.args[-1])
+        self.assertTrue(config.local_cli_fallback)
+        self.assertTrue(config.legacy_cli_fallback_config)
+        self.assertTrue(doctor["reviewers"][0]["legacy_cli_fallback_config"])
+        self.assertEqual(doctor["reviewers"][0]["next_action"]["type"], "migrate_legacy_reviewer_config")
+
+    def test_legacy_codex_cli_fallback_config_prompt_is_normalized(self) -> None:
+        legacy_prompt = (
+            "You are acting as the codex reviewer through Voile MCP. Read the review prompt at {prompt_file}. "
+            "Return exactly a Voile markdown review result."
+        )
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "reviewers.toml"
+            config_path.write_text(
+                "[reviewers.codex]\n"
+                'kind = "agent"\n'
+                'command = "codex"\n'
+                f"args = {json.dumps(['exec', legacy_prompt])}\n"
+                "auto_start = true\n"
+                "dispatch_capable = true\n",
+                encoding="utf-8",
+            )
+
+            config = load_reviewer_config(config_path, "codex")
+
+        self.assertEqual(config.args[-1], DEFAULT_CODEX_REVIEW_PROMPT)
+        self.assertNotIn("Voile", config.args[-1])
+        self.assertTrue(config.legacy_cli_fallback_config)
 
     def test_windows_cmd_command_resolution(self) -> None:
         with TemporaryDirectory() as directory:
