@@ -42,6 +42,19 @@ def no_active_task_recovery_message(project_id: str) -> str:
     )
 
 
+def multiple_active_tasks_recovery_message(project_id: str, active_tasks: list[dict]) -> str:
+    sorted_tasks = sorted(active_tasks, key=lambda task: task["id"])
+    ids = ", ".join(task["id"] for task in sorted_tasks[:5])
+    suffix = "" if len(active_tasks) <= 5 else f", ... ({len(active_tasks)} total)"
+    return (
+        f"multiple active tasks for project: {project_id}. "
+        "nilo check refuses to guess because verification evidence must be attached to exactly one task. "
+        f"Pass `--task <task_id>` to record this verification on the intended task: {ids}{suffix}. "
+        "If this command is not evidence for any active task, do not attach it to an unrelated task; "
+        "run it outside `nilo check` or create/select the correct task first."
+    )
+
+
 def resolve_task_id(args: argparse.Namespace, store: Store) -> str:
     if getattr(args, "task", None):
         task = store.get("tasks", args.task)
@@ -57,8 +70,7 @@ def resolve_task_id(args: argparse.Namespace, store: Store) -> str:
     if not active_tasks:
         raise SystemExit(no_active_task_recovery_message(project_id))
     if len(active_tasks) > 1:
-        ids = ", ".join(task["id"] for task in active_tasks[:5])
-        raise SystemExit(f"multiple active tasks; pass --task explicitly: {ids}")
+        raise SystemExit(multiple_active_tasks_recovery_message(project_id, active_tasks))
     return active_tasks[0]["id"]
 
 

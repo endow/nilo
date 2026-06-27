@@ -9910,6 +9910,51 @@ close 済み commitment を表示できるようにした。
             self.assertIn('nilo start "<short title>" --project project_test', message)
             self.assertIn("rerun `nilo check ...` or pass `--task <task_id>`", message)
 
+    def test_facade_check_with_multiple_active_tasks_explains_evidence_target(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_first",
+                        "--title",
+                        "first task",
+                    ]
+                )
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_second",
+                        "--title",
+                        "second task",
+                    ]
+                )
+
+            with self.assertRaises(SystemExit) as raised:
+                main(["--db", str(db), "check", "python --version", "--project", "project_test"])
+
+            message = str(raised.exception)
+            self.assertIn("multiple active tasks for project: project_test", message)
+            self.assertIn("verification evidence must be attached to exactly one task", message)
+            self.assertIn("Pass `--task <task_id>`", message)
+            self.assertIn("task_first, task_second", message)
+            self.assertIn("do not attach it to an unrelated task", message)
+
     def test_status_surfaces_dirty_verification_working_tree(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
