@@ -4997,6 +4997,10 @@ project status からロードマップ現在地を読めるようにする。
     def test_roadmap_assess_summarizes_commitment_tasks_and_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            self.init_git_with_tags(repo, [])
+            repo.joinpath("dirty.txt").write_text("dirty\n", encoding="utf-8")
             db = root / "nilo.db"
             proposal = root / "roadmap.md"
             report = root / "report.md"
@@ -5019,36 +5023,41 @@ project status からロードマップ現在地を読めるようにする。
             report.write_text(REPORT.replace("- src/nilo/cli.py", "- docs/roadmap_proposal.md"), encoding="utf-8")
             script.write_text("print('ok')\n", encoding="utf-8")
 
+            previous_cwd = Path.cwd()
             with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                import_output = io.StringIO()
-                with redirect_stdout(import_output):
-                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
-                revision_id = next(line.split(": ", 1)[1] for line in import_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
-                store = Store(db)
-                revision = store.get("roadmap_revisions", revision_id)
-                commitment_id = revision["proposed_commitment_id"]
-                store.close()
-                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "評価するため"])
-                main(
-                    [
-                        "--db",
-                        str(db),
-                        "task",
-                        "create",
-                        "--project",
-                        "project_test",
-                        "--id",
-                        "task_assess",
-                        "--title",
-                        "Implement Phase 2.5 Roadmap Projection",
-                        "--commitment",
-                        commitment_id,
-                    ]
-                )
-                main(["--db", str(db), "instruct", "--task", "task_assess"])
-                main(["--db", str(db), "report", "import", "--task", "task_assess", "--file", str(report)])
-                main(["--db", str(db), "verification", "run", "--task", "task_assess", "--command", f'"{sys.executable}" "{script}"'])
+                try:
+                    os.chdir(repo)
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    import_output = io.StringIO()
+                    with redirect_stdout(import_output):
+                        main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                    revision_id = next(line.split(": ", 1)[1] for line in import_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                    store = Store(db)
+                    revision = store.get("roadmap_revisions", revision_id)
+                    commitment_id = revision["proposed_commitment_id"]
+                    store.close()
+                    main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "評価するため"])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            "project_test",
+                            "--id",
+                            "task_assess",
+                            "--title",
+                            "Implement Phase 2.5 Roadmap Projection",
+                            "--commitment",
+                            commitment_id,
+                        ]
+                    )
+                    main(["--db", str(db), "instruct", "--task", "task_assess"])
+                    main(["--db", str(db), "report", "import", "--task", "task_assess", "--file", str(report)])
+                    main(["--db", str(db), "verification", "run", "--task", "task_assess", "--command", f'"{sys.executable}" "{script}"'])
+                finally:
+                    os.chdir(previous_cwd)
 
             output = io.StringIO()
             with redirect_stdout(output):
