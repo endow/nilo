@@ -27,6 +27,11 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     add_task_option(next_step)
     next_step.set_defaults(func=handlers.cmd_facade_next)
 
+    queue = sub.add_parser("queue")
+    add_project_option(queue)
+    queue.add_argument("--json", action="store_true")
+    queue.set_defaults(func=handlers.cmd_facade_queue)
+
     start = sub.add_parser("start")
     start.add_argument("title")
     add_project_option(start)

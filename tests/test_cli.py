@@ -1329,6 +1329,76 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
+    def test_queue_lists_unfinished_tasks_and_actionable_todos_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_active", "--title", "Active task"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task"])
+                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human"])
+                main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_open", "Open todo"])
+                main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_ready", "Ready todo"])
+                main(["--db", str(db), "todo", "triage", "--item", "todo_ready", "--status", "ready", "--reason", "ready"])
+                main(["--db", str(db), "todo", "add", "--project", "project_test", "--id", "todo_rejected", "Rejected todo"])
+                main(["--db", str(db), "todo", "triage", "--item", "todo_rejected", "--status", "rejected", "--reason", "rejected"])
+
+            store = Store(db)
+            try:
+                store.insert(
+                    "failure_logs",
+                    {
+                        "id": "failure_queue",
+                        "project_id": "project_test",
+                        "task_id": "task_done",
+                        "report_id": "",
+                        "category": "evidence_missing",
+                        "message": "historical failure",
+                        "severity": "high",
+                        "source": "",
+                        "actor": "",
+                        "related_id": "",
+                        "snapshot": {},
+                        "status": "open",
+                        "resolved_at": "",
+                        "resolved_by": "",
+                        "resolution_note": "",
+                        "created_at": now_iso(),
+                    },
+                )
+            finally:
+                store.close()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "queue", "--project", "project_test"])
+            body = output.getvalue()
+
+            self.assertIn("queue: total=3 tasks=1 todos=2", body)
+            self.assertIn("task_active [計画済み] implementation medium Active task", body)
+            self.assertIn("todo_open [未解決] normal Open todo", body)
+            self.assertIn("todo_ready [着手可能] normal Ready todo", body)
+            self.assertNotIn("task_done", body)
+            self.assertNotIn("todo_rejected", body)
+            self.assertNotIn("failure_queue", body)
+            self.assertNotIn("historical failure", body)
+
+    def test_queue_json_reports_empty_counts_without_active_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "queue", "--project", "project_test", "--json"])
+
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["project_id"], "project_test")
+            self.assertEqual(data["counts"], {"tasks": 0, "todos": 0, "total": 0})
+            self.assertEqual(data["tasks"], [])
+            self.assertEqual(data["todos"], [])
+
     def test_ai_context_surfaces_are_compact_and_json_serializable(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -21,6 +21,8 @@ from ..timeutil import now_iso
 from .task import cmd_task_complete, cmd_task_create
 from .workflow import cmd_outcome_record, cmd_report_import, cmd_verification_run
 
+QUEUE_TODO_STATUSES = {"open", "ready", "triaged", "blocked", "requires_roadmap", "deferred"}
+
 
 def default_project_id(args: argparse.Namespace) -> str:
     return args.project or Path.cwd().name
@@ -41,6 +43,52 @@ def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
         if not c.is_task_completed_status(status):
             return task
     return None
+
+
+def work_queue_data(store: Store, project_id: str) -> dict:
+    from .. import cli as c
+
+    project = store.get("projects", project_id)
+    if not project:
+        raise SystemExit(f"project not found: {project_id}")
+    tasks = []
+    for task in store.list_where("tasks", "project_id=?", (project_id,)):
+        status = c.projected_task_status(store, task)
+        if c.is_task_completed_status(status):
+            continue
+        tasks.append(
+            {
+                "id": task["id"],
+                "title": task["title"],
+                "status": status,
+                "task_type": task["task_type"],
+                "risk_level": task["risk_level"],
+            }
+        )
+    todos = []
+    for todo in store.list_where("todos", "project_id=?", (project_id,)):
+        if todo["status"] not in QUEUE_TODO_STATUSES:
+            continue
+        todos.append(
+            {
+                "id": todo["id"],
+                "title": todo["title"],
+                "status": todo["status"],
+                "priority": todo["priority"],
+                "kind": todo["kind"],
+            }
+        )
+    return {
+        "project_id": project_id,
+        "project_name": project["name"],
+        "counts": {
+            "tasks": len(tasks),
+            "todos": len(todos),
+            "total": len(tasks) + len(todos),
+        },
+        "tasks": tasks,
+        "todos": todos,
+    }
 
 
 def no_active_task_recovery_message(project_id: str) -> str:
@@ -205,6 +253,35 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         actions = summary["next_actions"] or []
         if actions:
             print(f"- {human_next_action_text(actions[0])}")
+        else:
+            print("- なし")
+    finally:
+        store.close()
+
+
+def cmd_facade_queue(args: argparse.Namespace) -> None:
+    project_id = default_project_id(args)
+    store = Store(args.db)
+    try:
+        data = work_queue_data(store, project_id)
+        if getattr(args, "json", False):
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return
+        print(f"{field_label('project')}: {data['project_id']} ({data['project_name']})")
+        print(f"queue: total={data['counts']['total']} tasks={data['counts']['tasks']} todos={data['counts']['todos']}")
+        print(f"{field_label('tasks')}:")
+        if data["tasks"]:
+            for task in data["tasks"]:
+                print(
+                    f"- {task['id']} [{status_label(task['status'])}] "
+                    f"{task['task_type']} {task['risk_level']} {task['title']}"
+                )
+        else:
+            print("- なし")
+        print("TODO:")
+        if data["todos"]:
+            for todo in data["todos"]:
+                print(f"- {todo['id']} [{status_label(todo['status'])}] {todo['priority']} {todo['title']}")
         else:
             print("- なし")
     finally:
