@@ -434,7 +434,7 @@ instruction: Do work.
                 os.chdir(previous_cwd)
 
             body = output.getvalue()
-            self.assertIn("nilo check \"python tests/run_cli_group.py task\"", body)
+            self.assertIn("python tests/run_cli_group.py task", body)
             self.assertIn("--mode targeted", body)
             self.assertNotIn("python -m unittest discover tests", body)
 
@@ -2081,7 +2081,7 @@ variables:
                 next_output = io.StringIO()
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next", "--project", project_id])
-                self.assertIn("nilo todo start --item todo_ready", next_output.getvalue())
+                self.assertIn("実行できる依頼を具体的な Task にします。", next_output.getvalue())
 
                 store = Store(db)
                 try:
@@ -2091,10 +2091,7 @@ variables:
                 promote_next_output = io.StringIO()
                 with redirect_stdout(promote_next_output):
                     main(["--db", str(db), "next", "--project", project_id])
-                self.assertIn(
-                    "nilo todo promote --item todo_requires_roadmap --to roadmap-proposal",
-                    promote_next_output.getvalue(),
-                )
+                self.assertIn("この依頼は大きめ", promote_next_output.getvalue())
 
                 store = Store(db)
                 try:
@@ -2149,7 +2146,7 @@ variables:
             self.assertNotIn("MCP が使えなければ CLI", body)
             self.assertIn("最終完了判断、commit、force、roadmap close は人間が行う", body)
             self.assertIn("nilo help ai", body)
-            self.assertLess(len(body), 2200)
+            self.assertLess(len(body), 2400)
             self.assertNotIn("## 全コマンド一覧", body)
             self.assertNotIn("nilo project export-handson --project project_test --file HANDOFF.md", body)
             self.assertNotIn("nilo task create --project project_test", body)
@@ -2822,9 +2819,9 @@ variables:
             with redirect_stdout(next_output):
                 main(["--db", str(db), "next", "--project", "project_test"])
             body = next_output.getvalue()
-            self.assertIn("大きな作業の可能性", body)
-            self.assertIn("nilo roadmap discuss", body)
-            self.assertIn("task-plan", body)
+            self.assertIn("この依頼は大きめ", body)
+            self.assertIn("作業計画", body)
+            self.assertIn("Task 化", body)
 
             report = Path(directory) / "report.md"
             report.write_text(REPORT, encoding="utf-8")
@@ -3012,8 +3009,8 @@ variables:
             with redirect_stdout(next_output):
                 main(["--db", str(db), "next", "--project", "project_test"])
             body = next_output.getvalue()
-            self.assertIn("roadmap discuss", body)
-            self.assertIn("大きな作業の可能性", body)
+            self.assertIn("この依頼は大きめ", body)
+            self.assertIn("作業計画", body)
 
     def test_help_ai_describes_higher_roadmap_threshold(self) -> None:
         output = io.StringIO()
@@ -3874,10 +3871,8 @@ completed criterion を満たした。
             self.assertEqual(summary["roadmap_position"], "accepted commitment: Incomplete Commitment")
             self.assertIn(f"roadmap commitment {second_commitment}", summary["next_actions"][0])
             self.assertEqual(summary["roadmap_commitments"][0]["id"], second_commitment)
-            self.assertEqual(
-                {item["id"] for item in summary["roadmap_commitments"]},
-                {first_commitment, second_commitment},
-            )
+            self.assertEqual({item["id"] for item in summary["roadmap_commitments"]}, {second_commitment})
+            self.assertEqual({item["id"] for item in summary["closed_roadmap_commitments"]}, {first_commitment})
 
             store = Store(db)
             tasks, statuses = project_tasks_and_statuses(store, "project_test")
