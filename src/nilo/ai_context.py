@@ -11,6 +11,9 @@ from .store import Store
 from .task_logic import is_task_completed_status, projected_task_status, unresolved_review_findings
 
 
+AI_CONTEXT_TEXT_MAX_CHARS = 700
+
+
 def active_tasks(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     from . import project_logic as p
 
@@ -128,77 +131,150 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
     }
 
 
-def render_ai_context_text(data: dict[str, Any]) -> str:
-    lines: list[str] = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
+def _shorten(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return value[: limit - 3] + "..."
+
+
+def _compact_next_action_text(action: str) -> str:
+    if action.startswith("possible large work; recommend roadmap planning"):
+        return "大きい作業は作業計画の承認後に Task 化してください。"
+    if action.startswith("run nilo instruct --task "):
+        return action
+    if action == "perform the instructed work and import a completion report":
+        return "指示作業を実施し、完了報告を取り込んでください。"
+    return _shorten(human_next_action_text(action), 90)
+
+
+def _render_with_budget(required: list[str], optional_sections: list[list[str]], max_chars: int | None) -> str:
+    if max_chars is None:
+        lines = list(required)
+        for section in optional_sections:
+            lines.extend(section)
+        return "\n".join(lines)
+
+    selected: list[list[str]] = []
+    for section in optional_sections:
+        candidate_sections = [*selected, section]
+        candidate_lines = list(required)
+        for selected_section in candidate_sections:
+            candidate_lines.extend(selected_section)
+        if len("\n".join(candidate_lines)) <= max_chars:
+            selected.append(section)
+
+    lines = list(required)
+    for section in selected:
+        lines.extend(section)
+    body = "\n".join(lines)
+    if len(body) <= max_chars:
+        return body
+
+    compact_required = [_shorten(line, 120) for line in required]
+    body = "\n".join(compact_required)
+    if len(body) <= max_chars:
+        return body
+
+    overflow_note = "\n... compact output truncated; use --json or doctor ai-context for details"
+    budget = max(max_chars - len(overflow_note), 0)
+    return _shorten(body, budget) + overflow_note
+
+
+def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None) -> str:
+    required: list[str] = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
+    optional_sections: list[list[str]] = []
     current = data.get("current_task")
     if not current:
-        lines.append(f"{field_label('status')}: {ai_value_label('no_active_task')}")
-        lines.append("現在のタスク: なし")
+        required.append(f"{field_label('status')}: {ai_value_label('no_active_task')}")
+        required.append("現在のタスク: なし")
     else:
         task = current["task"]
         git = current["git"]
         evidence = current["evidence"]
         review = current["review"]
         completion = current["completion"]
-        lines.extend(
+        git_head = git["git_head"] or "none"
+        diff_hash = git["git_diff_hash"] or "none"
+        if max_chars is not None:
+            git_head = git_head[:12] if git_head != "none" else git_head
+            diff_hash = diff_hash[:12] if diff_hash != "none" else diff_hash
+        required.extend(
             [
-                f"{field_label('task')}: {task['id']} {task['title']}",
+                f"{field_label('task')}: {task['id']} {_shorten(task['title'], 80 if max_chars is None else 48)}",
                 f"{field_label('status')}: {ai_value_label(task['state'])}",
-                f"git: head={git['git_head'] or 'none'} diff_hash={git['git_diff_hash'] or 'none'} dirty={git['dirty']}",
+                f"git: head={git_head} diff_hash={diff_hash} dirty={git['dirty']}",
                 f"{field_label('evidence')}: {ai_value_label(evidence['status'])}",
                 f"{field_label('unresolved_review_count')}: {review['unresolved_count']}",
                 f"{field_label('completion')}: {ai_value_label('allowed' if completion['allowed'] else 'blocked')}",
             ]
         )
         if completion["blocking_reasons"]:
-            lines.append(f"{field_label('blocking_reasons')}:")
-            lines.extend(f"- {reason}" for reason in completion["blocking_reasons"])
+            required.append(f"{field_label('blocking_reasons')}:")
+            required.extend(f"- {reason}" for reason in completion["blocking_reasons"])
         if current.get("failure_logs"):
-            lines.append(f"{field_label('failure_logs')}:")
+            failure_lines = [f"{field_label('failure_logs')}:"]
             for failure in current["failure_logs"]:
-                lines.append(f"- [{severity_label(failure['severity'])}] {category_label(failure['category'])}")
-                lines.append(f"  {failure['message']}")
-            lines.append(current["failure_logs_note"])
+                failure_lines.append(f"- [{severity_label(failure['severity'])}] {category_label(failure['category'])}")
+                failure_lines.append(f"  {_shorten(failure['message'], 90)}")
+            if max_chars is None:
+                failure_lines.append(current["failure_logs_note"])
+            optional_sections.append(failure_lines)
     failure_summary = data.get("failure_summary", {})
     if failure_summary:
-        lines.append(f"{field_label('failure_summary')}:")
-        lines.append(f"- {field_label('open_failures')}: {failure_summary.get('open_failures', 0)}")
-        lines.append(f"- {field_label('high_open_failures')}: {failure_summary.get('high_open_failures', 0)}")
+        failure_summary_lines = [f"{field_label('failure_summary')}:"]
+        failure_summary_lines.append(f"- {field_label('open_failures')}: {failure_summary.get('open_failures', 0)}")
+        failure_summary_lines.append(f"- {field_label('high_open_failures')}: {failure_summary.get('high_open_failures', 0)}")
         latest = failure_summary.get("latest_open_failure")
         if latest:
-            lines.append(f"- {field_label('latest_open_failure')}: {latest['task_id']} {category_label(latest['category'])}")
-        lines.append(f"詳細は `nilo failure list --project {data['project_id']}` を確認してください。")
-    lines.append(f"{field_label('next_required_actions')}:")
+            failure_summary_lines.append(f"- {field_label('latest_open_failure')}: {latest['task_id']} {category_label(latest['category'])}")
+        failure_summary_lines.append(f"詳細は `nilo failure list --project {data['project_id']}` を確認してください。")
+        optional_sections.append(failure_summary_lines)
+    next_lines = [f"{field_label('next_required_actions')}:"]
     actions = data.get("next_required_actions") or []
-    lines.extend(f"- {human_next_action_text(action)}" for action in actions) if actions else lines.append("- なし")
-    lines.append("作業規模の判定:")
-    lines.append("- 小さく明確な修正は通常 task として進める。")
-    lines.append("- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。")
-    if current:
-        lines.append("- CLI等の複数機能・複数実装トラックは roadmap 推奨。自動作成せず承認後に作る。")
+    if actions:
+        visible_actions = actions if max_chars is None else actions[:1]
+        next_lines.extend(f"- {_compact_next_action_text(action) if max_chars is not None else human_next_action_text(action)}" for action in visible_actions)
     else:
-        lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を推奨する。")
-        lines.append("- 大きい作業だと判断した場合でも自動では roadmap を作らず、人間に作業計画化を推奨して判断を待つ。")
-        lines.append("- 人間が承認した場合だけ `nilo roadmap discuss` で作業計画を作る。")
-    lines.append("語彙ルール:")
+        next_lines.append("- なし")
+    required.extend(next_lines)
+    work_size_lines = [
+        "作業規模の判定:",
+        "- 小さく明確な修正は通常 task として進める。",
+        "- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。",
+    ]
     if current:
-        lines.append("- タスク化=Task 作成、Todo=受付だけ。")
+        work_size_lines.append("- CLI等の複数機能・複数実装トラックは roadmap 推奨。自動作成せず承認後に作る。")
     else:
-        lines.append("- ユーザーが「これをタスク化して」「Taskにして」「作業タスクを作って」と言った場合は、Todo ではなく Task 作成を優先する。")
-        lines.append("- create_task=新規具体作業、create_task_from_todo=既存 Todo 変換、create_todo=受付だけ。")
-        lines.append("- Todo は後で見る、メモ、候補、未実行、曖昧な受付に使う。")
-        lines.append("- type / risk / acceptance は意図が明確なら補完し、補完できないほど曖昧な場合だけ Todo に入れる。")
-    lines.append("ロードマップ承認待ちの応答ルール:")
+        work_size_lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を推奨する。")
+        work_size_lines.append("- 大きい作業だと判断した場合でも自動では roadmap を作らず、人間に作業計画化を推奨して判断を待つ。")
+        work_size_lines.append("- 人間が承認した場合だけ `nilo roadmap discuss` で作業計画を作る。")
+    vocabulary_lines = ["語彙ルール:"]
     if current:
-        lines.append("- 大きい作業は内部用語だけで説明せず、作業計画の推奨・人間判断・承認後の Task 化を案内する。")
+        vocabulary_lines.append("- タスク化=Task 作成、Todo=受付だけ。")
     else:
-        lines.append("- pending Roadmap / RoadmapProposal / RoadmapRevision をユーザーに内部用語だけで説明しない。")
-        lines.append("- まず「作業が大きいので、先に作業計画を作った」と説明する。")
-        lines.append("- 次に、計画の中身を人間が判断できる形で要約または全文表示する。")
-        lines.append("- 「これで進めてよければ承認してください」と明示する。")
-        lines.append("- 承認後は「この計画をもとに Task 化します」と説明する。")
-        lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
-    return "\n".join(lines)
+        vocabulary_lines.append("- ユーザーが「これをタスク化して」「Taskにして」「作業タスクを作って」と言った場合は、Todo ではなく Task 作成を優先する。")
+        vocabulary_lines.append("- create_task=新規具体作業、create_task_from_todo=既存 Todo 変換、create_todo=受付だけ。")
+        vocabulary_lines.append("- Todo は後で見る、メモ、候補、未実行、曖昧な受付に使う。")
+        vocabulary_lines.append("- type / risk / acceptance は意図が明確なら補完し、補完できないほど曖昧な場合だけ Todo に入れる。")
+    if current:
+        optional_sections.append(work_size_lines)
+    optional_sections.append(vocabulary_lines)
+    if not current:
+        optional_sections.append(work_size_lines)
+    roadmap_lines = ["ロードマップ承認待ちの応答ルール:"]
+    if current:
+        roadmap_lines.append("- 大きい作業は内部用語だけで説明せず、作業計画の確認・承認・Task 化を案内する。")
+    else:
+        roadmap_lines.append("- pending Roadmap / RoadmapProposal / RoadmapRevision をユーザーに内部用語だけで説明しない。")
+        roadmap_lines.append("- まず「作業が大きいので、先に作業計画を作った」と説明する。")
+        roadmap_lines.append("- 次に、計画の中身を人間が判断できる形で要約または全文表示する。")
+        roadmap_lines.append("- 「これで進めてよければ承認してください」と明示する。")
+        roadmap_lines.append("- 承認後は「この計画をもとに Task 化します」と説明する。")
+        roadmap_lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
+    optional_sections.append(roadmap_lines)
+    return _render_with_budget(required, optional_sections, max_chars)
 
 
 def evidence_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> dict[str, Any]:

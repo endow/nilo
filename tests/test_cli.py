@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from nilo.backup import BackupError
-from nilo.ai_context import project_ai_context, render_ai_context_text
+from nilo.ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_ai_context_text
 from nilo.cli import git_changed_files, handson_language, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
 from nilo.project_logic import project_tasks_and_statuses, selected_roadmap_commitment
@@ -1411,8 +1411,105 @@ variables:
                 self.assertIn("mcp_review_handoff_tool_count:", doctor_body)
                 self.assertIn("dispatch_review", doctor_body)
                 self.assertIn("register_reviewer", doctor_body)
+                self.assertIn(f"status_ai_max_chars: {AI_CONTEXT_TEXT_MAX_CHARS}", doctor_body)
+                self.assertIn("status_ai_within_budget: True", doctor_body)
             finally:
                 os.chdir(previous_cwd)
+
+    def test_status_ai_compacts_large_work_failure_summary_without_truncating_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            project_id,
+                            "--id",
+                            "task_compact_budget",
+                            "--title",
+                            "CLI status next failure docs review roadmap compact budget",
+                            "--description",
+                            "Update CLI status --ai next actions, docs, tests, review, failure log output, and roadmap guidance together.",
+                        ]
+                    )
+                store = Store(db)
+                try:
+                    for index in range(3):
+                        store.insert(
+                            "failure_logs",
+                            {
+                                "id": f"failure_budget_{index}",
+                                "project_id": project_id,
+                                "task_id": "task_compact_budget",
+                                "report_id": "",
+                                "category": "metadata_mismatch",
+                                "message": "metadata_mismatch message " * 20,
+                                "severity": "high",
+                                "source": "test",
+                                "actor": "nilo",
+                                "related_id": "",
+                                "snapshot": {},
+                                "status": "open",
+                                "resolved_at": "",
+                                "resolved_by": "",
+                                "resolution_note": "",
+                                "created_at": now_iso(),
+                            },
+                        )
+                finally:
+                    store.close()
+
+                status_text = io.StringIO()
+                with redirect_stdout(status_text):
+                    main(["--db", str(db), "status", "--ai"])
+                body = status_text.getvalue()
+                compact_body = body.split("\n\n", 1)[-1]
+                self.assertLessEqual(len(compact_body), AI_CONTEXT_TEXT_MAX_CHARS)
+                self.assertIn("タスク: task_compact_budget", compact_body)
+                self.assertIn("次の作業:", compact_body)
+
+                status_json = io.StringIO()
+                with redirect_stdout(status_json):
+                    main(["--db", str(db), "status", "--ai", "--json"])
+                data = json.loads(status_json.getvalue())
+                self.assertEqual(data["current_task"]["task"]["title"], "CLI status next failure docs review roadmap compact budget")
+                self.assertEqual(data["failure_summary"]["open_failures"], 3)
+                self.assertGreaterEqual(len(data["next_required_actions"]), 2)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_status_ai_compact_keeps_taskization_rules_without_active_task(self) -> None:
+        body = render_ai_context_text(
+            {
+                "project_id": "project_test",
+                "project_name": "Project Test",
+                "current_task": None,
+                "next_required_actions": [
+                    "no active task; ask the user for the next concrete task or design direction"
+                ],
+                "failure_summary": {
+                    "open_failures": 0,
+                    "high_open_failures": 0,
+                    "latest_open_failure": None,
+                },
+            },
+            max_chars=AI_CONTEXT_TEXT_MAX_CHARS,
+        )
+
+        self.assertLessEqual(len(body), AI_CONTEXT_TEXT_MAX_CHARS)
+        self.assertIn("語彙ルール", body)
+        self.assertIn("Todo ではなく Task 作成を優先する", body)
+        self.assertIn("create_todo=受付だけ", body)
 
     def test_ai_status_missing_project_exits_cleanly(self) -> None:
         with TemporaryDirectory() as directory:

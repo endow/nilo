@@ -6,7 +6,7 @@ import json
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from ..ai_context import project_ai_context, render_ai_context_text
+from ..ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_ai_context_text
 from ..display_labels import field_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
@@ -104,7 +104,7 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
                     for warning in boundary_warning_lines(boundary):
                         print(warning)
                     print()
-                print(render_ai_context_text({key: value for key, value in data.items() if key != "project_boundary"}))
+                print(render_ai_context_text({key: value for key, value in data.items() if key != "project_boundary"}, max_chars=AI_CONTEXT_TEXT_MAX_CHARS))
             return
         if boundary.should_print_text():
             for line in boundary.text_lines():

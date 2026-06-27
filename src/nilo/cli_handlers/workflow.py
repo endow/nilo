@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from ..ai_context import project_ai_context, render_ai_context_text
+from ..ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_ai_context_text
 from ..cli import (
     AGENT_TARGET_FILES,
     LEGACY_AGENT_TARGET_FILES,
@@ -244,7 +244,7 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
             raise SystemExit(f"project not found: {project_id}")
         runtime_body = build_agent_instruction_block(project, "all")
         ai_context = project_ai_context(store, project_id)
-        status_body = render_ai_context_text(ai_context)
+        status_body = render_ai_context_text(ai_context, max_chars=AI_CONTEXT_TEXT_MAX_CHARS)
         failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
         failure_summary_lines = [
             f"{field_label('failure_summary')}:",
@@ -283,6 +283,8 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
         for item in long_descriptions[:5]:
             print(f"  - {item['name']}: {item['length']}")
         print(f"- status_ai_chars: {len(status_body)}")
+        print(f"- status_ai_max_chars: {AI_CONTEXT_TEXT_MAX_CHARS}")
+        print(f"- status_ai_within_budget: {len(status_body) <= AI_CONTEXT_TEXT_MAX_CHARS}")
         print(f"- open_failure_count: {failure_summary['open_failure_count']}")
         print(f"- high_open_failure_count: {failure_summary['high_open_failure_count']}")
         print(f"- failure_summary_chars: {failure_summary_chars}")
