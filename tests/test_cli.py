@@ -3039,6 +3039,55 @@ variables:
             self.assertNotIn("roadmap discuss", body)
             self.assertNotIn("大きな作業の可能性", body)
 
+    def test_next_focuses_newly_created_task_after_roadmap_task_plan(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_original",
+                        "--title",
+                        "Investigate missing task creation after implementation request",
+                        "--type",
+                        "research",
+                        "--risk",
+                        "low",
+                    ]
+                )
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_generated",
+                        "--title",
+                        "Implement Missing Task Creation After Implementation Request",
+                        "--type",
+                        "implementation",
+                        "--risk",
+                        "medium",
+                    ]
+                )
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            body = next_output.getvalue()
+            self.assertIn("タスク: task_generated", body)
+            self.assertNotIn("タスク: task_original", body)
+
     def test_next_allows_coherent_bug_fix_with_multiple_file_references(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"

@@ -1333,7 +1333,6 @@ def review_worker_recovery_action(reviewer: str, review_id: str, availability: s
 def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     refresh_review_dispatch_state(store, project_id)
     tasks = store.list_where("tasks", "project_id=?", (project_id,))
-    tasks = list(reversed(tasks))
     statuses = {task["id"]: projected_task_status(store, task) for task in tasks}
     return tasks, statuses
 
