@@ -324,6 +324,8 @@ Review handoff:
 - MCP は通常入口ではない。必要な連携場面でだけ使う。
 - AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
 - `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は MCP 不可時の CLI reviewer process fallback または human-launch 専用。理由を説明してから使う。
+- review サブコマンドは各 help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
+- repository 固定は CLI は対象 cwd、MCP は `project_root` と identity guard を使う
 
 MCP identity guard:
 - MCP tool が呼べる場合でも、それだけで正しい Nilo 状態とは判断しない。
