@@ -11,7 +11,7 @@ from ..display_labels import field_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
 from ..open_state import open_state_detector
-from ..project_logic import refresh_review_dispatch_state
+from ..project_logic import fast_project_tasks_and_recorded_statuses, fast_unfinished_verification_targets
 from ..project_boundary import (
     ProjectBoundaryError,
     assert_self_development_allowed,
@@ -20,13 +20,14 @@ from ..project_boundary import (
 )
 from ..snapshot import current_git_snapshot
 from ..store import Store
-from ..task_logic import active_task_completion, completion_audit_issues
+from ..task_logic import active_task_completion, completion_audit_issues, is_task_completed_status
 from ..timeutil import now_iso
 from ..workflow_context import workflow_context
 from .task import cmd_task_complete, cmd_task_create
 from .workflow import cmd_outcome_record, cmd_report_import, cmd_verification_run
 
 QUEUE_TODO_STATUSES = {"open", "ready", "triaged", "blocked", "requires_roadmap", "deferred"}
+NEXT_TODO_STATUS_PRIORITY = {"ready": 0, "requires_roadmap": 1}
 
 
 def default_project_id(args: argparse.Namespace) -> str:
@@ -34,24 +35,31 @@ def default_project_id(args: argparse.Namespace) -> str:
 
 
 def active_tasks_for_project(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
-    from .. import cli as c
-
-    tasks, statuses = c.project_tasks_and_statuses(store, project_id)
-    return [task for task in tasks if not c.is_task_completed_status(statuses[task["id"]])], statuses
+    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    return [task for task in tasks if not is_task_completed_status(statuses[task["id"]])], statuses
 
 
 def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
-    from .. import cli as c
-
-    for task in store.list_where("tasks", "project_id=?", (project_id,)):
-        status = c.projected_task_status(store, task)
-        if not c.is_task_completed_status(status):
+    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    for task in tasks:
+        if not is_task_completed_status(statuses[task["id"]]):
             return task
     return None
 
 
 def unresolved_project_state(store: Store, project_id: str, *, verbose: bool = False) -> dict:
     return open_state_detector(store, project_id, verbose=verbose)
+
+
+def first_next_todo_for_project(store: Store, project_id: str) -> dict | None:
+    todos = [
+        item
+        for item in store.list_where("todos", "project_id=?", (project_id,))
+        if item["status"] in NEXT_TODO_STATUS_PRIORITY
+    ]
+    if not todos:
+        return None
+    return sorted(todos, key=lambda item: (NEXT_TODO_STATUS_PRIORITY[item["status"]], item["created_at"], item["id"]))[0]
 
 
 def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbose: bool = False) -> dict:
@@ -63,8 +71,9 @@ def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbo
     tasks = []
     completion_audit_tasks = []
     snapshot = current_git_snapshot(Path.cwd()) if audit else None
-    for task in store.list_where("tasks", "project_id=?", (project_id,)):
-        status = c.projected_task_status(store, task)
+    task_rows, recorded_statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    for task in task_rows:
+        status = c.projected_task_status(store, task, current_snapshot=snapshot) if audit else recorded_statuses[task["id"]]
         if c.is_task_completed_status(status):
             if audit:
                 audit_issues = completion_audit_issues(store, task, current_snapshot=snapshot)
@@ -108,7 +117,7 @@ def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbo
                 "kind": todo["kind"],
             }
         )
-    unresolved = unresolved_project_state(store, project_id, verbose=verbose)
+    unresolved = unresolved_project_state(store, project_id, verbose=verbose) if (audit or verbose) else {}
     unresolved_total = sum(value for key, value in unresolved.items() if isinstance(value, int))
     return {
         "project_id": project_id,
@@ -132,7 +141,7 @@ def no_active_task_recovery_message(project_id: str) -> str:
         f"active task not found for project: {project_id}. "
         "Before implementation, create or select a Nilo task. "
         f'For a concrete implementation request, run `nilo start "<short title>" --project {project_id}`, '
-        "then rerun `nilo check ...` or pass `--task <task_id>`."
+        "then rerun `nilo check --task <task_id> \"...\"`."
     )
 
 
@@ -140,10 +149,12 @@ def multiple_active_tasks_recovery_message(project_id: str, active_tasks: list[d
     sorted_tasks = sorted(active_tasks, key=lambda task: task["id"])
     ids = ", ".join(task["id"] for task in sorted_tasks[:5])
     suffix = "" if len(active_tasks) <= 5 else f", ... ({len(active_tasks)} total)"
+    example = sorted_tasks[0]["id"] if sorted_tasks else "<task_id>"
     return (
         f"multiple active tasks for project: {project_id}. "
         "nilo check refuses to guess because verification evidence must be attached to exactly one task. "
         f"Pass `--task <task_id>` to record this verification on the intended task: {ids}{suffix}. "
+        f"Example: `nilo check --task {example} \"...\"`. "
         "If this command is not evidence for any active task, do not attach it to an unrelated task; "
         "run it outside `nilo check` or create/select the correct task first."
     )
@@ -166,6 +177,32 @@ def resolve_task_id(args: argparse.Namespace, store: Store) -> str:
     if len(active_tasks) > 1:
         raise SystemExit(multiple_active_tasks_recovery_message(project_id, active_tasks))
     return active_tasks[0]["id"]
+
+
+def explicit_check_task_warning(store: Store, task: dict) -> str:
+    status = fast_project_tasks_and_recorded_statuses(store, task["project_id"])[1].get(task["id"], task["status"])
+    if is_task_completed_status(status):
+        return f"warning: recording verification on completed task {task['id']} ({status_label(status)}) because --task was explicit"
+    return ""
+
+
+def resolve_check_task_id(args: argparse.Namespace, store: Store) -> tuple[str, str]:
+    if getattr(args, "task", None):
+        task = store.get("tasks", args.task)
+        if not task:
+            raise SystemExit(f"task not found: {args.task}")
+        return args.task, explicit_check_task_warning(store, task)
+
+    project_id = default_project_id(args)
+    project = store.get("projects", project_id)
+    if not project:
+        raise SystemExit(f"project not found: {project_id}")
+    candidates = fast_unfinished_verification_targets(store, project_id)
+    if not candidates:
+        raise SystemExit(no_active_task_recovery_message(project_id))
+    if len(candidates) > 1:
+        raise SystemExit(multiple_active_tasks_recovery_message(project_id, candidates))
+    return candidates[0]["id"], ""
 
 
 def summary_for_project(store: Store, project_id: str) -> dict:
@@ -196,7 +233,7 @@ def print_facade_next_for_task(store: Store, task_id: str) -> None:
     if pending_review:
         print(f"- {human_next_action_text(p.next_action_for_review_request(store, pending_review))}")
         return
-    for action in p.task_next_actions(task, status, verification_run, unexecuted):
+    for action in p.task_next_actions(task, status, verification_run, unexecuted)[:1]:
         print(f"- {human_next_action_text(action)}")
 
 
@@ -279,7 +316,6 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         project = store.get("projects", project_id)
         if not project:
             raise SystemExit(f"project not found: {project_id}")
-        refresh_review_dispatch_state(store, project_id)
         workflow = workflow_context(store, project_id)
         if workflow.get("type") == "recipe_run":
             print(f"{field_label('project')}: {project_id} ({project['name']})")
@@ -304,14 +340,16 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         if active_task:
             print_facade_next_for_task(store, active_task["id"])
             return
-        summary = summary_for_project(store, project_id)
-        print(f"{field_label('project')}: {summary['project_id']} ({summary['project_name']})")
+        print(f"{field_label('project')}: {project_id} ({project['name']})")
         print(f"{field_label('next_action')}:")
-        actions = summary["next_actions"] or []
-        if actions:
-            print(f"- {human_next_action_text(actions[0])}")
+        todo = first_next_todo_for_project(store, project_id)
+        if todo:
+            if todo["status"] == "requires_roadmap":
+                print(f"- この依頼は大きめなので、作業計画の確認後に Task 化します。{todo['id']}: {todo['title']}")
+            else:
+                print(f"- 実行できる依頼を具体的な Task にします。{todo['id']}: {todo['title']}")
         else:
-            print("- なし")
+            print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
     finally:
         store.close()
 
@@ -321,24 +359,25 @@ def cmd_facade_queue(args: argparse.Namespace) -> None:
     store = Store(args.db)
     try:
         verbose = bool(getattr(args, "verbose", False))
-        data = work_queue_data(store, project_id, audit=bool(getattr(args, "audit", False)), verbose=verbose or bool(getattr(args, "json", False)))
+        data = work_queue_data(store, project_id, audit=bool(getattr(args, "audit", False)), verbose=verbose)
         if getattr(args, "json", False):
             print(json.dumps(data, ensure_ascii=False, indent=2))
             return
         print(f"{field_label('project')}: {data['project_id']} ({data['project_name']})")
         print(f"queue: total={data['counts']['total']} tasks={data['counts']['tasks']} todos={data['counts']['todos']}")
         unresolved = data["unresolved_project_state"]
-        unresolved_summary = (
-            f"failures={unresolved['failures']} review_findings={unresolved['review_findings']} "
-            f"evidence_issues={unresolved['evidence_issues']} roadmap_commitments={unresolved['roadmap_commitments']} "
-            f"pending_roadmap_revisions={unresolved['pending_roadmap_revisions']} "
-            f"invalid_completions={unresolved['invalid_completions']} "
-            f"review_dispatches={unresolved['review_dispatches']} overdrive_runs={unresolved['overdrive_runs']}"
-        )
-        if data["counts"]["total"] == 0 and data["counts"]["unresolved_project_state"]:
-            print(f"task/todo queue is empty, but unresolved project state remains: {unresolved_summary}")
-        else:
-            print(f"unresolved_project_state: {unresolved_summary}")
+        if unresolved:
+            unresolved_summary = (
+                f"failures={unresolved['failures']} review_findings={unresolved['review_findings']} "
+                f"evidence_issues={unresolved['evidence_issues']} roadmap_commitments={unresolved['roadmap_commitments']} "
+                f"pending_roadmap_revisions={unresolved['pending_roadmap_revisions']} "
+                f"invalid_completions={unresolved['invalid_completions']} "
+                f"review_dispatches={unresolved['review_dispatches']} overdrive_runs={unresolved['overdrive_runs']}"
+            )
+            if data["counts"]["total"] == 0 and data["counts"]["unresolved_project_state"]:
+                print(f"task/todo queue is empty, but unresolved project state remains: {unresolved_summary}")
+            else:
+                print(f"unresolved_project_state: {unresolved_summary}")
         if data["counts"]["completion_audit_tasks"] and not getattr(args, "audit", False):
             print(f"completion_audit: {data['counts']['completion_audit_tasks']} completed task(s) need audit; rerun with --audit")
         print(f"{field_label('tasks')}:")
@@ -414,9 +453,11 @@ def cmd_facade_start(args: argparse.Namespace) -> None:
 def cmd_facade_check(args: argparse.Namespace) -> None:
     store = Store(args.db)
     try:
-        task_id = resolve_task_id(args, store)
+        task_id, warning = resolve_check_task_id(args, store)
     finally:
         store.close()
+    if warning:
+        print(warning)
     cmd_verification_run(argparse.Namespace(db=args.db, task=task_id, command=args.command, mode=args.mode, timeout=args.timeout))
 
 

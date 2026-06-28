@@ -11,7 +11,7 @@ def add_project_option(parser: argparse.ArgumentParser) -> None:
 
 
 def add_task_option(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--task", help="Task id. Defaults to the single active task in the project.")
+    parser.add_argument("--task", help="Task id. Recommended for verification; omitted only when one unfinished project task is a safe target.")
 
 
 def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> None:
@@ -46,7 +46,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     start.add_argument("--self-development", action="store_true")
     start.set_defaults(func=handlers.cmd_facade_start)
 
-    check = sub.add_parser("check")
+    check = sub.add_parser("check", help="Run and record verification. Prefer --task to avoid ambiguous evidence targets.")
     check.add_argument("command")
     add_project_option(check)
     add_task_option(check)

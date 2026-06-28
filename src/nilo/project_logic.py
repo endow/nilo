@@ -11,7 +11,7 @@ from .review_lifecycle import update_review_request
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
 from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status, review_result_status
 from .store import Store
-from .task_logic import active_task_completion, is_task_completed_status, projected_task_status, unresolved_blocking_review_findings
+from .task_logic import active_task_completion, is_task_completed_status, outcome_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
 
 
@@ -1377,6 +1377,101 @@ def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict
     current_snapshot = current_git_snapshot(Path.cwd())
     statuses = {task["id"]: projected_task_status(store, task, current_snapshot=current_snapshot) for task in tasks}
     return tasks, statuses
+
+
+def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
+    """Return project tasks and their latest recorded status without snapshot/audit work."""
+    tasks = store.list_where("tasks", "project_id=?", (project_id,))
+    if not tasks:
+        return tasks, {}
+    rows = store.conn.execute(
+        """
+        WITH events AS (
+          SELECT id AS task_id, id AS event_id, 'task' AS source, status AS status, created_at, rowid AS event_rowid, 10 AS priority FROM tasks WHERE project_id=?
+          UNION ALL
+          SELECT u.task_id, u.id AS event_id, 'understanding' AS source, u.status AS status, u.created_at, u.rowid AS event_rowid, 20 AS priority FROM understanding_checks u JOIN tasks t ON t.id=u.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT i.task_id, i.id AS event_id, 'instruction' AS source, 'instruction_generated' AS status, i.created_at, i.rowid AS event_rowid, 30 AS priority FROM instructions i JOIN tasks t ON t.id=i.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT r.task_id, r.id AS event_id, 'agent_report' AS source, 'agent_reported' AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT rr.task_id, rr.id AS event_id, 'review_request' AS source, CASE
+            WHEN rr.status='requested' THEN 'review_requested'
+            WHEN rr.status='reviewer_unavailable' THEN 'review_reviewer_unavailable'
+            WHEN rr.status='claimed' THEN 'review_claimed'
+            WHEN rr.status='in_progress' THEN 'review_in_progress'
+            WHEN rr.status='stale' THEN 'review_stale'
+            ELSE 'review_requested'
+          END AS status, rr.updated_at AS created_at, rr.rowid AS event_rowid, 45 AS priority FROM review_requests rr JOIN tasks t ON t.id=rr.task_id WHERE t.project_id=? AND rr.status IN ('requested', 'reviewer_unavailable', 'claimed', 'in_progress', 'stale')
+          UNION ALL
+          SELECT v.task_id, v.id AS event_id, 'verification_run' AS source, CASE WHEN v.timed_out=1 THEN 'verification_timed_out' WHEN v.exit_code=0 THEN 'verification_passed' ELSE 'verification_failed' END AS status, v.created_at, v.rowid AS event_rowid, 55 AS priority FROM verification_runs v JOIN tasks t ON t.id=v.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT rv.task_id, rv.id AS event_id, 'review_result' AS source, CASE WHEN rv.verdict='approved' THEN 'review_approved' WHEN rv.verdict='changes_requested' THEN 'review_changes_requested' ELSE 'review_commented' END AS status, rv.created_at, rv.rowid AS event_rowid, 65 AS priority FROM review_results rv JOIN tasks t ON t.id=rv.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT rfu.task_id, rfu.id AS event_id, 'review_finding_update' AS source, 'review_changes_requested' AS status, rfu.created_at, rfu.rowid AS event_rowid, 66 AS priority FROM review_finding_updates rfu JOIN tasks t ON t.id=rfu.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT c.task_id, c.id AS event_id, 'completion' AS source, CASE WHEN c.actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, c.created_at, c.rowid AS event_rowid, 70 AS priority FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE t.project_id=? AND COALESCE(c.invalidated_at, '')=''
+          UNION ALL
+          SELECT e.entity_id AS task_id, e.id AS event_id, 'outcome' AS source, e.new_state AS status, e.created_at, e.rowid AS event_rowid, 75 AS priority FROM transition_events e JOIN tasks t ON t.id=e.entity_id WHERE t.project_id=? AND e.entity_type='task' AND e.transition='record_outcome_decision' AND e.new_state IN ('rejected', 'partial_accept', 'rework_required')
+        ),
+        ranked AS (
+          SELECT task_id, source, status, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
+        )
+        SELECT task_id, source, status FROM ranked WHERE rank=1
+        """,
+        (project_id,) * 10,
+    ).fetchall()
+    statuses = {task["id"]: task["status"] for task in tasks}
+    review_update_task_ids = [row["task_id"] for row in rows if row["source"] == "review_finding_update"]
+    unresolved_counts: dict[str, int] = {}
+    latest_review_verdicts: dict[str, str] = {}
+    if review_update_task_ids:
+        placeholders = ",".join("?" for _ in review_update_task_ids)
+        unresolved_rows = store.conn.execute(
+            f"""
+            SELECT task_id, COUNT(*) AS count
+            FROM review_findings
+            WHERE task_id IN ({placeholders}) AND status='unresolved'
+            GROUP BY task_id
+            """,
+            tuple(review_update_task_ids),
+        ).fetchall()
+        unresolved_counts = {row["task_id"]: row["count"] for row in unresolved_rows}
+        review_rows = store.conn.execute(
+            f"""
+            WITH ranked AS (
+              SELECT task_id, verdict, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC, rowid DESC) AS rank
+              FROM review_results
+              WHERE task_id IN ({placeholders})
+            )
+            SELECT task_id, verdict FROM ranked WHERE rank=1
+            """,
+            tuple(review_update_task_ids),
+        ).fetchall()
+        latest_review_verdicts = {row["task_id"]: row["verdict"] for row in review_rows}
+    for row in rows:
+        status = row["status"]
+        if row["source"] == "outcome":
+            status = outcome_status(status)
+        elif row["source"] == "review_finding_update" and not unresolved_counts.get(row["task_id"], 0):
+            status = "review_approved" if latest_review_verdicts.get(row["task_id"]) == "approved" else "review_commented"
+        statuses[row["task_id"]] = status
+    return tasks, statuses
+
+
+def fast_unfinished_verification_targets(store: Store, project_id: str) -> list[dict]:
+    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    blocked = {
+        "accepted_by_user",
+        "accepted_with_concerns",
+        "cancelled",
+        "canceled",
+        "completed_by_ai",
+        "completed_by_user",
+        "completion_needs_review",
+        "rejected_by_user",
+    }
+    return [task for task in tasks if statuses.get(task["id"], task["status"]) not in blocked]
 
 
 def print_roadmap_agent_state(state: dict | None) -> None:

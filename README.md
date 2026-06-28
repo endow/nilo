@@ -358,12 +358,13 @@ nilo roadmap --help
 テストは目的に合わせて `quick` / `targeted` / `full` を選びます。timeout は選んだ範囲の保険であり、全体テストを常用するための前提ではありません。
 
 ```bash
-nilo check "python -m unittest tests.test_verification" --project nilo --mode quick --timeout 60
-nilo check "python tests/run_cli_group.py verification" --project nilo --mode targeted --timeout 120
-nilo check "python tests/run_shards.py --all --jobs auto" --project nilo --mode full --timeout 300
+nilo check --task <task_id> "python -m unittest tests.test_verification" --project nilo --mode quick --timeout 60
+nilo check --task <task_id> "python tests/run_cli_group.py verification" --project nilo --mode targeted --timeout 120
+nilo check --task <task_id> "python tests/run_shards.py --all --jobs auto" --project nilo --mode full --timeout 300
 ```
 
 `quick` は狭い smoke check、`targeted` は変更領域や `tests.test_cli` の一部、`full` は release や広範囲の変更で使います。開発中は変更ファイルに応じた shard を短時間で走らせます:
+`nilo check` は原則 `--task` を付けて実行します。省略できるのは、安全に一意な未完了 verification target が1件だけの場合です。
 
 ```bash
 python tests/run_shards.py --changed --jobs auto

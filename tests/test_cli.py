@@ -1419,9 +1419,9 @@ variables:
                 main(["--db", str(db), "queue", "--project", "project_test"])
             body = output.getvalue()
 
-            self.assertIn("queue: total=4 tasks=2 todos=2", body)
-            self.assertIn("unresolved_project_state: failures=1", body)
-            self.assertIn("task_done [完了記録の確認が必要] documentation medium Done task", body)
+            self.assertIn("queue: total=3 tasks=1 todos=2", body)
+            self.assertNotIn("unresolved_project_state:", body)
+            self.assertNotIn("task_done", body)
             self.assertIn("task_active [計画済み] implementation medium Active task", body)
             self.assertIn("todo_open [未解決] normal Open todo", body)
             self.assertIn("todo_ready [着手可能] normal Ready todo", body)
@@ -1436,7 +1436,7 @@ variables:
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
 
             output = io.StringIO()
-            with redirect_stdout(output):
+            with patch("nilo.cli_handlers.facade.unresolved_project_state", side_effect=AssertionError("deep diagnostics should not run")), redirect_stdout(output):
                 main(["--db", str(db), "queue", "--project", "project_test", "--json"])
 
             data = json.loads(output.getvalue())
@@ -1471,11 +1471,90 @@ variables:
                 store.close()
             output = io.StringIO()
             with redirect_stdout(output):
-                main(["--db", str(db), "queue", "--project", "project_test"])
+                main(["--db", str(db), "queue", "--project", "project_test", "--verbose"])
             body = output.getvalue()
             self.assertIn("queue: total=0 tasks=0 todos=0", body)
             self.assertIn("task/todo queue is empty, but unresolved project state remains", body)
             self.assertIn("failures=1", body)
+
+    def test_queue_normal_path_does_not_run_unresolved_state_detector(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            output = io.StringIO()
+            with patch("nilo.cli_handlers.facade.unresolved_project_state", side_effect=AssertionError("deep diagnostics should not run")), redirect_stdout(output):
+                main(["--db", str(db), "queue", "--project", "project_test"])
+            body = output.getvalue()
+            self.assertIn("queue: total=0 tasks=0 todos=0", body)
+            self.assertNotIn("unresolved_project_state", body)
+
+    def test_task_list_fast_status_reconciles_resolved_review_findings(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_review", "--title", "Review task"])
+            store = Store(db)
+            try:
+                store.insert(
+                    "review_results",
+                    {
+                        "id": "review_result_test",
+                        "task_id": "task_review",
+                        "review_request_id": "review_request_test",
+                        "reviewer": "human",
+                        "verdict": "changes_requested",
+                        "summary": "changes requested",
+                        "based_on_event_id": "",
+                        "based_on_snapshot": {},
+                        "body_md": "",
+                        "created_at": "2099-01-01T00:00:01+00:00",
+                    },
+                )
+                store.insert(
+                    "review_findings",
+                    {
+                        "id": "finding_test",
+                        "task_id": "task_review",
+                        "review_request_id": "review_request_test",
+                        "review_result_id": "review_result_test",
+                        "title": "Fix it",
+                        "severity": "high",
+                        "status": "addressed",
+                        "file_path": "",
+                        "line": "",
+                        "blocking": 1,
+                        "description": "fixed",
+                        "created_at": "2099-01-01T00:00:02+00:00",
+                        "updated_at": "2099-01-01T00:00:03+00:00",
+                    },
+                )
+                store.insert(
+                    "review_finding_updates",
+                    {
+                        "id": "finding_update_test",
+                        "finding_id": "finding_test",
+                        "task_id": "task_review",
+                        "previous_status": "unresolved",
+                        "new_status": "addressed",
+                        "reason": "fixed",
+                        "actor": "ai",
+                        "decision_source": "",
+                        "human_confirmed": 0,
+                        "created_at": "2099-01-01T00:00:04+00:00",
+                    },
+                )
+            finally:
+                store.close()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "task", "list", "--project", "project_test"])
+            body = output.getvalue()
+            self.assertIn("task_review\treview_commented\timplementation\tmedium\tReview task", body)
+            self.assertNotIn("review_changes_requested", body)
 
     def test_queue_audit_and_doctor_detect_invalid_completed_task(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1531,7 +1610,7 @@ variables:
             db = Path(directory) / "nilo.db"
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task", "--type", "documentation"])
             store = Store(db)
             try:
                 store.insert(
@@ -1690,7 +1769,7 @@ variables:
                 help_body = help_output.getvalue()
                 self.assertIn("Start with `nilo status --ai`", help_body)
                 self.assertIn("Follow the first action shown by `nilo next`", help_body)
-                self.assertIn("record it with `nilo check --mode quick|targeted|full`", help_body)
+                self.assertIn('record it with `nilo check --task <task_id> "..." --mode quick|targeted|full`', help_body)
                 self.assertIn("Use quick for narrow smoke checks", help_body)
                 self.assertIn("Treat timeouts as guardrails", help_body)
                 self.assertIn("Work size:", help_body)
@@ -8533,7 +8612,7 @@ close 済み commitment を表示できるようにした。
         self.assertEqual(result["verdict"], "approved")
         self.assertIn("[completed] codex -> claude-code: transaction e2e", status_output.getvalue())
 
-    def test_project_next_marks_expired_claimed_review_stale(self) -> None:
+    def test_project_next_does_not_refresh_expired_claimed_review(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             with redirect_stdout(io.StringIO()):
@@ -8566,10 +8645,9 @@ close 済み commitment を表示できるようにした。
             finally:
                 store.close()
 
-        self.assertEqual(request["status"], "stale")
-        self.assertIn("claude-code reviewer is missing", next_output.getvalue())
+        self.assertEqual(request["status"], "claimed")
         self.assertIn("review review_expired_claim", next_output.getvalue())
-        self.assertNotIn("wait for MCP reviewer", next_output.getvalue())
+        self.assertIn("wait for MCP reviewer", next_output.getvalue())
 
     def test_project_next_explains_stale_review_with_heartbeat_only_reviewer(self) -> None:
         with TemporaryDirectory() as directory:
@@ -10482,7 +10560,7 @@ close 済み commitment を表示できるようにした。
             self.assertIn("active task not found for project: project_test", message)
             self.assertIn("Before implementation, create or select a Nilo task", message)
             self.assertIn('nilo start "<short title>" --project project_test', message)
-            self.assertIn("rerun `nilo check ...` or pass `--task <task_id>`", message)
+            self.assertIn('rerun `nilo check --task <task_id> "..."`', message)
 
     def test_facade_check_with_multiple_active_tasks_explains_evidence_target(self) -> None:
         with TemporaryDirectory() as directory:
@@ -10527,7 +10605,37 @@ close 済み commitment を表示できるようにした。
             self.assertIn("verification evidence must be attached to exactly one task", message)
             self.assertIn("Pass `--task <task_id>`", message)
             self.assertIn("task_first, task_second", message)
+            self.assertIn('Example: `nilo check --task task_first "..."`', message)
             self.assertIn("do not attach it to an unrelated task", message)
+
+    def test_facade_check_does_not_implicitly_select_completed_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task", "--type", "documentation"])
+                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+            with self.assertRaises(SystemExit) as raised:
+                main(["--db", str(db), "check", "python --version", "--project", "project_test"])
+
+            self.assertIn("active task not found for project: project_test", str(raised.exception))
+
+    def test_facade_check_explicit_completed_task_warns_and_records(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done task", "--type", "documentation"])
+                main(["--db", str(db), "task", "complete", "--task", "task_done", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "check", "python --version", "--task", "task_done"])
+
+            body = output.getvalue()
+            self.assertIn("warning: recording verification on completed task task_done", body)
+            self.assertIn("verification_run:", body)
 
     def test_status_surfaces_dirty_verification_working_tree(self) -> None:
         with TemporaryDirectory() as directory:

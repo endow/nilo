@@ -319,7 +319,7 @@ Normal work:
 - 検証済み dirty tree 由来の Nilo commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
-- 検証後は `nilo check` で記録する。
+- 検証後は原則 `nilo check --task <task_id> "..."`。省略は一意な未完了targetだけ。
 - 最終完了判断、commit、force、roadmap close は人間が行う。
 
 Review handoff:

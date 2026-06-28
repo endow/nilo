@@ -259,18 +259,20 @@ def cmd_task_update(args: argparse.Namespace) -> None:
 
 
 def cmd_task_list(args: argparse.Namespace) -> None:
+    from ..project_logic import fast_project_tasks_and_recorded_statuses
+
     store = Store(args.db)
     try:
         project = store.get("projects", args.project)
         if not project:
             raise SystemExit(f"project not found: {args.project}")
-        tasks = store.list_where("tasks", "project_id=?", (args.project,))
+        tasks, statuses = fast_project_tasks_and_recorded_statuses(store, args.project)
         for task in reversed(tasks):
             print(
                 "\t".join(
                     [
                         task["id"],
-                        projected_task_status(store, task),
+                        statuses[task["id"]],
                         task["task_type"],
                         task["risk_level"],
                         task["title"],

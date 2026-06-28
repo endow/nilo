@@ -18,7 +18,7 @@ AI_CONTEXT_TEXT_MAX_CHARS = 700
 def active_tasks(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     from . import project_logic as p
 
-    tasks, statuses = p.project_tasks_and_statuses(store, project_id)
+    tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
     return [task for task in tasks if not is_task_completed_status(statuses[task["id"]])], statuses
 
 
@@ -102,7 +102,7 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
     project = store.get("projects", project_id)
     if not project:
         raise ValueError(f"project not found: {project_id}")
-    tasks, statuses = p.project_tasks_and_statuses(store, project_id)
+    tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
     active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
     design_residue = p.project_design_residue()
     commitments = p.accepted_roadmap_commitments(store, project_id)
