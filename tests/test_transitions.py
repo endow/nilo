@@ -15,6 +15,7 @@ from nilo.transitions import (
     complete_task,
     create_task_from_todo,
     import_review_result,
+    resolve_failure,
     update_review_finding,
 )
 
@@ -194,6 +195,118 @@ class TransitionTests(unittest.TestCase):
                 with self.assertRaises(TransitionError) as ctx:
                     update_review_finding(store, "finding_test", status="accepted-risk", reason="risk accepted", actor="ai")
                 self.assertEqual(ctx.exception.code, "human_only")
+            finally:
+                store.close()
+
+    def test_task_completion_rejects_stale_expected_event_id(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                cwd = Path.cwd()
+                store.insert("verification_runs", verification_row("task_test", cwd))
+                with self.assertRaises(TransitionError) as ctx:
+                    complete_task(store, "task_test", actor="ai", reason="verified", cwd=cwd, expected_task_event_id="old_event")
+                self.assertEqual(ctx.exception.code, "stale_task_context")
+                self.assertEqual(store.list_where("task_completions", "task_id=?", ("task_test",)), [])
+            finally:
+                store.close()
+
+    def test_review_finding_update_rejects_stale_expected_status(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                store.insert(
+                    "review_findings",
+                    {
+                        "id": "finding_test",
+                        "task_id": "task_test",
+                        "review_request_id": "review_test",
+                        "review_result_id": "result_test",
+                        "title": "Risk",
+                        "severity": "high",
+                        "status": "addressed",
+                        "file_path": "",
+                        "line": "",
+                        "blocking": True,
+                        "description": "",
+                        "created_at": now_iso(),
+                        "updated_at": now_iso(),
+                    },
+                )
+                with self.assertRaises(TransitionError) as ctx:
+                    update_review_finding(store, "finding_test", status="unresolved", reason="stale", actor="ai", expected_status="unresolved")
+                self.assertEqual(ctx.exception.code, "stale_review_finding")
+                self.assertEqual(store.get("review_findings", "finding_test")["status"], "addressed")
+            finally:
+                store.close()
+
+    def test_todo_conversion_rejects_stale_expected_status(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                now = now_iso()
+                store.insert(
+                    "todos",
+                    {
+                        "id": "todo_test",
+                        "project_id": "project_test",
+                        "title": "Do later",
+                        "kind": "task",
+                        "status": "blocked",
+                        "description": "",
+                        "acceptance_hint": "",
+                        "priority": "medium",
+                        "source_type": "",
+                        "source_task_id": "",
+                        "roadmap_commitment_id": "",
+                        "roadmap_revision_id": "",
+                        "converted_task_id": "",
+                        "created_at": now,
+                        "triaged_at": "",
+                        "triage_reason": "",
+                    },
+                )
+                with self.assertRaises(TransitionError) as ctx:
+                    create_task_from_todo(store, "todo_test", task=task_row("task_from_todo"), actor="ai", expected_todo_status="ready")
+                self.assertEqual(ctx.exception.code, "stale_todo")
+                self.assertIsNone(store.get("tasks", "task_from_todo"))
+            finally:
+                store.close()
+
+    def test_failure_resolution_rejects_stale_expected_status(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                store.insert("verification_runs", verification_row("task_test", Path.cwd()))
+                store.insert(
+                    "failure_logs",
+                    {
+                        "id": "failure_test",
+                        "project_id": "project_test",
+                        "task_id": "task_test",
+                        "report_id": "",
+                        "category": "test",
+                        "message": "failed",
+                        "severity": "high",
+                        "source": "",
+                        "actor": "",
+                        "related_id": "",
+                        "snapshot": {},
+                        "status": "resolved",
+                        "resolved_at": "",
+                        "resolved_by": "",
+                        "resolution_note": "",
+                        "decision_note": "",
+                        "created_at": now_iso(),
+                    },
+                )
+                with self.assertRaises(TransitionError) as ctx:
+                    resolve_failure(store, "failure_test", actor="ai", reason="resolved", expected_status="open")
+                self.assertEqual(ctx.exception.code, "stale_failure")
             finally:
                 store.close()
 

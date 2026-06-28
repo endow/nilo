@@ -77,6 +77,20 @@ def _require_human_decision(actor: str, human_confirm: bool, decision_note: str,
         )
 
 
+def _require_expected(value: str, expected: str | None, code: str, message: str) -> None:
+    if expected is not None and value != expected:
+        raise TransitionError(code, message)
+
+
+def _require_task_event(store: Store, task_id: str, expected_event_id: str | None) -> None:
+    if expected_event_id is None:
+        return
+    latest = store.latest_task_status_event(task_id)
+    current_event_id = latest["event_id"] if latest else ""
+    if expected_event_id != current_event_id:
+        raise TransitionError("stale_task_context", f"stale task state: expected_event_id={expected_event_id}, current_event_id={current_event_id}")
+
+
 def _event(
     store: Store,
     transition: str,
@@ -198,12 +212,14 @@ def complete_task(
     decision_note: str = "",
     cwd: Path | None = None,
     completed_with_reservations: bool = False,
+    expected_task_event_id: str | None = None,
 ) -> TransitionResult:
     _require_actor(actor)
     cwd = cwd or Path.cwd()
     task = store.get("tasks", task_id)
     if not task:
         raise TransitionError("task_not_found", f"task not found: {task_id}")
+    _require_task_event(store, task_id, expected_task_event_id)
     previous_status = projected_task_status(store, task)
     latest_review = store.latest_for_task("review_results", task_id)
     _require_no_open_high_failure(store, task)
@@ -339,6 +355,7 @@ def record_outcome_decision(
     decision_source: str = "human_interactive",
     decision_note: str = "",
     cwd: Path | None = None,
+    expected_task_event_id: str | None = None,
 ) -> TransitionResult:
     if decision in {"accepted", "accepted_with_concerns"}:
         return complete_task(
@@ -351,6 +368,7 @@ def record_outcome_decision(
             decision_note="\n".join([decision_note or reason, *(concerns or [])]).strip(),
             cwd=cwd,
             completed_with_reservations=decision == "accepted_with_concerns",
+            expected_task_event_id=expected_task_event_id,
         )
     _require_actor(actor)
     task = store.get("tasks", task_id)
@@ -387,6 +405,7 @@ def accept_roadmap_revision(
     decision_note: str = "",
     human_confirm: bool = False,
     decision_source: str = "human_interactive",
+    expected_revision_status: str | None = None,
 ) -> TransitionResult:
     _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     revision = store.get("roadmap_revisions", revision_id)
@@ -394,6 +413,7 @@ def accept_roadmap_revision(
         raise TransitionError("roadmap_revision_not_found", f"roadmap revision not found: {revision_id}")
     if revision["status"] != "pending":
         raise TransitionError("roadmap_revision_not_pending", f"roadmap revision is not pending: {revision_id}")
+    _require_expected(revision["status"], expected_revision_status, "stale_roadmap_revision", f"stale roadmap revision state: expected={expected_revision_status}, current={revision['status']}")
     commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
     if not commitment:
         raise TransitionError("roadmap_commitment_not_found", f"roadmap commitment not found: {revision['proposed_commitment_id']}")
@@ -478,7 +498,7 @@ def adopt_roadmap_proposal(
 adopt_roadmap_proposal = atomic_transition(adopt_roadmap_proposal)
 
 
-def reject_roadmap_revision(store: Store, revision_id: str, *, actor: str, reason: str, decision_note: str = "", human_confirm: bool = False, decision_source: str = "human_interactive") -> TransitionResult:
+def reject_roadmap_revision(store: Store, revision_id: str, *, actor: str, reason: str, decision_note: str = "", human_confirm: bool = False, decision_source: str = "human_interactive", expected_revision_status: str | None = None) -> TransitionResult:
     _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     revision = store.get("roadmap_revisions", revision_id)
     if not revision:
@@ -486,6 +506,7 @@ def reject_roadmap_revision(store: Store, revision_id: str, *, actor: str, reaso
     commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
     if revision["status"] != "pending":
         raise TransitionError("roadmap_revision_not_pending", f"roadmap revision is not pending: {revision_id}")
+    _require_expected(revision["status"], expected_revision_status, "stale_roadmap_revision", f"stale roadmap revision state: expected={expected_revision_status}, current={revision['status']}")
     rejected_at = now_iso()
     store.update("roadmap_revisions", revision_id, {"status": "rejected", "reason": reason, "decided_by": actor, "decision_source": decision_source, "decision_note": decision_note or reason, "human_confirmed": human_confirm, "accepted_at": rejected_at})
     if commitment:
@@ -508,6 +529,7 @@ def close_roadmap_commitment(
     force: bool = False,
     human_confirm: bool = False,
     decision_source: str = "",
+    expected_commitment_status: str | None = None,
 ) -> TransitionResult:
     _require_actor(actor)
     commitment = store.get("roadmap_commitments", commitment_id)
@@ -515,6 +537,7 @@ def close_roadmap_commitment(
         raise TransitionError("roadmap_commitment_not_found", f"roadmap commitment not found: {commitment_id}")
     if commitment["status"] != "accepted":
         raise TransitionError("roadmap_commitment_not_accepted", f"roadmap commitment is not accepted: {commitment_id}")
+    _require_expected(commitment["status"], expected_commitment_status, "stale_roadmap_commitment", f"stale roadmap commitment state: expected={expected_commitment_status}, current={commitment['status']}")
     if force:
         _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     elif not closure_ready:
@@ -541,11 +564,13 @@ def resolve_failure(
     human_confirm: bool = False,
     decision_source: str = "",
     decision_note: str = "",
+    expected_status: str | None = None,
 ) -> TransitionResult:
     _require_actor(actor)
     failure = store.get("failure_logs", failure_id)
     if not failure:
         raise TransitionError("failure_not_found", f"failure not found: {failure_id}")
+    _require_expected(failure["status"], expected_status, "stale_failure", f"stale failure state: expected={expected_status}, current={failure['status']}")
     if actor == "human":
         _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     elif actor == "ai":
@@ -584,11 +609,13 @@ def ignore_failure(
     human_confirm: bool = False,
     decision_source: str = "human_interactive",
     decision_note: str = "",
+    expected_status: str | None = None,
 ) -> TransitionResult:
     _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     failure = store.get("failure_logs", failure_id)
     if not failure:
         raise TransitionError("failure_not_found", f"failure not found: {failure_id}")
+    _require_expected(failure["status"], expected_status, "stale_failure", f"stale failure state: expected={expected_status}, current={failure['status']}")
     store.update(
         "failure_logs",
         failure_id,
@@ -641,6 +668,7 @@ def update_review_finding(
     actor: str,
     human_confirm: bool = False,
     decision_source: str = "",
+    expected_status: str | None = None,
 ) -> TransitionResult:
     _require_actor(actor)
     if status not in VALID_FINDING_STATUSES:
@@ -648,6 +676,7 @@ def update_review_finding(
     finding = store.get("review_findings", finding_id)
     if not finding:
         raise TransitionError("review_finding_not_found", f"review finding not found: {finding_id}")
+    _require_expected(finding["status"], expected_status, "stale_review_finding", f"stale review finding state: expected={expected_status}, current={finding['status']}")
     if status == "accepted-risk":
         _require_human_decision(actor, human_confirm, reason, decision_source)
     warnings: list[str] = []
@@ -676,11 +705,13 @@ def triage_todo(
     decision_source: str = "",
     commitment_id: str = "",
     roadmap_revision_id: str = "",
+    expected_status: str | None = None,
 ) -> TransitionResult:
     _require_actor(actor)
     todo = store.get("todos", todo_id)
     if not todo:
         raise TransitionError("todo_not_found", f"todo not found: {todo_id}")
+    _require_expected(todo["status"], expected_status, "stale_todo", f"stale todo state: expected={expected_status}, current={todo['status']}")
     if status in {"rejected", "deferred"} and not (human_confirm and actor == "human") and not (commitment_id or roadmap_revision_id):
         raise TransitionError("todo_close_decision_required", "closing a todo requires human confirmation or a linked successor")
     if status in {"rejected", "deferred"} and actor == "human":
@@ -700,11 +731,12 @@ def triage_todo(
 triage_todo = atomic_transition(triage_todo)
 
 
-def create_task_from_todo(store: Store, todo_id: str, *, task: dict, actor: str, reason: str = "") -> TransitionResult:
+def create_task_from_todo(store: Store, todo_id: str, *, task: dict, actor: str, reason: str = "", expected_todo_status: str | None = None) -> TransitionResult:
     _require_actor(actor)
     todo = store.get("todos", todo_id)
     if not todo:
         raise TransitionError("todo_not_found", f"todo not found: {todo_id}")
+    _require_expected(todo["status"], expected_todo_status, "stale_todo", f"stale todo state: expected={expected_todo_status}, current={todo['status']}")
     store.insert("tasks", task)
     store.update("todos", todo_id, {"status": "converted_to_task", "converted_task_id": task["id"], "triaged_at": now_iso(), "triage_reason": reason or f"converted to task {task['id']}", "actor": actor, "decision_source": "successor_link", "superseded_by_type": "task", "superseded_by_id": task["id"]})
     _event(store, "create_task_from_todo", "todo", todo_id, actor=actor, reason=reason, previous_state=todo["status"], new_state="converted_to_task", related_ids={"task": task["id"]})
@@ -714,11 +746,12 @@ def create_task_from_todo(store: Store, todo_id: str, *, task: dict, actor: str,
 create_task_from_todo = atomic_transition(create_task_from_todo)
 
 
-def promote_todo_to_roadmap_proposal(store: Store, todo_id: str, *, commitment: dict, revision: dict, actor: str, reason: str) -> TransitionResult:
+def promote_todo_to_roadmap_proposal(store: Store, todo_id: str, *, commitment: dict, revision: dict, actor: str, reason: str, expected_todo_status: str | None = None) -> TransitionResult:
     _require_actor(actor)
     todo = store.get("todos", todo_id)
     if not todo:
         raise TransitionError("todo_not_found", f"todo not found: {todo_id}")
+    _require_expected(todo["status"], expected_todo_status, "stale_todo", f"stale todo state: expected={expected_todo_status}, current={todo['status']}")
     store.insert("roadmap_commitments", commitment)
     store.insert("roadmap_revisions", revision)
     store.update("todos", todo_id, {"status": "superseded", "roadmap_revision_id": revision["id"], "triaged_at": now_iso(), "triage_reason": reason, "actor": actor, "decision_source": "successor_link", "superseded_by_type": "roadmap_revision", "superseded_by_id": revision["id"]})

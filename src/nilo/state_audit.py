@@ -8,6 +8,21 @@ from .store import Store
 from .task_logic import active_task_completion, unresolved_review_findings
 
 
+VALID_TASK_STATUSES = {"planned"}
+VALID_TASK_TYPES = {"research", "design", "implementation", "test_addition", "verification", "review", "refactor", "documentation"}
+VALID_RISK_LEVELS = {"low", "medium", "high"}
+VALID_DECISION_ACTORS = {"human", "ai"}
+VALID_REVIEW_REQUEST_STATUSES = {"requested", "reviewer_unavailable", "claimed", "in_progress", "stale", "completed", "withdrawn", "superseded", "failed"}
+VALID_REVIEW_VERDICTS = {"approved", "commented", "changes_requested", "rejected"}
+VALID_FINDING_STATUSES = {"unresolved", "addressed", "accepted-risk"}
+VALID_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+VALID_FAILURE_STATUSES = {"open", "resolved", "ignored"}
+VALID_TODO_STATUSES = {"open", "ready", "triaged", "blocked", "requires_roadmap", "deferred", "rejected", "superseded", "converted_to_task", "ad_hoc_approved"}
+VALID_ROADMAP_STATUSES = {"proposed", "pending", "accepted", "rejected", "closed"}
+VALID_UNDERSTANDING_STATUSES = {"understanding_required", "understanding_reported", "approved_to_implement"}
+VALID_TRANSITION_ACTORS = {"human", "ai", "nilo", "codex", "claude-code", "transition_audit"}
+
+
 def _finding(code: str, message: str, *, severity: str = "warning", entity_type: str = "", entity_id: str = "", remediation: str = "") -> dict[str, Any]:
     return {
         "code": code,
@@ -87,9 +102,125 @@ def task_completion_invalid(
     return any(item["severity"] == "error" for item in audit_task(store, task_id, cwd=cwd, current_snapshot=current_snapshot))
 
 
+def _boolish_valid(value: Any) -> bool:
+    return value in {0, 1, False, True}
+
+
+def _project_task_ids(store: Store, project_id: str) -> tuple[list[dict[str, Any]], set[str]]:
+    tasks = store.list_where("tasks", "project_id=?", (project_id,))
+    return tasks, {task["id"] for task in tasks}
+
+
+def _task_scoped_rows(store: Store, table: str, task_ids: set[str]) -> list[dict[str, Any]]:
+    if not task_ids:
+        return []
+    return store.list_where(table, "task_id IN (%s)" % ",".join("?" for _ in task_ids), tuple(task_ids))
+
+
+def _related_id_values(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        values: set[str] = set()
+        for item in value.values():
+            values.update(_related_id_values(item))
+        return values
+    if isinstance(value, list):
+        values = set()
+        for item in value:
+            values.update(_related_id_values(item))
+        return values
+    if isinstance(value, str):
+        return {part.strip() for part in value.split(",") if part.strip()}
+    return set()
+
+
+def audit_schema_invariants(store: Store, project_id: str) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    tasks, task_ids = _project_task_ids(store, project_id)
+    completions = _task_scoped_rows(store, "task_completions", task_ids)
+    review_requests = _task_scoped_rows(store, "review_requests", task_ids)
+    review_results = _task_scoped_rows(store, "review_results", task_ids)
+    review_findings = _task_scoped_rows(store, "review_findings", task_ids)
+    failures = store.list_where("failure_logs", "project_id=?", (project_id,))
+    todos = store.list_where("todos", "project_id=?", (project_id,))
+    roadmap_commitments = store.list_where("roadmap_commitments", "project_id=?", (project_id,))
+    roadmap_revisions = store.list_where("roadmap_revisions", "project_id=?", (project_id,))
+    understanding_checks = _task_scoped_rows(store, "understanding_checks", task_ids)
+    transition_scope_ids = set(task_ids)
+    for rows in (completions, review_requests, review_results, review_findings, failures, todos, roadmap_commitments, roadmap_revisions, understanding_checks):
+        transition_scope_ids.update(row["id"] for row in rows)
+    for task in tasks:
+        if task["status"] not in VALID_TASK_STATUSES:
+            findings.append(_finding("task_invalid_status", f"invalid task status: {task['status']}", entity_type="task", entity_id=task["id"]))
+        if task["task_type"] not in VALID_TASK_TYPES:
+            findings.append(_finding("task_invalid_type", f"invalid task type: {task['task_type']}", entity_type="task", entity_id=task["id"]))
+        if task["risk_level"] not in VALID_RISK_LEVELS:
+            findings.append(_finding("task_invalid_risk_level", f"invalid risk level: {task['risk_level']}", entity_type="task", entity_id=task["id"]))
+    for completion in completions:
+        actor = completion.get("actor") or completion.get("completed_by") or ""
+        if actor not in VALID_DECISION_ACTORS:
+            findings.append(_finding("completion_invalid_actor", f"invalid completion actor: {actor}", entity_type="task_completion", entity_id=completion["id"]))
+        if not _boolish_valid(completion.get("human_confirmed")):
+            findings.append(_finding("completion_invalid_human_confirmed", "completion has invalid human_confirmed value", entity_type="task_completion", entity_id=completion["id"]))
+        if actor == "human" and not completion.get("human_confirmed"):
+            findings.append(_finding("completion_human_without_confirmation", "human completion lacks human confirmation", entity_type="task_completion", entity_id=completion["id"]))
+        events = store.list_where("transition_events", "transition='complete_task' AND entity_id=?", (completion["task_id"],))
+        if not any((event.get("related_ids") or {}).get("completion") == completion["id"] for event in events):
+            findings.append(_finding("completion_transition_event_missing", "task completion exists without matching transition audit event", entity_type="task_completion", entity_id=completion["id"]))
+    for request in review_requests:
+        if request["status"] not in VALID_REVIEW_REQUEST_STATUSES:
+            findings.append(_finding("review_request_invalid_status", f"invalid review request status: {request['status']}", entity_type="review_request", entity_id=request["id"]))
+    for result in review_results:
+        if result["verdict"] not in VALID_REVIEW_VERDICTS:
+            findings.append(_finding("review_result_invalid_verdict", f"invalid review verdict: {result['verdict']}", entity_type="review_result", entity_id=result["id"]))
+    for finding in review_findings:
+        if finding["status"] not in VALID_FINDING_STATUSES:
+            findings.append(_finding("review_finding_invalid_status", f"invalid review finding status: {finding['status']}", entity_type="review_finding", entity_id=finding["id"]))
+        if finding["severity"] not in VALID_FINDING_SEVERITIES:
+            findings.append(_finding("review_finding_invalid_severity", f"invalid review finding severity: {finding['severity']}", entity_type="review_finding", entity_id=finding["id"]))
+        if not _boolish_valid(finding.get("blocking")):
+            findings.append(_finding("review_finding_invalid_blocking", "review finding has invalid blocking value", entity_type="review_finding", entity_id=finding["id"]))
+    for failure in failures:
+        if failure["status"] not in VALID_FAILURE_STATUSES:
+            findings.append(_finding("failure_invalid_status", f"invalid failure status: {failure['status']}", entity_type="failure", entity_id=failure["id"]))
+        if failure.get("resolved_by") and failure["status"] in {"resolved", "ignored"} and failure["resolved_by"] not in VALID_DECISION_ACTORS:
+            findings.append(_finding("failure_invalid_resolved_by", f"invalid failure resolved_by: {failure['resolved_by']}", entity_type="failure", entity_id=failure["id"]))
+        if not _boolish_valid(failure.get("human_confirmed")):
+            findings.append(_finding("failure_invalid_human_confirmed", "failure has invalid human_confirmed value", entity_type="failure", entity_id=failure["id"]))
+    for todo in todos:
+        if todo["status"] not in VALID_TODO_STATUSES:
+            findings.append(_finding("todo_invalid_status", f"invalid todo status: {todo['status']}", entity_type="todo", entity_id=todo["id"]))
+    for commitment in roadmap_commitments:
+        if commitment["status"] not in VALID_ROADMAP_STATUSES:
+            findings.append(_finding("roadmap_commitment_invalid_status", f"invalid roadmap commitment status: {commitment['status']}", entity_type="roadmap_commitment", entity_id=commitment["id"]))
+        if not _boolish_valid(commitment.get("human_confirmed")):
+            findings.append(_finding("roadmap_commitment_invalid_human_confirmed", "roadmap commitment has invalid human_confirmed value", entity_type="roadmap_commitment", entity_id=commitment["id"]))
+    for revision in roadmap_revisions:
+        if revision["status"] not in VALID_ROADMAP_STATUSES:
+            findings.append(_finding("roadmap_revision_invalid_status", f"invalid roadmap revision status: {revision['status']}", entity_type="roadmap_revision", entity_id=revision["id"]))
+        if not _boolish_valid(revision.get("human_confirmed")):
+            findings.append(_finding("roadmap_revision_invalid_human_confirmed", "roadmap revision has invalid human_confirmed value", entity_type="roadmap_revision", entity_id=revision["id"]))
+    for check in understanding_checks:
+        if check["status"] not in VALID_UNDERSTANDING_STATUSES:
+            findings.append(_finding("understanding_invalid_status", f"invalid understanding status: {check['status']}", entity_type="understanding_check", entity_id=check["id"]))
+        if not _boolish_valid(check.get("human_confirmed")):
+            findings.append(_finding("understanding_invalid_human_confirmed", "understanding check has invalid human_confirmed value", entity_type="understanding_check", entity_id=check["id"]))
+    for event in store.list_where("transition_events", "1=1"):
+        related = event["entity_id"] in transition_scope_ids or bool(_related_id_values(event.get("related_ids")) & transition_scope_ids)
+        if not related:
+            continue
+        if not event.get("transition") or not event.get("entity_type") or not event.get("entity_id"):
+            findings.append(_finding("transition_event_empty_required_field", "transition event has empty required audit field", entity_type="transition_event", entity_id=event["id"]))
+        actor = event.get("actor") or ""
+        if not actor or (actor not in VALID_TRANSITION_ACTORS and not actor.startswith("reviewer:")):
+            findings.append(_finding("transition_event_invalid_actor", f"invalid transition actor: {actor}", entity_type="transition_event", entity_id=event["id"]))
+        if not _boolish_valid(event.get("human_confirmed")):
+            findings.append(_finding("transition_event_invalid_human_confirmed", "transition event has invalid human_confirmed value", entity_type="transition_event", entity_id=event["id"]))
+    return findings
+
+
 def audit_project(store: Store, project_id: str, *, cwd: Path | None = None) -> list[dict[str, Any]]:
     cwd = cwd or Path.cwd()
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = audit_schema_invariants(store, project_id)
     tasks = store.list_where("tasks", "project_id=?", (project_id,))
     task_ids = {task["id"] for task in tasks}
     for task in tasks:
