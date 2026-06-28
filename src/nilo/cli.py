@@ -320,7 +320,7 @@ Normal work:
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
 - 検証後は `nilo check --task <task_id> "..."`。省略は一意target。
-- 最終完了/commit/force/roadmap close は人間が行う。「コミットして完了で」は承認、`--human-acceptance`。
+- 最終完了/commit/force/roadmap close は人間が行う。commit、force、roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
@@ -328,7 +328,7 @@ Review handoff:
 - AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
 - `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は CLI reviewer process fallback/human-launch 専用。
 - review サブコマンドは各 help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
-- repository 固定は CLI cwd、MCP は `project_root` と identity guard
+- repository 固定: CLI cwd、MCP `project_root`
 
 MCP identity guard:
 - MCP tool が呼べる場合でも、それだけで正しい Nilo 状態とは判断しない。
