@@ -199,9 +199,10 @@ Small changes can proceed as normal tasks.
 For large work, AI agents recommend roadmap planning instead of creating it automatically: multi-module changes, schema/migration changes, CLI behavior changes, AI-facing output changes, or work that requires docs and tests together. Nilo creates the roadmap only after human approval, then splits the accepted plan into tasks.
 
 ```bash
-nilo roadmap discuss
-nilo roadmap accept
-nilo roadmap task-plan
+nilo roadmap discuss --project <project>
+nilo roadmap import --project <project> --file <roadmap_proposal.md>
+nilo roadmap accept --revision <roadmap_rev_id> --reason "<reason>" --actor human --human-confirm
+nilo roadmap task-plan --commitment <commitment_id>
 ```
 
 Roadmap keeps large AI work from turning into one unchecked implementation step.

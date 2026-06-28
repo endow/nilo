@@ -320,7 +320,7 @@ Normal work:
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
 - 検証後は `nilo check --task <task_id> "..."`。省略は一意target。
-- 最終完了/commit/force/roadmap close は人間が行う。commit、force、roadmap close は人間が行う。`--human-acceptance`。
+- 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
@@ -342,7 +342,7 @@ MCP identity guard:
 - 実装前に、その指示が小さい作業か大きい作業かを判定する。
 - 小さく明確なら通常 task。
 - 複数ファイルだけでは roadmap 扱いしない。明確な一まとまりの修正は通常 task。
-- 大きな作業は自動で roadmap 化せず人間に推奨する。承認後だけ `nilo roadmap discuss` -> `nilo roadmap task-plan`。
+- 大作業は自動 roadmap 化しない。承認後だけ `nilo roadmap discuss` -> RoadmapProposal `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
 
 質問抑制:
 - Nilo 出力や状態から一意推定できる不足値は質問しない。

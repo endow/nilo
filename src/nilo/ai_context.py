@@ -288,7 +288,10 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
     else:
         work_size_lines.append("- DB schema、CLI、AI向け出力、docs/tests は、複数機能・複数実装トラック・不明確な範囲などの広さがある場合に roadmap を推奨する。")
         work_size_lines.append("- 大きい作業だと判断した場合でも自動では roadmap を作らず、人間に作業計画化を推奨して判断を待つ。")
-        work_size_lines.append("- 人間が承認した場合だけ `nilo roadmap discuss` で作業計画を作る。")
+        work_size_lines.append(
+            "- 人間が承認した場合だけ `nilo roadmap discuss` で相談用コンテキストを作り、"
+            "RoadmapProposal を作成して `nilo roadmap import` または `nilo roadmap adopt` する。"
+        )
     vocabulary_lines = ["語彙ルール:"]
     if current:
         vocabulary_lines.append("- タスク化=Task 作成、Todo=受付だけ。")

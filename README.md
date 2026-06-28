@@ -80,9 +80,10 @@ Nilo では、小さな修正は task としてそのまま進めます。
 複数モジュールにまたがる変更、DB schema / migration、CLI 追加、AI向け状態表示の変更、README / docs / tests まで含む変更では、AI は roadmap で整理することを推奨します。人間が承認した場合だけ roadmap を作り、承認後に task へ分解します。
 
 ```bash
-nilo roadmap discuss
-nilo roadmap accept
-nilo roadmap task-plan
+nilo roadmap discuss --project <project>
+nilo roadmap import --project <project> --file <roadmap_proposal.md>
+nilo roadmap accept --revision <roadmap_rev_id> --reason "<reason>" --actor human --human-confirm
+nilo roadmap task-plan --commitment <commitment_id>
 ```
 
 roadmap は、AI に大きな作業を一気に実装させないための分解手順です。目的・非目的・成功条件を先に固定し、実装 task に分けてから進めます。

@@ -25,8 +25,35 @@ from ..transitions import (
 
 
 def is_roadmap_discussion_context(markdown: str) -> bool:
-    first_heading = next((line.strip() for line in markdown.splitlines() if line.strip().startswith("#")), "")
-    return first_heading.lower() == "# roadmap discussion context"
+    return first_markdown_heading(markdown).casefold() == "# roadmap discussion context"
+
+
+def first_markdown_heading(markdown: str) -> str:
+    return next((line.strip() for line in markdown.splitlines() if line.strip().startswith("#")), "")
+
+
+def ensure_generated_markdown_output_is_safe(output: Path, output_kind: str, allowed_headings: set[str]) -> None:
+    if not output.exists():
+        return
+    if not output.is_file():
+        raise SystemExit(f"{output_kind} output path is not a file: {output}")
+    try:
+        existing = output.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        existing = ""
+    if first_markdown_heading(existing).casefold() in {heading.casefold() for heading in allowed_headings}:
+        return
+    raise SystemExit(
+        f"{output_kind} refused to overwrite existing non-generated file: {output}. "
+        "Use a new output path for generated roadmap output."
+    )
+
+
+def ensure_human_roadmap_output_is_safe(project_id: str, output_path: str | None) -> None:
+    from .. import cli as c
+
+    output = Path(output_path or c.human_roadmap_path_for_project(project_id))
+    ensure_generated_markdown_output_is_safe(output, "roadmap export", {"# Roadmap", "# ロードマップ"})
 
 
 def normalize_commitment_text(value: str) -> str:
@@ -75,6 +102,7 @@ def render_and_write_human_roadmap(store: Store, project: dict, output_path: str
         }
     body = render_human_roadmap_markdown(summary, language)
     output = Path(output_path or c.human_roadmap_path_for_project(project["id"]))
+    ensure_human_roadmap_output_is_safe(project["id"], output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(body, encoding="utf-8", newline="\n")
     return output
@@ -178,6 +206,7 @@ def cmd_roadmap_adopt(args: argparse.Namespace) -> None:
         if duplicates:
             details = ", ".join(f"{item['id']} [{item['status']}] {item['title']}" for item in duplicates)
             raise SystemExit(f"duplicate roadmap commitment detected before adopt: {details}")
+        ensure_human_roadmap_output_is_safe(project["id"], args.roadmap_file)
         try:
             result = adopt_roadmap_proposal(
                 store,
@@ -364,6 +393,7 @@ def cmd_roadmap_assess(args: argparse.Namespace) -> None:
         body = render_roadmap_assess_markdown(project, c.roadmap_assessments(store, project["id"], tasks, statuses))
         if args.file:
             output = Path(args.file)
+            ensure_generated_markdown_output_is_safe(output, "roadmap assess", {"# Roadmap Assessment"})
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(body, encoding="utf-8")
             print(f"written: {output}")
@@ -386,6 +416,7 @@ def cmd_roadmap_summary(args: argparse.Namespace) -> None:
         body = render_human_roadmap_summary_markdown(project, c.human_roadmap_summary(assessments))
         if args.file:
             output = Path(args.file)
+            ensure_generated_markdown_output_is_safe(output, "roadmap summary", {"# 現在の状態"})
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(body, encoding="utf-8")
             print(f"written: {output}")
@@ -408,6 +439,7 @@ def cmd_roadmap_discuss(args: argparse.Namespace) -> None:
         body = render_roadmap_discuss_markdown(summary)
         if args.file:
             output = Path(args.file)
+            ensure_generated_markdown_output_is_safe(output, "roadmap discuss", {"# Roadmap Discussion Context"})
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(body, encoding="utf-8")
             print(f"written: {output}")
@@ -455,6 +487,7 @@ def cmd_roadmap_task_plan(args: argparse.Namespace) -> None:
         body = render_roadmap_task_plan_markdown(commitment)
         if args.file:
             output = Path(args.file)
+            ensure_generated_markdown_output_is_safe(output, "roadmap task-plan", {"# Roadmap Task Plan"})
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(body, encoding="utf-8")
             print(f"written: {output}")

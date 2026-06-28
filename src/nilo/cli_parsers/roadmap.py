@@ -14,22 +14,45 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
 
     roadmap_assess = roadmap_sub.add_parser("assess")
     roadmap_assess.add_argument("--project", required=True)
-    roadmap_assess.add_argument("--file")
+    roadmap_assess.add_argument(
+        "--file",
+        "--output",
+        dest="file",
+        help="write generated roadmap assessment to this output file",
+    )
     roadmap_assess.set_defaults(func=handlers.cmd_roadmap_assess)
 
     roadmap_summary = roadmap_sub.add_parser("summary")
     roadmap_summary.add_argument("--project", required=True)
-    roadmap_summary.add_argument("--file")
+    roadmap_summary.add_argument(
+        "--file",
+        "--output",
+        dest="file",
+        help="write generated roadmap summary to this output file",
+    )
     roadmap_summary.set_defaults(func=handlers.cmd_roadmap_summary)
 
-    roadmap_discuss = roadmap_sub.add_parser("discuss")
+    roadmap_discuss = roadmap_sub.add_parser(
+        "discuss",
+        description="Generate roadmap discussion context without creating a pending roadmap revision.",
+    )
     roadmap_discuss.add_argument("--project", required=True)
-    roadmap_discuss.add_argument("--file")
+    roadmap_discuss.add_argument(
+        "--file",
+        "--output",
+        dest="file",
+        help="write generated roadmap discussion context to this output file",
+    )
     roadmap_discuss.set_defaults(func=handlers.cmd_roadmap_discuss)
 
     roadmap_task_plan = roadmap_sub.add_parser("task-plan")
     roadmap_task_plan.add_argument("--commitment", required=True)
-    roadmap_task_plan.add_argument("--file")
+    roadmap_task_plan.add_argument(
+        "--file",
+        "--output",
+        dest="file",
+        help="write generated roadmap task plan to this output file",
+    )
     roadmap_task_plan.set_defaults(func=handlers.cmd_roadmap_task_plan)
 
     roadmap_execute = roadmap_sub.add_parser("execute")
@@ -41,7 +64,12 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
 
     roadmap_export = roadmap_sub.add_parser("export")
     roadmap_export.add_argument("--project", required=True)
-    roadmap_export.add_argument("--file")
+    roadmap_export.add_argument(
+        "--file",
+        "--output",
+        dest="file",
+        help="write generated human roadmap to this output file",
+    )
     roadmap_export.set_defaults(func=handlers.cmd_roadmap_export)
 
     roadmap_import = roadmap_sub.add_parser("import")

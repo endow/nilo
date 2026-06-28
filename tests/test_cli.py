@@ -2720,7 +2720,7 @@ variables:
             self.assertIn("nilo review status --task <task_id> --format json", body)
             self.assertIn("`review status` に `--project` は付けない", body)
             self.assertIn("大きな作業の扱い", body)
-            self.assertIn("commit、force、roadmap close は人間が行う", body)
+            self.assertIn("最終完了/commit/force/roadmap close は人間が行う", body)
             self.assertIn("roadmap close", body)
             present = [command for command in verbose_reference_only_commands if command in body]
             self.assertEqual([], present)
@@ -3895,7 +3895,7 @@ variables:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
-            proposal = root / "roadmap.md"
+            proposal = root / "roadmap_proposal.md"
             proposal.write_text(
                 """# Phase 2.5 Roadmap Projection
 
@@ -4766,6 +4766,65 @@ Reduce roadmap transaction friction.
                 main(["--db", str(db), "status", "--project", "project_test", "--verbose"])
             self.assertIn("ロードマップ: accepted commitment: One Step Roadmap Adoption", status_output.getvalue())
 
+    def test_roadmap_adopt_refuses_non_generated_roadmap_file_before_state_change(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap_adopt.md"
+            design = root / "docs" / "design.md"
+            design.parent.mkdir()
+            design.write_text("# Design\n\nDo not replace me.\n", encoding="utf-8")
+            proposal.write_text(
+                """# One Step Roadmap Adoption
+
+## Intent
+Reduce roadmap transaction friction.
+
+## Success Criteria
+- adopt refuses unsafe roadmap output before state changes
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "roadmap",
+                            "adopt",
+                            "--project",
+                            "project_test",
+                            "--file",
+                            str(proposal),
+                            "--reason",
+                            "human chose this direction",
+                            "--actor",
+                            "human",
+                            "--human-confirm",
+                            "--decision-note",
+                            "test human decision",
+                            "--roadmap-file",
+                            str(design),
+                        ]
+                    )
+
+            self.assertIn("refused to overwrite existing non-generated file", str(raised.exception))
+            self.assertEqual(design.read_text(encoding="utf-8"), "# Design\n\nDo not replace me.\n")
+
+            store = Store(db)
+            try:
+                commitments = store.list_where("roadmap_commitments", "project_id=?", ("project_test",))
+                revisions = store.list_where("roadmap_revisions", "project_id=?", ("project_test",))
+            finally:
+                store.close()
+            self.assertEqual(commitments, [])
+            self.assertEqual(revisions, [])
+
     def test_roadmap_adopt_rejects_discussion_context(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -5417,6 +5476,9 @@ non-pending reject を確認するため。
                 file_output = io.StringIO()
                 with redirect_stdout(file_output):
                     main(["--db", str(db), "roadmap", "discuss", "--project", "project_test", "--file", str(output_file)])
+                overwrite_output = io.StringIO()
+                with redirect_stdout(overwrite_output):
+                    main(["--db", str(db), "roadmap", "discuss", "--project", "project_test", "--output", str(output_file)])
 
             body = stdout_output.getvalue()
             self.assertIn("# Roadmap Discussion Context", body)
@@ -5432,6 +5494,26 @@ non-pending reject を確認するため。
             self.assertIn("## Requested Output", body)
             self.assertEqual(output_file.read_text(encoding="utf-8"), body)
             self.assertIn(f"written: {output_file}", file_output.getvalue())
+            self.assertIn(f"written: {output_file}", overwrite_output.getvalue())
+
+    def test_roadmap_discuss_refuses_to_overwrite_existing_non_discussion_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            design = root / "docs" / "design.md"
+            design.parent.mkdir()
+            original_design = "# Design\n\nKeep this source document intact.\n"
+            design.write_text(original_design, encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "roadmap", "discuss", "--project", "project_test", "--file", str(design)])
+
+            self.assertIn("refused to overwrite existing non-generated file", str(raised.exception))
+            self.assertEqual(design.read_text(encoding="utf-8"), original_design)
 
     def test_roadmap_task_plan_requires_accepted_commitment_and_writes_candidates(self) -> None:
         with TemporaryDirectory() as directory:
@@ -5502,6 +5584,56 @@ project status からロードマップ現在地を読めるようにする。
             self.assertIn(f"--commitment {commitment_id}", body)
             self.assertEqual(output_file.read_text(encoding="utf-8"), body)
             self.assertIn(f"written: {output_file}", file_output.getvalue())
+
+    def test_roadmap_output_commands_refuse_to_overwrite_existing_non_generated_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            design = root / "docs" / "design.md"
+            design.parent.mkdir()
+            original_design = "# Design\n\nKeep this source document intact.\n"
+            design.write_text(original_design, encoding="utf-8")
+            proposal.write_text(
+                """# Output Safety Roadmap
+
+## Intent
+出力ファイルの誤指定で既存文書を壊さない。
+
+## Success Criteria
+- generated roadmap output refuses unrelated existing files
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+
+            revision_id = next(line.split(": ", 1)[1] for line in import_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+            store = Store(db)
+            revision = store.get("roadmap_revisions", revision_id)
+            commitment_id = revision["proposed_commitment_id"]
+            store.close()
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "verify output safety", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+            commands = [
+                ["roadmap", "assess", "--project", "project_test", "--file", str(design)],
+                ["roadmap", "summary", "--project", "project_test", "--file", str(design)],
+                ["roadmap", "task-plan", "--commitment", commitment_id, "--file", str(design)],
+                ["roadmap", "export", "--project", "project_test", "--file", str(design)],
+            ]
+            for command in commands:
+                with self.subTest(command=command[1]):
+                    with self.assertRaises(SystemExit) as raised:
+                        with redirect_stdout(io.StringIO()):
+                            main(["--db", str(db), *command])
+                    self.assertIn("refused to overwrite existing non-generated file", str(raised.exception))
+                    self.assertEqual(design.read_text(encoding="utf-8"), original_design)
 
     def test_roadmap_assess_summarizes_commitment_tasks_and_evidence(self) -> None:
         with TemporaryDirectory() as directory:
