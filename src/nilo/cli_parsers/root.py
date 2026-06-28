@@ -14,6 +14,7 @@ from .quality import register_quality
 from .recipe import register_recipe
 from .roadmap import register_roadmap
 from .task import register_task
+from .test import register_test
 from .todo import register_todo
 from .workspace import register_workspace
 from .workflow import register_agent, register_instruct, register_outcome, register_report, register_review, register_understanding, register_verification
@@ -75,6 +76,7 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     register_roadmap(sub, handlers)
     register_agent(sub, handlers)
     register_task(sub, handlers)
+    register_test(sub, handlers)
     register_todo(sub, handlers)
     register_instruct(sub, handlers)
     register_report(sub, handlers)

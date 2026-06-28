@@ -522,6 +522,7 @@ from .cli_handlers.task import (
     cmd_task_status,
     cmd_task_update,
 )
+from .cli_handlers.test import cmd_test_plan, cmd_test_rerun_failed, cmd_test_run
 from .cli_handlers.todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cmd_todo_show, cmd_todo_start, cmd_todo_triage
 from .cli_handlers.workflow import cmd_agent_install, cmd_doctor, cmd_init, cmd_instruct, cmd_migrate, cmd_outcome_record, cmd_report_import, cmd_understanding_approve, cmd_understanding_import, cmd_understanding_prepare, cmd_verification_run
 from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_doctor_completions, cmd_doctor_state, cmd_doctor_transitions, cmd_doctor_workflow, cmd_help_ai
@@ -564,6 +565,7 @@ TOP_LEVEL_COMMANDS = {
     "start",
     "status",
     "task",
+    "test",
     "todo",
     "understanding",
     "update-check",

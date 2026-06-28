@@ -360,10 +360,32 @@ nilo roadmap --help
 ```bash
 nilo check "python -m unittest tests.test_verification" --project nilo --mode quick --timeout 60
 nilo check "python tests/run_cli_group.py verification" --project nilo --mode targeted --timeout 120
-nilo check "python -m unittest discover tests" --project nilo --mode full --timeout 300
+nilo check "python tests/run_shards.py --all --jobs auto" --project nilo --mode full --timeout 300
 ```
 
-`quick` は狭い smoke check、`targeted` は変更領域や `tests.test_cli` の一部、`full` は release や広範囲の変更で使います。`tests.test_cli` の focused group は helper で実行できます:
+`quick` は狭い smoke check、`targeted` は変更領域や `tests.test_cli` の一部、`full` は release や広範囲の変更で使います。開発中は変更ファイルに応じた shard を短時間で走らせます:
+
+```bash
+python tests/run_shards.py --changed --jobs auto
+nilo test plan --changed
+nilo test run --changed
+```
+
+完了判断前は全テスト相当を shard 並列で実行します。結果は `.nilo/test-runs/<run_id>/summary.json` と shard ごとの stdout/stderr log に保存され、失敗時は failed shard と再実行コマンドが表示されます:
+
+```bash
+python tests/run_shards.py --all --jobs auto
+nilo test run --full
+nilo test rerun-failed <run_id-or-summary-json>
+```
+
+従来の直列実行も互換用に残しています:
+
+```bash
+python -m unittest discover tests
+```
+
+`tests.test_cli` の focused group は helper で実行できます:
 
 ```bash
 python tests/run_cli_group.py review
