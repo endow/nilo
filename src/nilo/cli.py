@@ -314,13 +314,13 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 Normal work:
 - 作業開始と現在地確認は `nilo status --ai --project {project_id}` を使う。
 - `nilo next --project {project_id}` の先頭 action だけに従う。
-- active recipe 中の「進めて/next」は recipe のみ。
-- release tag/push/release/publish は明示承認待ち。
+- active recipe 中の next は recipe のみ。
+- release公開操作は明示承認待ち。
 - 検証済み dirty tree 由来の Nilo commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
-- 検証後は原則 `nilo check --task <task_id> "..."`。省略は一意な未完了targetだけ。
-- 最終完了判断、commit、force、roadmap close は人間が行う。
+- 検証後は `nilo check --task <task_id> "..."`。省略は一意target。
+- 最終完了/commit/force/roadmap close は人間が行う。「コミットして完了で」は承認、`--human-acceptance`。
 
 Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。

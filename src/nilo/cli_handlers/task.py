@@ -301,16 +301,19 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
         try:
             verification_before_completion = store.latest_for_task("verification_runs", args.task)
             snapshot_before_completion = current_git_snapshot(Path.cwd())
-            if args.actor == "human" and not (getattr(args, "decision_note", "") or "").strip():
+            human_acceptance = (getattr(args, "human_acceptance", "") or "").strip()
+            human_confirm = bool(getattr(args, "human_confirm", False) or human_acceptance)
+            decision_note = (getattr(args, "decision_note", "") or "").strip() or human_acceptance
+            if args.actor == "human" and not decision_note:
                 raise TransitionError("decision_note_required", "human completion requires --decision-note with the human acceptance note")
             result = complete_task(
                 store,
                 args.task,
                 actor=args.actor,
                 reason=args.reason,
-                human_confirm=getattr(args, "human_confirm", False),
+                human_confirm=human_confirm,
                 decision_source="human_interactive" if args.actor == "human" else "",
-                decision_note=getattr(args, "decision_note", "") or "",
+                decision_note=decision_note,
                 cwd=Path.cwd(),
             )
         except TransitionError as exc:

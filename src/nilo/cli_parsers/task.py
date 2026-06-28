@@ -72,6 +72,11 @@ def register_task(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
     task_complete.add_argument("--actor", choices=["human", "ai"], required=True)
     task_complete.add_argument("--human-confirm", action="store_true", help="Required when recording a human completion decision.")
     task_complete.add_argument("--decision-note", default="", help="Required with --actor human.")
+    task_complete.add_argument(
+        "--human-acceptance",
+        default="",
+        help="Human-written acceptance phrase; implies --human-confirm and is used as --decision-note when omitted.",
+    )
     task_complete.add_argument("--commit", action="store_true", help="Commit current accepted task changes after recording completion")
     task_complete.add_argument("--commit-message")
     task_complete.set_defaults(func=handlers.cmd_task_complete)

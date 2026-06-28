@@ -484,6 +484,7 @@ def cmd_facade_done(args: argparse.Namespace) -> None:
             actor=args.actor,
             human_confirm=args.human_confirm,
             decision_note=args.decision_note,
+            human_acceptance=args.human_acceptance,
             commit=args.commit,
             commit_message=args.commit_message,
         )

@@ -61,6 +61,11 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     done.add_argument("--actor", choices=["ai", "human"], required=True)
     done.add_argument("--human-confirm", action="store_true", help="Required when recording a human completion decision.")
     done.add_argument("--decision-note", default="", help="Required with --actor human.")
+    done.add_argument(
+        "--human-acceptance",
+        default="",
+        help="Human-written acceptance phrase; implies --human-confirm and is used as --decision-note when omitted.",
+    )
     done.add_argument("--commit", action="store_true")
     done.add_argument("--commit-message")
     done.set_defaults(func=handlers.cmd_facade_done)

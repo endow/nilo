@@ -1324,8 +1324,27 @@ variables:
 
                 done_output = io.StringIO()
                 with redirect_stdout(done_output):
-                    main(["--db", str(db), "done", "--reason", "facade smoke accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "done",
+                            "--reason",
+                            "facade smoke accepted",
+                            "--actor",
+                            "human",
+                            "--human-acceptance",
+                            "じゃあコミットして完了で",
+                        ]
+                    )
                 self.assertIn("status: completed_by_user", done_output.getvalue())
+                store = Store(db)
+                try:
+                    completion = store.latest_for_task("task_completions", task_id)
+                finally:
+                    store.close()
+                self.assertEqual(completion["human_confirmed"], 1)
+                self.assertEqual(completion["human_decision_note"], "じゃあコミットして完了で")
 
                 with redirect_stdout(io.StringIO()):
                     main(["--db", str(db), "start", "差し戻し対象"])
@@ -2656,7 +2675,8 @@ variables:
             self.assertIn("nilo roadmap task-plan", body)
             self.assertNotIn("MCP lazy loading", body)
             self.assertNotIn("MCP が使えなければ CLI", body)
-            self.assertIn("最終完了判断、commit、force、roadmap close は人間が行う", body)
+            self.assertIn("最終完了/commit/force/roadmap close は人間が行う", body)
+            self.assertIn("`--human-acceptance`", body)
             self.assertIn("nilo help ai", body)
             self.assertLess(len(body), 2400)
             self.assertNotIn("## 全コマンド一覧", body)
