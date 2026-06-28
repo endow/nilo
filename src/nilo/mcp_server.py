@@ -22,6 +22,7 @@ from .project_boundary import (
 )
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from .review_dispatcher import DispatchError, dispatch_review
+from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
 from .reviewer_registry import (
     ReviewerResolutionError,
     canonical_reviewer_name,
@@ -1345,7 +1346,7 @@ def mcp_request_review(store: Store, arguments: dict) -> dict:
         "created_at": created_at,
         "updated_at": created_at,
     }
-    store.insert("review_requests", row)
+    insert_review_request(store, row)
     return {
         "task_id": task_id,
         "review_request": row,
@@ -1392,7 +1393,7 @@ def register_reviewer(store: Store, arguments: dict) -> dict:
     revived = []
     if reviewer_is_dispatch_capable(row):
         for request in store.list_where("review_requests", "reviewer=? AND status='reviewer_unavailable'", (reviewer,)):
-            store.update("review_requests", request["id"], {"status": "requested", "updated_at": now})
+            update_review_request(store, request["id"], {"status": "requested", "updated_at": now})
             revived.append(request["id"])
     return {"reviewer": row, "revived_review_requests": revived}
 
@@ -1412,8 +1413,7 @@ def claim_next_review(store: Store, arguments: dict) -> dict:
         return {"reviewer": reviewer, "claimed": False, "review_request": None}
     request = rows[-1]
     now = now_iso()
-    store.update("review_requests", request["id"], {"status": "claimed", "updated_at": now})
-    request = store.get("review_requests", request["id"])
+    request = update_review_request(store, request["id"], {"status": "claimed", "updated_at": now})
     task = store.get("tasks", request["task_id"])
     report = store.latest_for_task("agent_reports", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
@@ -1443,7 +1443,7 @@ def mark_stale_review_requests(store: Store, arguments: dict) -> dict:
     for request in store.list_where("review_requests", where, args):
         if iso_age_seconds(request["updated_at"]) < stale_after_seconds:
             continue
-        store.update("review_requests", request["id"], {"status": "stale", "updated_at": now})
+        set_review_request_status(store, request["id"], "stale", updated_at=now)
         stale.append(request["id"])
     return {"stale_review_requests": stale, "count": len(stale)}
 

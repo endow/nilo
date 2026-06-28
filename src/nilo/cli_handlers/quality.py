@@ -21,6 +21,7 @@ from ..quality_logic import (
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from ..review_dispatcher import dispatch_review, doctor_reviewer_config, init_reviewer_config, quick_review
+from ..review_lifecycle import insert_review_request, update_review_request
 from ..reviewer_registry import ReviewerResolutionError, resolve_reviewer, resolve_review_request_target, reviewer_is_registered_available
 from ..reviewer_registry import reviewer_prepare_status
 from ..secret import mask_secrets
@@ -355,7 +356,7 @@ def cmd_review_request(args: argparse.Namespace) -> None:
             "created_at": created_at,
             "updated_at": created_at,
         }
-        store.insert("review_requests", row)
+        insert_review_request(store, row)
         print(f"review_request: {row['id']}")
         print(f"status: {row['status']}")
         if row["status"] == "reviewer_unavailable":
@@ -557,7 +558,7 @@ def create_review_delegation(args: argparse.Namespace) -> tuple[dict, dict, bool
             "created_at": created_at,
             "updated_at": created_at,
         }
-        store.insert("review_requests", row)
+        insert_review_request(store, row)
         if args.write_default:
             report = store.latest_for_task("agent_reports", task["id"])
             verification_run = store.latest_for_task("verification_runs", task["id"])
@@ -798,8 +799,8 @@ def cmd_review_withdraw(args: argparse.Namespace) -> None:
         if request["status"] in {"completed", "withdrawn"}:
             raise SystemExit(f"review request is terminal and cannot be withdrawn: {args.review} [{request['status']}]")
         withdrawn_at = now_iso()
-        store.update(
-            "review_requests",
+        update_review_request(
+            store,
             args.review,
             {
                 "status": "withdrawn",
@@ -842,8 +843,8 @@ def withdraw_review_request(store: Store, review_id: str, reason: str, actor: st
     if request["status"] in REVIEW_TERMINAL_STATUSES:
         raise SystemExit(f"review request is terminal and cannot be withdrawn: {review_id} [{request['status']}]")
     withdrawn_at = now_iso()
-    store.update(
-        "review_requests",
+    return update_review_request(
+        store,
         review_id,
         {
             "status": "withdrawn",
@@ -853,7 +854,6 @@ def withdraw_review_request(store: Store, review_id: str, reason: str, actor: st
             "updated_at": withdrawn_at,
         },
     )
-    return store.get("review_requests", review_id)
 
 
 def current_review_wait_state(store: Store, review_id: str) -> tuple[dict, dict | None]:

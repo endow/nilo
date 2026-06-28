@@ -9,6 +9,28 @@ from collections.abc import Iterator
 from typing import Any
 
 
+CORE_STATE_TABLES = {
+    "agent_reports",
+    "evidence_checks",
+    "failure_logs",
+    "instructions",
+    "overdrive_events",
+    "overdrive_runs",
+    "review_findings",
+    "review_finding_updates",
+    "review_requests",
+    "review_results",
+    "roadmap_commitments",
+    "roadmap_revisions",
+    "task_completions",
+    "tasks",
+    "todos",
+    "transition_events",
+    "understanding_checks",
+    "verification_runs",
+}
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 
@@ -551,6 +573,7 @@ class Store:
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self.direct_write_warnings: list[dict[str, str]] = []
         self.conn.executescript(SCHEMA)
         self._migrate()
 
@@ -558,6 +581,7 @@ class Store:
         self.conn.close()
 
     def insert(self, table: str, row: dict[str, Any]) -> None:
+        self._warn_direct_core_write(table, "insert")
         cols = list(row)
         placeholders = ", ".join("?" for _ in cols)
         sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
@@ -565,6 +589,7 @@ class Store:
         self._commit_unless_transaction()
 
     def update(self, table: str, row_id: str, values: dict[str, Any]) -> None:
+        self._warn_direct_core_write(table, "update")
         parts = ", ".join(f"{key}=?" for key in values)
         args = [self._encode(value) for value in values.values()]
         args.append(row_id)
@@ -592,6 +617,10 @@ class Store:
     def _commit_unless_transaction(self) -> None:
         if self._transaction_depth == 0:
             self.conn.commit()
+
+    def _warn_direct_core_write(self, table: str, operation: str) -> None:
+        if self._transaction_depth == 0 and table in CORE_STATE_TABLES:
+            self.direct_write_warnings.append({"table": table, "operation": operation})
 
     def get(self, table: str, row_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()

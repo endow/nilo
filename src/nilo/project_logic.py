@@ -7,6 +7,7 @@ from pathlib import Path
 from .design_residue import parse_design_residue
 from .display_labels import field_label, status_label
 from .human_status import human_next_action_text, human_project_work_state, human_task_status
+from .review_lifecycle import update_review_request
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
 from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status, review_result_status
 from .store import Store
@@ -1326,8 +1327,7 @@ def refresh_review_dispatch_state(
             reason = f"review claim exceeded {stale_after_seconds} seconds"
         if not next_status:
             continue
-        store.update("review_requests", request["id"], {"status": next_status, "updated_at": now})
-        updated = store.get("review_requests", request["id"])
+        updated = update_review_request(store, request["id"], {"status": next_status, "updated_at": now})
         changed.append({"review_request": updated, "previous_status": request["status"], "reason": reason})
     return changed
 

@@ -15,6 +15,7 @@ from typing import Any
 
 from .cli_support import make_id
 from .review import build_review_context, looks_like_review_result, parse_review_result
+from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
 from .reviewer_registry import canonical_reviewer_name, normalize_backend_kind, normalize_capabilities, reviewer_is_registered_available
 from .secret import detect_secret_issues, mask_secrets
 from .snapshot import compact_snapshot, current_git_snapshot
@@ -587,7 +588,7 @@ def create_review_request(
         "created_at": created_at,
         "updated_at": created_at,
     }
-    store.insert("review_requests", row)
+    insert_review_request(store, row)
     return row
 
 
@@ -654,8 +655,7 @@ def claim_review(store: Store, review_request: dict) -> dict:
             {"type": "retry_when_reviewer_available", "review_request_id": review_request["id"]},
         )
     updated_at = now_iso()
-    store.update("review_requests", review_request["id"], {"status": "claimed", "updated_at": updated_at})
-    return store.get("review_requests", review_request["id"])
+    return update_review_request(store, review_request["id"], {"status": "claimed", "updated_at": updated_at})
 
 
 def build_prompt_file(store: Store, request: dict, repo_root: Path) -> tuple[Path, str]:
@@ -967,8 +967,8 @@ def close_superseded_pending_reviews(store: Store, task_id: str, reviewer: str, 
     for request in rows:
         if request["id"] == completed_review_id:
             continue
-        store.update(
-            "review_requests",
+        update_review_request(
+            store,
             request["id"],
             {
                 "status": "superseded",
@@ -991,8 +991,8 @@ def close_previous_active_reviews(store: Store, task_id: str, reviewer: str, kee
         (task_id, reviewer, keep_review_id),
     )
     for request in rows:
-        store.update(
-            "review_requests",
+        update_review_request(
+            store,
             request["id"],
             {
                 "status": "superseded",
@@ -1225,12 +1225,7 @@ def dispatch_review(
             "actor": actor,
         }
         command_line = command_preview(config, variables)
-        store.update(
-            "review_requests",
-            request["id"],
-            {"status": "in_progress", "updated_at": now_iso()},
-        )
-        request = store.get("review_requests", request["id"])
+        request = set_review_request_status(store, request["id"], "in_progress")
         import_seen_event = store.latest_task_status_event(request["task_id"])
         cwd, env, resolved = reviewer_process_context(config, variables, repo_root)
         command_line = resolved.preview
@@ -1304,8 +1299,8 @@ def dispatch_review(
         if request_id:
             request = store.get("review_requests", request_id)
             if request and request["status"] not in {"completed", "withdrawn", "failed"}:
-                store.update(
-                    "review_requests",
+                update_review_request(
+                    store,
                     request_id,
                     {
                         "status": "failed",
@@ -1357,13 +1352,13 @@ def create_quick_review_request(
         "created_at": created_at,
         "updated_at": created_at,
     }
-    store.insert("review_requests", row)
+    insert_review_request(store, row)
     return row
 
 
 def fail_quick_review_request(store: Store, request: dict, actor: str, reason: str) -> None:
-    store.update(
-        "review_requests",
+    update_review_request(
+        store,
         request["id"],
         {
             "status": "failed",
