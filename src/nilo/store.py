@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 
@@ -548,6 +550,7 @@ class Store:
         backup_before_schema_migration(self.path)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        self._transaction_depth = 0
         self.conn.executescript(SCHEMA)
         self._migrate()
 
@@ -559,14 +562,36 @@ class Store:
         placeholders = ", ".join("?" for _ in cols)
         sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
         self.conn.execute(sql, [self._encode(row[c]) for c in cols])
-        self.conn.commit()
+        self._commit_unless_transaction()
 
     def update(self, table: str, row_id: str, values: dict[str, Any]) -> None:
         parts = ", ".join(f"{key}=?" for key in values)
         args = [self._encode(value) for value in values.values()]
         args.append(row_id)
         self.conn.execute(f"UPDATE {table} SET {parts} WHERE id=?", args)
-        self.conn.commit()
+        self._commit_unless_transaction()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        outermost = self._transaction_depth == 0
+        if outermost:
+            self.conn.execute("BEGIN")
+        self._transaction_depth += 1
+        try:
+            yield
+        except Exception:
+            self._transaction_depth -= 1
+            if outermost:
+                self.conn.rollback()
+            raise
+        else:
+            self._transaction_depth -= 1
+            if outermost:
+                self.conn.commit()
+
+    def _commit_unless_transaction(self) -> None:
+        if self._transaction_depth == 0:
+            self.conn.commit()
 
     def get(self, table: str, row_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()

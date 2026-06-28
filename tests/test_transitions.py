@@ -3,12 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from nilo.snapshot import current_git_snapshot, snapshot_columns
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
-from nilo.transitions import TransitionError, complete_task, import_review_result, update_review_finding
+from nilo.transitions import (
+    TransitionError,
+    accept_roadmap_revision,
+    complete_task,
+    create_task_from_todo,
+    import_review_result,
+    update_review_finding,
+)
 
 
 def project_row() -> dict:
@@ -122,6 +130,41 @@ class TransitionTests(unittest.TestCase):
                 self.assertEqual(projected_task_status(store, store.get("tasks", "task_test")), "completed_by_ai")
                 events = store.list_where("transition_events", "transition='complete_task'")
                 self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["entity_id"], "task_test")
+            finally:
+                store.close()
+
+    def test_store_transaction_rolls_back_on_ordinary_exception(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = Store(root / "nilo.db")
+            try:
+                with self.assertRaises(RuntimeError):
+                    with store.transaction():
+                        store.insert("projects", project_row())
+                        raise RuntimeError("boom")
+                self.assertIsNone(store.get("projects", "project_test"))
+                store.insert("projects", project_row())
+                self.assertIsNotNone(store.get("projects", "project_test"))
+            finally:
+                store.close()
+
+    def test_completion_rolls_back_when_post_write_audit_raises_transition_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                cwd = Path.cwd()
+                store.insert("verification_runs", verification_row("task_test", cwd))
+                with patch(
+                    "nilo.state_audit.audit_task",
+                    return_value=[{"severity": "error", "code": "completion_forced_test_error"}],
+                ):
+                    with self.assertRaises(TransitionError) as ctx:
+                        complete_task(store, "task_test", actor="ai", reason="verified", cwd=cwd)
+                self.assertEqual(ctx.exception.code, "completion_audit_failed")
+                self.assertEqual(store.list_where("task_completions", "task_id=?", ("task_test",)), [])
+                self.assertEqual(store.list_where("transition_events", "transition='complete_task'"), [])
             finally:
                 store.close()
 
@@ -187,6 +230,148 @@ class TransitionTests(unittest.TestCase):
                         last_seen_event_id=latest["event_id"],
                     )
                 self.assertEqual(ctx.exception.code, "stale_review_snapshot")
+            finally:
+                store.close()
+
+    def test_review_import_rolls_back_result_findings_and_request_update(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                now = now_iso()
+                snapshot = current_git_snapshot(Path.cwd())
+                store.insert(
+                    "review_requests",
+                    {
+                        "id": "review_test",
+                        "task_id": "task_test",
+                        "requester": "codex",
+                        "reviewer": "claude-code",
+                        "status": "claimed",
+                        "reason": "review",
+                        "based_on_event_id": "task_test",
+                        "based_on_snapshot": snapshot,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                latest = store.latest_task_status_event("task_test")
+                body = (
+                    "# ReviewResult\n\n"
+                    "## Verdict\nchanges_requested\n\n"
+                    "## Summary\nneeds work\n\n"
+                    "## Findings\n"
+                    "- severity: high\n"
+                    "  title: Bug\n"
+                    "  file: src/nilo/transitions.py\n"
+                    "  line: 1\n"
+                    "  blocking: true\n"
+                    "  description: fix it\n"
+                )
+                with patch("nilo.transitions._event", side_effect=TransitionError("event_failed", "event failed")):
+                    with self.assertRaises(TransitionError):
+                        import_review_result(
+                            store,
+                            "task_test",
+                            "review_test",
+                            body_md=body,
+                            reviewer="claude-code",
+                            last_seen_event_id=latest["event_id"],
+                            cwd=Path.cwd(),
+                        )
+                self.assertEqual(store.list_where("review_results", "review_request_id=?", ("review_test",)), [])
+                self.assertEqual(store.list_where("review_findings", "review_request_id=?", ("review_test",)), [])
+                self.assertEqual(store.get("review_requests", "review_test")["status"], "claimed")
+            finally:
+                store.close()
+
+    def test_roadmap_accept_rolls_back_revision_and_commitment_updates(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                now = now_iso()
+                store.insert(
+                    "roadmap_commitments",
+                    {
+                        "id": "commitment_test",
+                        "project_id": "project_test",
+                        "title": "Plan",
+                        "intent": "",
+                        "success_criteria": [],
+                        "non_goals": [],
+                        "autonomy_scope": "",
+                        "review_gates": [],
+                        "evidence_policy": "",
+                        "status": "proposed",
+                        "accepted_by": "",
+                        "accepted_at": "",
+                        "created_at": now,
+                    },
+                )
+                store.insert(
+                    "roadmap_revisions",
+                    {
+                        "id": "revision_test",
+                        "project_id": "project_test",
+                        "proposed_commitment_id": "commitment_test",
+                        "status": "pending",
+                        "body_md": "",
+                        "source_path": "",
+                        "reason": "",
+                        "decided_by": "",
+                        "accepted_at": "",
+                        "created_at": now,
+                    },
+                )
+                with patch("nilo.transitions._event", side_effect=TransitionError("event_failed", "event failed")):
+                    with self.assertRaises(TransitionError):
+                        accept_roadmap_revision(
+                            store,
+                            "revision_test",
+                            actor="human",
+                            reason="approve",
+                            decision_note="approve",
+                            human_confirm=True,
+                        )
+                self.assertEqual(store.get("roadmap_revisions", "revision_test")["status"], "pending")
+                self.assertEqual(store.get("roadmap_commitments", "commitment_test")["status"], "proposed")
+            finally:
+                store.close()
+
+    def test_todo_conversion_rolls_back_task_insert_and_todo_update(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                now = now_iso()
+                store.insert(
+                    "todos",
+                    {
+                        "id": "todo_test",
+                        "project_id": "project_test",
+                        "title": "Do later",
+                        "kind": "task",
+                        "status": "ready",
+                        "description": "",
+                        "acceptance_hint": "",
+                        "priority": "medium",
+                        "source_type": "",
+                        "source_task_id": "",
+                        "roadmap_commitment_id": "",
+                        "roadmap_revision_id": "",
+                        "converted_task_id": "",
+                        "created_at": now,
+                        "triaged_at": "",
+                        "triage_reason": "",
+                    },
+                )
+                task = task_row("task_from_todo")
+                with patch("nilo.transitions._event", side_effect=TransitionError("event_failed", "event failed")):
+                    with self.assertRaises(TransitionError):
+                        create_task_from_todo(store, "todo_test", task=task, actor="ai", reason="convert")
+                self.assertIsNone(store.get("tasks", "task_from_todo"))
+                self.assertEqual(store.get("todos", "todo_test")["status"], "ready")
             finally:
                 store.close()
 

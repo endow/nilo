@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,15 @@ class TransitionError(Exception):
         self.code = code
         self.message = message
         self.remediation = remediation
+
+
+def atomic_transition(func):
+    @wraps(func)
+    def wrapper(store: Store, *args, **kwargs):
+        with store.transaction():
+            return func(store, *args, **kwargs)
+
+    return wrapper
 
 
 HUMAN_DECISION_SOURCES = {"human_interactive", "human_explicit"}
@@ -285,6 +295,9 @@ def complete_task(
     )
 
 
+complete_task = atomic_transition(complete_task)
+
+
 def invalidate_task_completion(store: Store, completion_id: str, *, actor: str, reason: str) -> TransitionResult:
     _require_actor(actor)
     completion = store.get("task_completions", completion_id)
@@ -309,6 +322,9 @@ def invalidate_task_completion(store: Store, completion_id: str, *, actor: str, 
         related_ids={"task": completion["task_id"]},
     )
     return _result("invalidate_task_completion", actor, updated_ids={"task_completion": completion_id}, previous_status="active", new_status="invalidated")
+
+
+invalidate_task_completion = atomic_transition(invalidate_task_completion)
 
 
 def record_outcome_decision(
@@ -359,6 +375,9 @@ def record_outcome_decision(
     return _result("record_outcome_decision", actor, created_ids={"failure": failure["id"]}, previous_status=previous, new_status=decision)
 
 
+record_outcome_decision = atomic_transition(record_outcome_decision)
+
+
 def accept_roadmap_revision(
     store: Store,
     revision_id: str,
@@ -391,6 +410,9 @@ def accept_roadmap_revision(
     )
     _event(store, "accept_roadmap_revision", "roadmap_revision", revision_id, actor=actor, decision_source=decision_source, human_confirmed=human_confirm, reason=reason, previous_state=revision["status"], new_state="accepted", related_ids={"commitment": commitment["id"]})
     return _result("accept_roadmap_revision", actor, updated_ids={"roadmap_revision": revision_id, "roadmap_commitment": commitment["id"]}, previous_status=revision["status"], new_status="accepted")
+
+
+accept_roadmap_revision = atomic_transition(accept_roadmap_revision)
 
 
 def adopt_roadmap_proposal(
@@ -453,6 +475,9 @@ def adopt_roadmap_proposal(
     return _result("adopt_roadmap_proposal", actor, created_ids={"roadmap_commitment": commitment_id, "roadmap_revision": revision_id}, previous_status="missing", new_status="accepted")
 
 
+adopt_roadmap_proposal = atomic_transition(adopt_roadmap_proposal)
+
+
 def reject_roadmap_revision(store: Store, revision_id: str, *, actor: str, reason: str, decision_note: str = "", human_confirm: bool = False, decision_source: str = "human_interactive") -> TransitionResult:
     _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     revision = store.get("roadmap_revisions", revision_id)
@@ -467,6 +492,9 @@ def reject_roadmap_revision(store: Store, revision_id: str, *, actor: str, reaso
         store.update("roadmap_commitments", commitment["id"], {"status": "rejected", "accepted_by": actor, "accepted_at": rejected_at, "decision_source": decision_source, "decision_note": decision_note or reason, "human_confirmed": human_confirm})
     _event(store, "reject_roadmap_revision", "roadmap_revision", revision_id, actor=actor, decision_source=decision_source, human_confirmed=human_confirm, reason=reason, previous_state=revision["status"], new_state="rejected", related_ids={"commitment": commitment["id"] if commitment else ""})
     return _result("reject_roadmap_revision", actor, updated_ids={"roadmap_revision": revision_id}, previous_status=revision["status"], new_status="rejected")
+
+
+reject_roadmap_revision = atomic_transition(reject_roadmap_revision)
 
 
 def close_roadmap_commitment(
@@ -499,6 +527,9 @@ def close_roadmap_commitment(
     )
     _event(store, "close_roadmap_commitment", "roadmap_commitment", commitment_id, actor=actor, decision_source=decision_source, human_confirmed=human_confirm, reason=reason, previous_state="accepted", new_state="closed")
     return _result("close_roadmap_commitment", actor, updated_ids={"roadmap_commitment": commitment_id}, previous_status="accepted", new_status="closed")
+
+
+close_roadmap_commitment = atomic_transition(close_roadmap_commitment)
 
 
 def resolve_failure(
@@ -541,6 +572,9 @@ def resolve_failure(
     return _result("resolve_failure", actor, updated_ids={"failure": failure_id}, previous_status=failure["status"], new_status="resolved")
 
 
+resolve_failure = atomic_transition(resolve_failure)
+
+
 def ignore_failure(
     store: Store,
     failure_id: str,
@@ -572,6 +606,9 @@ def ignore_failure(
     return _result("ignore_failure", actor, updated_ids={"failure": failure_id}, previous_status=failure["status"], new_status="ignored")
 
 
+ignore_failure = atomic_transition(ignore_failure)
+
+
 def approve_understanding(
     store: Store,
     task_id: str,
@@ -590,6 +627,9 @@ def approve_understanding(
     store.insert("understanding_checks", row)
     _event(store, "approve_understanding", "task", task_id, actor=actor, decision_source=decision_source, human_confirmed=human_confirm, reason=reason, previous_state=latest["status"], new_state="approved_to_implement", related_ids={"understanding": row["id"]})
     return _result("approve_understanding", actor, created_ids={"understanding_check": row["id"]}, previous_status=latest["status"], new_status="approved_to_implement")
+
+
+approve_understanding = atomic_transition(approve_understanding)
 
 
 def update_review_finding(
@@ -620,6 +660,9 @@ def update_review_finding(
     store.update("review_findings", finding_id, {"status": status, "updated_at": updated_at})
     _event(store, "update_review_finding", "review_finding", finding_id, actor=actor, decision_source=decision_source, human_confirmed=human_confirm, reason=reason, previous_state=finding["status"], new_state=status, related_ids={"finding_update": update["id"]}, warnings=warnings)
     return _result("update_review_finding", actor, created_ids={"review_finding_update": update["id"]}, updated_ids={"review_finding": finding_id}, previous_status=finding["status"], new_status=status, warnings=warnings)
+
+
+update_review_finding = atomic_transition(update_review_finding)
 
 
 def triage_todo(
@@ -654,6 +697,9 @@ def triage_todo(
     return _result("triage_todo", actor, updated_ids={"todo": todo_id}, previous_status=todo["status"], new_status=status)
 
 
+triage_todo = atomic_transition(triage_todo)
+
+
 def create_task_from_todo(store: Store, todo_id: str, *, task: dict, actor: str, reason: str = "") -> TransitionResult:
     _require_actor(actor)
     todo = store.get("todos", todo_id)
@@ -663,6 +709,9 @@ def create_task_from_todo(store: Store, todo_id: str, *, task: dict, actor: str,
     store.update("todos", todo_id, {"status": "converted_to_task", "converted_task_id": task["id"], "triaged_at": now_iso(), "triage_reason": reason or f"converted to task {task['id']}", "actor": actor, "decision_source": "successor_link", "superseded_by_type": "task", "superseded_by_id": task["id"]})
     _event(store, "create_task_from_todo", "todo", todo_id, actor=actor, reason=reason, previous_state=todo["status"], new_state="converted_to_task", related_ids={"task": task["id"]})
     return _result("create_task_from_todo", actor, created_ids={"task": task["id"]}, updated_ids={"todo": todo_id}, previous_status=todo["status"], new_status="converted_to_task")
+
+
+create_task_from_todo = atomic_transition(create_task_from_todo)
 
 
 def promote_todo_to_roadmap_proposal(store: Store, todo_id: str, *, commitment: dict, revision: dict, actor: str, reason: str) -> TransitionResult:
@@ -675,6 +724,9 @@ def promote_todo_to_roadmap_proposal(store: Store, todo_id: str, *, commitment: 
     store.update("todos", todo_id, {"status": "superseded", "roadmap_revision_id": revision["id"], "triaged_at": now_iso(), "triage_reason": reason, "actor": actor, "decision_source": "successor_link", "superseded_by_type": "roadmap_revision", "superseded_by_id": revision["id"]})
     _event(store, "promote_todo_to_roadmap_proposal", "todo", todo_id, actor=actor, reason=reason, previous_state=todo["status"], new_state="superseded", related_ids={"roadmap_revision": revision["id"], "roadmap_commitment": commitment["id"]})
     return _result("promote_todo_to_roadmap_proposal", actor, created_ids={"roadmap_commitment": commitment["id"], "roadmap_revision": revision["id"]}, updated_ids={"todo": todo_id}, previous_status=todo["status"], new_status="superseded")
+
+
+promote_todo_to_roadmap_proposal = atomic_transition(promote_todo_to_roadmap_proposal)
 
 
 def import_review_result(
@@ -721,6 +773,9 @@ def import_review_result(
     return _result("import_review_result", reviewer, created_ids={"review_result": result["id"]}, updated_ids={"review_request": review_id}, previous_status=request["status"], new_status="completed")
 
 
+import_review_result = atomic_transition(import_review_result)
+
+
 def record_verification_run(store: Store, task_id: str, *, row: dict, actor: str = "ai") -> TransitionResult:
     _require_actor(actor)
     if not store.get("tasks", task_id):
@@ -728,6 +783,9 @@ def record_verification_run(store: Store, task_id: str, *, row: dict, actor: str
     store.insert("verification_runs", row)
     _event(store, "record_verification_run", "task", task_id, actor=actor, reason=row.get("command", ""), new_state="verification_recorded", related_ids={"verification": row["id"]})
     return _result("record_verification_run", actor, created_ids={"verification_run": row["id"]}, new_status="verification_recorded")
+
+
+record_verification_run = atomic_transition(record_verification_run)
 
 
 def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd: Path, evaluate_evidence) -> TransitionResult:
@@ -744,3 +802,6 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
         audit_notes=[evidence["status"]],
         warnings=evidence.get("issues", []),
     )
+
+
+import_agent_report = atomic_transition(import_agent_report)
