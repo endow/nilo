@@ -295,6 +295,21 @@ CREATE TABLE IF NOT EXISTS recipe_task_provenance (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS recipe_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  recipe_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  current_step TEXT NOT NULL DEFAULT '',
+  completed_steps TEXT NOT NULL DEFAULT '[]',
+  pending_steps TEXT NOT NULL DEFAULT '[]',
+  pending_public_operations TEXT NOT NULL DEFAULT '[]',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS roadmap_commitments (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
@@ -431,6 +446,9 @@ JSON_COLUMNS = {
     "snapshot",
     "related_ids",
     "warnings",
+    "completed_steps",
+    "pending_steps",
+    "pending_public_operations",
 }
 
 TABLE_JSON_COLUMNS = {

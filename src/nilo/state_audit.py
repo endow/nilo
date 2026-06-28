@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .snapshot import current_git_snapshot, evidence_status, review_result_status
+from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, evidence_status, review_result_status
 from .store import Store
 from .task_logic import active_task_completion, unresolved_review_findings
 
@@ -36,7 +36,7 @@ def audit_task(
         return findings
     snapshot = current_snapshot or current_git_snapshot(cwd)
     verification = store.latest_for_task("verification_runs", task_id)
-    evidence = evidence_status(verification, snapshot)
+    evidence = commit_aware_evidence_status(verification, snapshot, completion)
     unresolved = unresolved_review_findings(store, task_id)
     actor = completion.get("actor") or completion.get("completed_by") or ""
     if actor == "human":
@@ -61,6 +61,14 @@ def audit_task(
     if latest_review and review_result_status(latest_review, snapshot) == "stale":
         findings.append(_finding("completion_review_result_stale", "completed task accepted review result is stale", severity="warning", entity_type="task_completion", entity_id=completion["id"]))
     completed_snapshot = completion.get("completed_snapshot") or {}
+    commit_metadata = completion_commit_metadata(completion)
+    if commit_metadata:
+        if not commit_metadata.get("commit_sha"):
+            findings.append(_finding("completion_commit_metadata_missing_sha", "completion commit metadata has no commit sha", severity="error", entity_type="task_completion", entity_id=completion["id"]))
+        if commit_metadata.get("verified_diff_hash") != (commit_metadata.get("pre_commit_snapshot") or {}).get("git_diff_hash"):
+            findings.append(_finding("completion_commit_verified_diff_mismatch", "completion commit metadata does not match the verified dirty tree", severity="error", entity_type="task_completion", entity_id=completion["id"]))
+        if evidence == "current":
+            completed_snapshot = {}
     if completed_snapshot and completed_snapshot.get("git_diff_hash") != snapshot.get("git_diff_hash"):
         findings.append(_finding("completion_snapshot_changed", "completion snapshot differs from current snapshot", severity="error", entity_type="task_completion", entity_id=completion["id"]))
     high_failures = store.list_where("failure_logs", "task_id=? AND status='open' AND severity='high'", (task_id,))
@@ -147,8 +155,67 @@ def audit_project(store: Store, project_id: str, *, cwd: Path | None = None) -> 
     return findings
 
 
+def audit_workflow(store: Store, project_id: str, *, cwd: Path | None = None) -> list[dict[str, Any]]:
+    cwd = cwd or Path.cwd()
+    findings: list[dict[str, Any]] = []
+    active_runs = store.list_where(
+        "recipe_runs",
+        "project_id=? AND status IN ('active', 'waiting_public_approval')",
+        (project_id,),
+    )
+    for run in active_runs:
+        if run["status"] == "waiting_public_approval" and not (run.get("pending_public_operations") or []):
+            findings.append(_finding("recipe_waiting_public_without_pending_operations", "recipe run waits for public approval but has no pending operations", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+        tasks = store.list_where("tasks", "project_id=?", (project_id,))
+        if tasks:
+            from .project_logic import project_tasks_and_statuses, project_level_next_actions, project_design_residue, accepted_roadmap_commitments, pending_roadmap_revisions
+
+            all_tasks, statuses = project_tasks_and_statuses(store, project_id)
+            actions = project_level_next_actions(
+                store,
+                all_tasks,
+                statuses,
+                project_design_residue(cwd),
+                accepted_roadmap_commitments(store, project_id),
+                pending_roadmap_revisions(store, project_id),
+                project_id,
+            )
+            if actions and run["task_id"] not in actions[0] and "release recipe" not in actions[0]:
+                findings.append(_finding("recipe_run_active_project_next_can_leak", "active recipe run exists; project next must not lead with unrelated task state", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+        if run["recipe_name"] == "release":
+            completion = active_task_completion(store, run["task_id"])
+            metadata = run.get("metadata") or {}
+            if metadata.get("commit_sha") and run["status"] != "completed" and not (run.get("pending_public_operations") or []):
+                findings.append(_finding("release_commit_without_pending_or_completed_run", "release commit is recorded but recipe run is neither completed nor waiting on public operations", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+            if completion and not metadata.get("commit_sha"):
+                findings.append(_finding("release_task_completed_without_commit_metadata", "release task is completed but release commit metadata is missing", severity="warning", entity_type="recipe_run", entity_id=run["id"]))
+    completed_release_runs = store.list_where(
+        "recipe_runs",
+        "project_id=? AND recipe_name='release' AND status='completed'",
+        (project_id,),
+    )
+    for run in completed_release_runs:
+        snapshot = current_git_snapshot(cwd)
+        if snapshot.get("working_tree_dirty"):
+            findings.append(_finding("release_recipe_completed_with_dirty_tree", "release recipe is completed but working tree is dirty", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+        if run.get("pending_public_operations"):
+            findings.append(_finding("release_recipe_completed_with_pending_public_operations", "release recipe is completed but pending public operations remain", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+    for completion in store.list_where("task_completions", "COALESCE(invalidated_at, '')=''"):
+        metadata = completion_commit_metadata(completion)
+        if not metadata:
+            continue
+        if not metadata.get("commit_sha"):
+            findings.append(_finding("task_completion_commit_metadata_missing_sha", "task completion commit metadata has no commit sha", severity="error", entity_type="task_completion", entity_id=completion["id"]))
+        if not metadata.get("committed_from_verified_dirty_tree"):
+            findings.append(_finding("task_completion_commit_not_from_verified_dirty_tree", "task completion commit was not recorded from the verified dirty tree", severity="error", entity_type="task_completion", entity_id=completion["id"]))
+        evidence = commit_aware_evidence_status(store.latest_for_task("verification_runs", completion["task_id"]), current_git_snapshot(cwd), completion)
+        if evidence == "stale" and metadata.get("committed_from_verified_dirty_tree"):
+            findings.append(_finding("commit_aware_evidence_still_stale", "commit-aware evidence is still stale despite verified dirty-tree commit metadata", severity="error", entity_type="task_completion", entity_id=completion["id"]))
+    return findings
+
+
 def doctor_state(store: Store, project_id: str, *, cwd: Path | None = None) -> dict[str, Any]:
-    findings = audit_project(store, project_id, cwd=cwd)
+    findings = [*audit_project(store, project_id, cwd=cwd), *audit_workflow(store, project_id, cwd=cwd)]
     counts: dict[str, int] = {}
     for item in findings:
         counts[item["code"]] = counts.get(item["code"], 0) + 1

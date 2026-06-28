@@ -348,6 +348,29 @@ def cmd_doctor_state(args: argparse.Namespace) -> None:
         store.close()
 
 
+def cmd_doctor_workflow(args: argparse.Namespace) -> None:
+    import json
+    from ..state_audit import audit_workflow
+
+    project_id = args.project or Path.cwd().name
+    store = Store(args.db)
+    try:
+        if not store.get("projects", project_id):
+            raise SystemExit(f"project not found: {project_id}")
+        findings = audit_workflow(store, project_id, cwd=Path.cwd())
+        result = {"project_id": project_id, "count": len(findings), "findings": findings}
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        print(f"project: {project_id}")
+        print(f"workflow_audit: {len(findings)} finding(s)")
+        print("No automatic changes were made.")
+        for item in findings:
+            print(f"- [{item['severity']}] {item['code']} {item['entity_type']}={item['entity_id']}: {item['message']}")
+    finally:
+        store.close()
+
+
 def cmd_doctor_transitions(args: argparse.Namespace) -> None:
     import json
 
@@ -379,6 +402,10 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "Nilo AI normal work:",
                 "- Start with `nilo status --ai`.",
                 "- Follow the first action shown by `nilo next`.",
+                "- When a recipe/workflow is active, generic continuation commands such as \"進めて\", \"続けて\", or \"next\" continue that workflow only.",
+                "- Do not switch to unrelated project tasks unless the user explicitly asks to proceed to another task.",
+                "- For release recipes, tag/push/GitHub release/package publish are public operations and require explicit user approval.",
+                "- Do not treat commit-created git head changes as stale evidence if the commit was created by Nilo from the verified dirty tree.",
                 "- Do not treat stale, missing, or failed evidence as complete.",
                 "- Do not treat unresolved review findings as complete.",
                 "- After verification, record it with `nilo check --mode quick|targeted|full`.",

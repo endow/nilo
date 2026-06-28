@@ -22,6 +22,7 @@ from ..snapshot import current_git_snapshot
 from ..store import Store
 from ..task_logic import active_task_completion, completion_audit_issues
 from ..timeutil import now_iso
+from ..workflow_context import workflow_context
 from .task import cmd_task_complete, cmd_task_create
 from .workflow import cmd_outcome_record, cmd_report_import, cmd_verification_run
 
@@ -279,6 +280,26 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         if not project:
             raise SystemExit(f"project not found: {project_id}")
         refresh_review_dispatch_state(store, project_id)
+        workflow = workflow_context(store, project_id)
+        if workflow.get("type") == "recipe_run":
+            print(f"{field_label('project')}: {project_id} ({project['name']})")
+            print("workflow_context:")
+            print(f"- recipe: {workflow['recipe_name']}")
+            print(f"- status: {workflow['status']}")
+            print(f"- current_step: {workflow['current_step']}")
+            print(f"- next_step: {workflow['next_step']}")
+            if workflow.get("pending_public_operations"):
+                print("pending_public_operations:")
+                for operation in workflow["pending_public_operations"]:
+                    print(f"- {operation['operation']}: {operation['target']}")
+                if workflow.get("approval_prompt"):
+                    print(workflow["approval_prompt"])
+            print(f"{field_label('next_action')}:")
+            if workflow.get("status") == "waiting_public_approval":
+                print("- Release recipe is waiting for explicit public operation approval.")
+            else:
+                print(f"- Continue release recipe step: {workflow['next_step']}")
+            return
         active_task = first_active_task_for_project(store, project_id)
         if active_task:
             print_facade_next_for_task(store, active_task["id"])

@@ -8,9 +8,9 @@ from .design_residue import parse_design_residue
 from .display_labels import field_label, status_label
 from .human_status import human_next_action_text, human_project_work_state, human_task_status
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
-from .snapshot import current_git_snapshot, evidence_status, review_result_status
+from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status, review_result_status
 from .store import Store
-from .task_logic import is_task_completed_status, projected_task_status, unresolved_blocking_review_findings
+from .task_logic import active_task_completion, is_task_completed_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
 
 
@@ -272,7 +272,7 @@ def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
         "task_type": task["task_type"],
         "latest_report_id": report["id"] if report else "",
         "latest_evidence_check_id": "",
-        "latest_evidence_status": evidence_status(verification_run, current_snapshot),
+        "latest_evidence_status": commit_aware_evidence_status(verification_run, current_snapshot, active_task_completion(store, task["id"])),
         "latest_verification_run_id": verification_run["id"] if verification_run else "",
         "latest_verification_status": verification_status,
         "latest_verification_source": verification_run.get("source", "nilo_executed") if verification_run else "",
@@ -1556,9 +1556,18 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
         for item in unexecuted_verifications_for_task(status, verification_run):
             unexecuted.append({"task_id": task["id"], "issue": item})
     agent_state = roadmap_agent_state(store, project["id"], tasks, statuses)
+    from .workflow_context import workflow_context as build_workflow_context
+
+    workflow = build_workflow_context(store, project["id"])
     base_next_actions = project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project["id"])
     next_actions = base_next_actions
-    if not active_tasks:
+    if workflow.get("type") == "recipe_run":
+        if workflow.get("status") == "waiting_public_approval":
+            operations = ", ".join(f"{item['operation']}:{item['target']}" for item in workflow.get("pending_public_operations") or [])
+            next_actions = [f"release recipe waiting for explicit public operation approval: {operations}"]
+        else:
+            next_actions = [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
+    elif not active_tasks:
         next_actions = no_active_task_next_actions(store, project["id"], base_next_actions)
     return {
         "project_id": project["id"],
@@ -1569,6 +1578,7 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
         "pending_roadmap_revisions": pending_revisions,
         "roadmap_assessments": roadmap_assessments(store, project["id"], tasks, statuses),
         "roadmap_agent_state": agent_state,
+        "workflow_context": workflow,
         "roadmap_agent_next_actions": roadmap_agent_next_actions(store, project["id"], agent_state),
         "work_state": project_work_state(tasks, statuses),
         "current_phase": project_current_phase(tasks, statuses),
@@ -1715,7 +1725,7 @@ def print_human_project_status(store: Store, project: dict, active_tasks: list[d
         task = {**task, "status": statuses[task["id"]]}
         verification_run = store.latest_for_task("verification_runs", task["id"])
         blocking = unresolved_blocking_review_findings(store, task["id"])
-        evidence = evidence_status(verification_run, current_git_snapshot(Path.cwd()))
+        evidence = commit_aware_evidence_status(verification_run, current_git_snapshot(Path.cwd()), active_task_completion(store, task["id"]))
         print(f"- {task['title']}")
         print(f"  {field_label('status')}: {status_label(task['status'])}")
         print(f"  {field_label('evidence')}: {status_label(evidence)}")

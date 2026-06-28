@@ -6,9 +6,10 @@ from typing import Any
 from .display_labels import ai_value_label, category_label, field_label, severity_label
 from .failure import compact_failure_message, list_failure_logs, summarize_failure_logs
 from .human_status import human_next_action_text
-from .snapshot import current_git_snapshot, evidence_status
+from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status
 from .store import Store
-from .task_logic import is_task_completed_status, projected_task_status, unresolved_review_findings
+from .task_logic import active_task_completion, is_task_completed_status, projected_task_status, unresolved_review_findings
+from .workflow_context import workflow_context
 
 
 AI_CONTEXT_TEXT_MAX_CHARS = 700
@@ -31,7 +32,8 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
     snapshot = current_git_snapshot(cwd)
     verification_run = store.latest_for_task("verification_runs", task_id)
     latest_report = store.latest_for_task("agent_reports", task_id)
-    evidence = evidence_status(verification_run, snapshot)
+    completion = active_task_completion(store, task_id)
+    evidence = commit_aware_evidence_status(verification_run, snapshot, completion)
     if evidence == "missing" and latest_report:
         evidence = "present"
     unresolved = unresolved_review_findings(store, task_id)
@@ -102,20 +104,27 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
         raise ValueError(f"project not found: {project_id}")
     tasks, statuses = p.project_tasks_and_statuses(store, project_id)
     active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
-    current = task_ai_context(store, active[0]["id"], cwd=cwd) if active else None
     design_residue = p.project_design_residue()
     commitments = p.accepted_roadmap_commitments(store, project_id)
     pending_revisions = p.pending_roadmap_revisions(store, project_id)
     failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
+    workflow = workflow_context(store, project_id)
+    if workflow.get("type") == "recipe_run" and workflow.get("task_id"):
+        current = task_ai_context(store, workflow["task_id"], cwd=cwd)
+    else:
+        current = task_ai_context(store, active[0]["id"], cwd=cwd) if active else None
+    if workflow.get("type") == "recipe_run":
+        next_actions = workflow_next_actions(workflow)
+    elif current:
+        next_actions = current["next_required_actions"]
+    else:
+        next_actions = p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
     return {
         "project_id": project_id,
         "project_name": project["name"],
+        "workflow_context": workflow,
         "current_task": current,
-        "next_required_actions": (
-            current["next_required_actions"]
-            if current
-            else p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
-        ),
+        "next_required_actions": next_actions,
         "failure_summary": {
             "open_failures": failure_summary["open_failure_count"],
             "high_open_failures": failure_summary["high_open_failure_count"],
@@ -129,6 +138,14 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
             ),
         },
     }
+
+
+def workflow_next_actions(workflow: dict[str, Any]) -> list[str]:
+    if workflow.get("status") == "waiting_public_approval":
+        operations = workflow.get("pending_public_operations") or []
+        operation_text = ", ".join(f"{item['operation']}:{item['target']}" for item in operations)
+        return [f"release recipe waiting for explicit public operation approval: {operation_text}"]
+    return [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
 
 
 def _shorten(value: str, limit: int) -> str:
@@ -186,6 +203,28 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
     required: list[str] = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
     optional_sections: list[list[str]] = []
     current = data.get("current_task")
+    workflow = data.get("workflow_context") or {"type": "project", "status": "no_active_recipe"}
+    if workflow.get("type") == "recipe_run":
+        required.append(
+            "workflow_context: "
+            f"{workflow['recipe_name']} {workflow['status']} "
+            f"current_step={workflow['current_step']} next_step={workflow['next_step']}"
+        )
+        if workflow.get("pending_public_operations"):
+            required.append("pending_public_operations:")
+            for item in workflow["pending_public_operations"]:
+                required.append(f"- {item['operation']}: {item['target']}")
+            if workflow.get("approval_prompt"):
+                required.append(workflow["approval_prompt"])
+    elif workflow.get("latest_completed_release"):
+        release = workflow["latest_completed_release"]
+        required.append("Release recipe completed:")
+        for key in ("commit", "tag", "github_release", "working_tree", "release_task"):
+            value = release.get(key)
+            if value:
+                required.append(f"- {key}: {value}")
+        if release.get("pushed"):
+            required.append(f"- pushed: {', '.join(release['pushed'])}")
     if not current:
         required.append(f"{field_label('status')}: {ai_value_label('no_active_task')}")
         required.append("現在のタスク: なし")

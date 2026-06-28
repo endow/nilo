@@ -936,6 +936,22 @@ def mcp_arguments_boundary(arguments: dict, store: Store) -> Any:
 
 
 def classify_next_step(summary: dict) -> dict:
+    workflow = summary.get("workflow_context") or {}
+    if workflow.get("type") == "recipe_run":
+        waiting_public = workflow.get("status") == "waiting_public_approval"
+        action = (summary.get("next_actions") or ["continue active recipe workflow"])[0]
+        return {
+            "action_id": "continue_active_recipe" if not waiting_public else "await_public_operation_confirmation",
+            "task_id": workflow.get("task_id", ""),
+            "task_type": "recipe",
+            "task_status": workflow.get("status", ""),
+            "command_hint": action,
+            "human_next_action": human_next_action_text(action),
+            "safe_for_ai": not waiting_public,
+            "requires_explicit_human_intent": waiting_public,
+            "reason": "active recipe run is the current workflow focus",
+            "workflow_context": workflow,
+        }
     active_tasks = summary["active_tasks"]
     if active_tasks:
         task = active_tasks[0]
@@ -1010,6 +1026,7 @@ def agent_work_context_from_summary(store: Store, summary: dict) -> dict:
         "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
+        "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],
         "allowed_actions": (summary["roadmap_agent_state"] or {}).get("ai_allowed_actions", []),
         "blocked_actions": (summary["roadmap_agent_state"] or {}).get("ai_blocked_actions", []),
@@ -1061,6 +1078,7 @@ def get_project_status(store: Store, arguments: dict) -> dict:
         "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
+        "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],
         "active_tasks": summary["active_tasks"],
         "next_actions": summary["next_actions"],
@@ -1098,6 +1116,7 @@ def get_next_step(store: Store, arguments: dict) -> dict:
         "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
         "next_step": classify_next_step(summary),
+        "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
     }
 
 

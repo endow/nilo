@@ -38,3 +38,10 @@ def register_recipe(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     recipe_run.add_argument("--risk", choices=["low", "medium", "high"], default="medium")
     recipe_run.add_argument("--dry-run", action="store_true")
     recipe_run.set_defaults(func=handlers.cmd_recipe_run)
+
+    approve_public = recipe_sub.add_parser("approve-public")
+    approve_public.add_argument("--project", required=True)
+    approve_public.add_argument("--approval", required=True, help="Explicit approval text, e.g. v0.3.1 を tag/push/release して")
+    approve_public.add_argument("--release-url", default="")
+    approve_public.add_argument("--executed", action="store_true", help="Record that the approved public operations were actually executed.")
+    approve_public.set_defaults(func=handlers.cmd_recipe_approve_public)

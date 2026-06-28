@@ -43,6 +43,11 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     doctor_state.add_argument("--project", help="Project id. Defaults to the current directory name.")
     doctor_state.add_argument("--json", action="store_true")
     doctor_state.set_defaults(func=handlers.cmd_doctor_state)
+    for doctor_name in ("workflow", "recipe", "release"):
+        doctor_workflow = doctor_sub.add_parser(doctor_name)
+        doctor_workflow.add_argument("--project", help="Project id. Defaults to the current directory name.")
+        doctor_workflow.add_argument("--json", action="store_true")
+        doctor_workflow.set_defaults(func=handlers.cmd_doctor_workflow)
     doctor_transitions = doctor_sub.add_parser("transitions")
     doctor_transitions.add_argument("--project", help="Project id. Defaults to the current directory name.")
     doctor_transitions.add_argument("--limit", type=int, default=50)

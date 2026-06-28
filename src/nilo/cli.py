@@ -314,37 +314,40 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 Normal work:
 - 作業開始と現在地確認は `nilo status --ai --project {project_id}` を使う。
 - `nilo next --project {project_id}` の先頭 action だけに従う。
+- active recipe 中の「進めて/next」は recipe のみ。
+- release tag/push/release/publish は明示承認待ち。
+- 検証済み dirty tree 由来の Nilo commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
-- 検証後は `nilo check` で verification を記録する。
+- 検証後は `nilo check` で記録する。
 - 最終完了判断、commit、force、roadmap close は人間が行う。
 
 Review handoff:
 - 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
 - MCP は通常入口ではない。必要な連携場面でだけ使う。
 - AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
-- `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は MCP 不可時の CLI reviewer process fallback または human-launch 専用。理由を説明してから使う。
+- `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は CLI reviewer process fallback/human-launch 専用。
 - review サブコマンドは各 help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
-- repository 固定は CLI は対象 cwd、MCP は `project_root` と identity guard を使う
+- repository 固定は CLI cwd、MCP は `project_root` と identity guard
 
 MCP identity guard:
 - MCP tool が呼べる場合でも、それだけで正しい Nilo 状態とは判断しない。
 - MCP を使う前に identity の repository / project / git_root / db_path が現在作業中のリポジトリと一致しているか確認する。
 - `expected_project` は repository directory name 用の guard。`repository_mismatch` は通常 status payload を返さない。
-- 複数 repository では `project_root` または `workspace` を指定する。優先順位は project_root, workspace, MCP server cwd。
-- MCP response の resolved repository / db_path が対象 repository と一致しない結果は使わず、対象 root で CLI fallback する。
+- 複数 repository では `project_root` または `workspace` を指定する。
+- MCP response の repository / db_path 不一致は使わず、CLI fallback する。
 - fallback: `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
 
 大きな作業の扱い:
 - 実装前に、その指示が小さい作業か大きい作業かを判定する。
-- 小さく明確な作業だけ、通常 task として進める。
-- 複数ファイルだけでは roadmap 扱いにしない。明確な一まとまりの修正は通常 task。
-- 大きな作業は自動で roadmap 化せず人間に推奨する。承認後だけ `nilo roadmap discuss`、accept 後に `nilo roadmap task-plan`。
+- 小さく明確なら通常 task。
+- 複数ファイルだけでは roadmap 扱いしない。明確な一まとまりの修正は通常 task。
+- 大きな作業は自動で roadmap 化せず人間に推奨する。承認後だけ `nilo roadmap discuss` -> `nilo roadmap task-plan`。
 
 質問抑制:
-- Nilo の出力や状態から安全に一意推定できる不足値は人間に質問しない。
+- Nilo 出力や状態から一意推定できる不足値は質問しない。
 - release recipe の `target_version` は現在バージョンと最新 git tag が一致する場合、または SemVer tag が無く現在バージョンから一意に決まる場合、次 patch を採用して進める。
-- 質問してよいのは候補が複数、状態矛盾、公開・破壊的操作の直前確認が必要な場合だけ。
+- 質問は候補複数、状態矛盾、公開・破壊的操作の直前確認だけ。
 
 詳細は `nilo help ai` を参照する。
 {NILO_BLOCK_END}
@@ -493,7 +496,7 @@ from .cli_handlers.quality import (
     cmd_review_wait,
     cmd_review_withdraw,
 )
-from .cli_handlers.recipe import cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show
+from .cli_handlers.recipe import cmd_recipe_approve_public, cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show
 from .cli_handlers.roadmap import (
     cmd_roadmap_accept,
     cmd_roadmap_adopt,
@@ -521,7 +524,7 @@ from .cli_handlers.task import (
 )
 from .cli_handlers.todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cmd_todo_show, cmd_todo_start, cmd_todo_triage
 from .cli_handlers.workflow import cmd_agent_install, cmd_doctor, cmd_init, cmd_instruct, cmd_migrate, cmd_outcome_record, cmd_report_import, cmd_understanding_approve, cmd_understanding_import, cmd_understanding_prepare, cmd_verification_run
-from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_doctor_completions, cmd_doctor_state, cmd_doctor_transitions, cmd_help_ai
+from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_doctor_completions, cmd_doctor_state, cmd_doctor_transitions, cmd_doctor_workflow, cmd_help_ai
 from .cli_handlers.workflow import cmd_update_check, cmd_upgrade
 from .cli_handlers.workspace import cmd_workspace_add, cmd_workspace_list, cmd_workspace_remove, cmd_workspace_show
 

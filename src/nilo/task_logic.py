@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .snapshot import current_git_snapshot, evidence_status
+from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, evidence_status
 from pathlib import Path
 
 
@@ -96,7 +96,8 @@ def human_completion_note_is_suspicious(completion: dict) -> bool:
 
 def ai_completion_has_evidence(store, task_id: str) -> bool:
     verification_run = store.latest_for_task("verification_runs", task_id)
-    return evidence_status(verification_run, current_git_snapshot(Path.cwd())) == "current"
+    completion = active_task_completion(store, task_id)
+    return commit_aware_evidence_status(verification_run, current_git_snapshot(Path.cwd()), completion) == "current"
 
 
 def unresolved_blocking_review_findings(store, task_id: str) -> list[dict]:
@@ -131,7 +132,7 @@ def completion_audit_issues(store, task: dict, *, cwd: Path | None = None, curre
     cwd = cwd or Path.cwd()
     verification_run = store.latest_for_task("verification_runs", task["id"])
     current_snapshot = current_snapshot or current_git_snapshot(cwd)
-    evidence = evidence_status(verification_run, current_snapshot)
+    evidence = commit_aware_evidence_status(verification_run, current_snapshot, completion)
     unresolved = unresolved_review_findings(store, task["id"])
     issues: list[str] = []
     if evidence != "current":
@@ -144,6 +145,8 @@ def completion_audit_issues(store, task: dict, *, cwd: Path | None = None, curre
     if task.get("task_type") == "implementation" and not accepted_verifications:
         issues.append("missing_accepted_verification")
     completed_snapshot = completion.get("completed_snapshot") or {}
+    if completion_commit_metadata(completion) and evidence == "current":
+        completed_snapshot = {}
     if completed_snapshot and completed_snapshot.get("git_diff_hash") != current_snapshot.get("git_diff_hash"):
         issues.append("completion_snapshot_changed")
     return issues

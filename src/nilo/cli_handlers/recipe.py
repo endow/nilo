@@ -12,6 +12,7 @@ from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json
 from ..store import Store
 from ..timeutil import now_iso
 from ..version_advisor import advise_version_bump
+from ..workflow_context import approve_pending_public_operations, create_recipe_run
 
 
 def cmd_recipe_list(args: argparse.Namespace) -> None:
@@ -80,7 +81,47 @@ def cmd_recipe_run(args: argparse.Namespace) -> None:
         _print_rendered_task(rendered)
         return
     task_id = _create_recipe_task(args, project, source, rendered)
+    if source.name == "release":
+        store = Store(args.db)
+        try:
+            create_recipe_run(
+                store,
+                project_id=project,
+                task_id=task_id,
+                recipe_name=source.name,
+                rendered_fields=rendered,
+            )
+        finally:
+            store.close()
     print(task_id)
+
+
+def cmd_recipe_approve_public(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        if not store.get("projects", args.project):
+            raise SystemExit(f"project not found: {args.project}")
+        try:
+            run = approve_pending_public_operations(
+                store,
+                project_id=args.project,
+                approval=args.approval,
+                release_url=args.release_url,
+                executed=args.executed,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(f"release_recipe: {run['status']}")
+        print(f"recipe_run: {run['id']}")
+        metadata = run.get("metadata") or {}
+        if metadata.get("commit_sha"):
+            print(f"commit: {metadata['commit_sha']}")
+        for operation in metadata.get("public_operations_completed") or []:
+            print(f"- {operation['operation']}: {operation['target']}")
+        if metadata.get("github_release_url"):
+            print(f"github_release: {metadata['github_release_url']}")
+    finally:
+        store.close()
 
 
 def _has_errors(sources: list[RecipeSource]) -> bool:

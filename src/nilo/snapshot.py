@@ -134,6 +134,53 @@ def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: d
     return "stale"
 
 
+def completion_commit_metadata(completion: dict[str, Any] | None) -> dict[str, Any]:
+    if not completion:
+        return {}
+    snapshot = completion.get("completed_snapshot") or {}
+    metadata = snapshot.get("commit_transition") if isinstance(snapshot, dict) else {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def committed_evidence_matches(
+    verification_run: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+    completion: dict[str, Any] | None,
+) -> bool:
+    metadata = completion_commit_metadata(completion)
+    if not verification_run or not metadata.get("committed_from_verified_dirty_tree"):
+        return False
+    if not metadata.get("commit_sha"):
+        return False
+    if current_snapshot.get("working_tree_dirty"):
+        return False
+    verified_snapshot = metadata.get("verified_snapshot") or {}
+    pre_commit_snapshot = metadata.get("pre_commit_snapshot") or {}
+    post_commit_snapshot = metadata.get("post_commit_snapshot") or {}
+    if not snapshots_match(record_snapshot(verification_run), compact_snapshot(verified_snapshot)):
+        return False
+    if not snapshots_match(verified_snapshot, pre_commit_snapshot):
+        return False
+    if not snapshots_match(post_commit_snapshot, current_snapshot):
+        return False
+    if metadata.get("verified_diff_hash") != verified_snapshot.get("git_diff_hash"):
+        return False
+    if metadata.get("verified_diff_hash") != pre_commit_snapshot.get("git_diff_hash"):
+        return False
+    return True
+
+
+def commit_aware_evidence_status(
+    verification_run: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+    completion: dict[str, Any] | None,
+) -> str:
+    status = evidence_status(verification_run, current_snapshot)
+    if status == "stale" and committed_evidence_matches(verification_run, current_snapshot, completion):
+        return "current"
+    return status
+
+
 def review_result_status(review_result: dict[str, Any], current_snapshot: dict[str, Any]) -> str:
     if snapshots_match(record_snapshot(review_result, "based_on_snapshot"), compact_snapshot(current_snapshot)):
         return "current"

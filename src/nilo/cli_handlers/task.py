@@ -10,11 +10,12 @@ from ..display_labels import ai_value_label, bool_label, category_label, field_l
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
-from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status, review_result_status
+from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
 from ..task_logic import active_task_completion, completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
 from ..transitions import TransitionError, complete_task, invalidate_task_completion
+from ..workflow_context import mark_release_commit_recorded
 
 
 def cmd_task_create(args: argparse.Namespace) -> str:
@@ -136,7 +137,8 @@ def cmd_task_status(args: argparse.Namespace) -> None:
             print(f"{field_label('latest_instruction')}: {instruction['id']}")
         if report:
             print(f"{field_label('latest_report')}: {report['id']} ({report['claimed_status']})")
-        print(f"{field_label('evidence_status')}: {status_label(evidence_status(verification_run, current_snapshot))}")
+        completion = active_task_completion(store, args.task)
+        print(f"{field_label('evidence_status')}: {status_label(commit_aware_evidence_status(verification_run, current_snapshot, completion))}")
         if verification_run:
             result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
             print(f"{field_label('latest_verification_run')}: {verification_run['id']} ({result})")
@@ -295,6 +297,8 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             record_nilo_issue_for_task(store, task["project_id"], task["id"], "task complete", exc, boundary)
             raise SystemExit(str(exc)) from exc
         try:
+            verification_before_completion = store.latest_for_task("verification_runs", args.task)
+            snapshot_before_completion = current_git_snapshot(Path.cwd())
             if args.actor == "human" and not (getattr(args, "decision_note", "") or "").strip():
                 raise TransitionError("decision_note_required", "human completion requires --decision-note with the human acceptance note")
             result = complete_task(
@@ -334,6 +338,34 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             code, out, err = c.commit_changed_files(Path.cwd(), changed_files, message)
             if code != 0:
                 raise SystemExit(err or "git commit failed")
+            commit_sha = _git_single_value(["rev-parse", "HEAD"])
+            committed_tree_hash = _git_single_value(["rev-parse", "HEAD^{tree}"])
+            post_commit_snapshot = current_git_snapshot(Path.cwd())
+            completion_id = result.created_ids["task_completion"]
+            completion = store.get("task_completions", completion_id)
+            completed_snapshot = completion.get("completed_snapshot") or {}
+            completed_snapshot["commit_transition"] = {
+                "verified_snapshot": compact_snapshot(verification_before_completion or {}),
+                "pre_commit_snapshot": compact_snapshot(snapshot_before_completion),
+                "post_commit_snapshot": compact_snapshot(post_commit_snapshot),
+                "commit_sha": commit_sha,
+                "commit_message": message,
+                "committed_from_verified_dirty_tree": bool(
+                    verification_before_completion
+                    and compact_snapshot(verification_before_completion) == compact_snapshot(snapshot_before_completion)
+                    and not post_commit_snapshot.get("working_tree_dirty")
+                ),
+                "verified_diff_hash": (verification_before_completion or {}).get("git_diff_hash", ""),
+                "committed_tree_hash": committed_tree_hash,
+            }
+            store.update("task_completions", completion_id, {"completed_snapshot": completed_snapshot})
+            mark_release_commit_recorded(
+                store,
+                task_id=args.task,
+                commit_sha=commit_sha,
+                commit_message=message,
+                post_commit_snapshot=compact_snapshot(post_commit_snapshot),
+            )
             print("commit: created")
             if out:
                 print(out)
@@ -343,6 +375,13 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             print(f"- suggested command: git add {' '.join(changed_files)} && git commit -m \"Complete {task['title']}\"")
     finally:
         store.close()
+
+
+def _git_single_value(args: list[str]) -> str:
+    from ..gitmeta import git_output
+
+    code, out, _ = git_output(args, Path.cwd())
+    return out.strip() if code == 0 else ""
 
 
 def cmd_task_completion_invalidate(args: argparse.Namespace) -> None:
