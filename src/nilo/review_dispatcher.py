@@ -97,6 +97,12 @@ class DispatchError(Exception):
 
 
 def find_executable(command: str, env: dict[str, str] | None = None) -> str | None:
+    def path_exists(path: Path) -> bool:
+        try:
+            return path.exists()
+        except OSError:
+            return False
+
     if not command.strip():
         return None
     candidate = Path(command)
@@ -104,12 +110,12 @@ def find_executable(command: str, env: dict[str, str] | None = None) -> str | No
         candidate_suffix = candidate.suffix.casefold()
         if candidate.parent != Path(".") or candidate.is_absolute():
             if candidate_suffix in WINDOWS_EXECUTABLE_EXTENSIONS:
-                return str(candidate) if candidate.exists() else None
+                return str(candidate) if path_exists(candidate) else None
             if candidate_suffix:
                 return None
             for suffix in WINDOWS_EXECUTABLE_EXTENSIONS:
                 suffixed = candidate.with_name(candidate.name + suffix)
-                if suffixed.exists():
+                if path_exists(suffixed):
                     return str(suffixed)
             return None
 
@@ -121,7 +127,7 @@ def find_executable(command: str, env: dict[str, str] | None = None) -> str | No
                 if not directory:
                     continue
                 direct = Path(directory) / command
-                if direct.exists():
+                if path_exists(direct):
                     return str(direct)
             return None
         if Path(command).suffix:
@@ -131,12 +137,12 @@ def find_executable(command: str, env: dict[str, str] | None = None) -> str | No
                 continue
             for suffix in WINDOWS_EXECUTABLE_EXTENSIONS:
                 executable = Path(directory) / f"{command}{suffix}"
-                if executable.exists():
+                if path_exists(executable):
                     return str(executable)
         return None
 
     if candidate.parent != Path(".") or candidate.is_absolute():
-        if candidate.exists():
+        if path_exists(candidate):
             return str(candidate)
         return None
     path = (env or os.environ).get("PATH")
@@ -147,13 +153,13 @@ def find_executable(command: str, env: dict[str, str] | None = None) -> str | No
         if not directory:
             continue
         direct = Path(directory) / command
-        if direct.exists():
+        if path_exists(direct):
             return str(direct)
         for suffix in suffixes:
             if lower_command.endswith(suffix):
                 continue
             executable = Path(directory) / f"{command}{suffix}"
-            if executable.exists():
+            if path_exists(executable):
                 return str(executable)
     return None
 
@@ -1543,4 +1549,3 @@ def quick_review(
     finally:
         if prompt_path and not should_import:
             prompt_path.unlink(missing_ok=True)
-

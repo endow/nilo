@@ -590,6 +590,27 @@ class ReviewDispatcherTests(unittest.TestCase):
 
         self.assertEqual(Path(resolved or "").name.casefold(), "codex.cmd")
 
+    def test_find_executable_skips_inaccessible_path_entries(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            inaccessible = root / "inaccessible"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "local-reviewer").write_text("#!/bin/sh\n", encoding="utf-8")
+
+            original_exists = Path.exists
+
+            def exists(path: Path) -> bool:
+                if path.parent == inaccessible:
+                    raise PermissionError("denied")
+                return original_exists(path)
+
+            env = {"PATH": os.pathsep.join([str(inaccessible), str(bin_dir)])}
+            with patch("pathlib.Path.exists", exists):
+                resolved = find_executable("local-reviewer", env)
+
+        self.assertEqual(Path(resolved or "").name, "local-reviewer")
+
     def test_resolve_command_wraps_windows_cmd_shim_with_cmd_exe(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
