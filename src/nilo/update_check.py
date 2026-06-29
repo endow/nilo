@@ -128,9 +128,18 @@ def package_location() -> Path:
 
 def repo_root_from_package(run: RunCommand = run_command) -> tuple[Path | None, str]:
     result = run(["git", "rev-parse", "--show-toplevel"], package_location())
-    if result.returncode != 0 or not result.stdout.strip():
-        return None, result.stderr.strip() or "not a git repository"
-    return Path(result.stdout.strip()).resolve(), ""
+    if result.returncode == 0 and result.stdout.strip():
+        return Path(result.stdout.strip()).resolve(), ""
+
+    package_error = result.stderr.strip()
+    cwd_result = run(["git", "rev-parse", "--show-toplevel"], Path.cwd())
+    if cwd_result.returncode == 0 and cwd_result.stdout.strip():
+        cwd_repo = Path(cwd_result.stdout.strip()).resolve()
+        pyproject = cwd_repo / "pyproject.toml"
+        if pyproject.exists() and 'name = "nilo"' in pyproject.read_text(encoding="utf-8", errors="ignore"):
+            return cwd_repo, ""
+    reason = package_error or cwd_result.stderr.strip() or "not a git repository"
+    return None, reason
 
 
 def git_latest_tag(repo: Path, ref: str | None, run: RunCommand) -> tuple[str, str]:

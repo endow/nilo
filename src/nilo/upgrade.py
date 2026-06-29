@@ -39,9 +39,21 @@ def package_location() -> Path:
 def repo_root_from_package(run: RunCommand = run_command) -> tuple[Path | None, str]:
     start = package_location()
     result = run(["git", "rev-parse", "--show-toplevel"], start)
-    if result.returncode != 0 or not result.stdout.strip():
-        return None, result.stderr.strip()
-    return Path(result.stdout.strip()).resolve(), ""
+    if result.returncode == 0 and result.stdout.strip():
+        return Path(result.stdout.strip()).resolve(), ""
+
+    package_error = result.stderr.strip()
+    cwd_result = run(["git", "rev-parse", "--show-toplevel"], Path.cwd())
+    if cwd_result.returncode == 0 and cwd_result.stdout.strip():
+        cwd_repo = Path(cwd_result.stdout.strip()).resolve()
+        pyproject = cwd_repo / "pyproject.toml"
+        if pyproject.exists() and 'name = "nilo"' in pyproject.read_text(encoding="utf-8", errors="ignore"):
+            return cwd_repo, ""
+    if cwd_result.stderr.strip():
+        package_error = package_error or cwd_result.stderr.strip()
+    if package_error:
+        return None, package_error
+    return None, "not a git repository"
 
 
 def current_branch(repo: Path, run: RunCommand = run_command) -> str:
@@ -70,6 +82,15 @@ def git_rev(repo: Path, ref: str, run: RunCommand = run_command) -> str:
     if result.returncode != 0 or not result.stdout.strip():
         raise UpgradeError(f"Upgrade stopped: git revision could not be resolved for {ref}.", result)
     return result.stdout.strip()
+
+
+def is_ancestor(repo: Path, ancestor: str, descendant: str, run: RunCommand = run_command) -> bool:
+    result = run(["git", "merge-base", "--is-ancestor", ancestor, descendant], repo)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise UpgradeError("Upgrade stopped: git history relationship could not be determined.", result)
 
 
 def backup_database(db_path: Path) -> Path | None:
@@ -157,6 +178,31 @@ def run_upgrade(*, dry_run: bool = False, db_path: Path | None = None, run: RunC
 
                 reset_update_check_state()
             return 0
+
+        local_is_behind = is_ancestor(repo, local_rev, remote_rev, run)
+        remote_is_behind = is_ancestor(repo, remote_rev, local_rev, run)
+        if remote_is_behind and not local_is_behind:
+            print("Already up to date.")
+            print()
+            print(f"Local branch already contains {upstream}.")
+            if dry_run:
+                print("Dry run: no update operations would be run.")
+            print("Done.")
+            if not dry_run:
+                from .update_check import reset_update_check_state
+
+                reset_update_check_state()
+            return 0
+        if not local_is_behind:
+            print("Upgrade stopped: local branch has diverged from upstream.")
+            print()
+            print("Run:")
+            print("  git status")
+            print("  git log --oneline --graph --decorate --left-right HEAD...@{u}")
+            print()
+            print("Resolve the branch relationship before running:")
+            print("  nilo upgrade")
+            return 1
 
         print(f"Update available: {local_rev[:12]} -> {remote_rev[:12]}")
         if dry_run:

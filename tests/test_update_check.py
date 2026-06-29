@@ -38,6 +38,7 @@ class FakeTagRunner:
         fetch_fails: bool = False,
         current_is_ancestor: bool = True,
         git_missing: bool = False,
+        package_not_git: bool = False,
     ) -> None:
         self.repo = repo
         self.current = current
@@ -47,6 +48,7 @@ class FakeTagRunner:
         self.fetch_fails = fetch_fails
         self.current_is_ancestor = current_is_ancestor
         self.git_missing = git_missing
+        self.package_not_git = package_not_git
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str], cwd: Path) -> CommandResult:
@@ -55,6 +57,8 @@ class FakeTagRunner:
             return CommandResult(127, "", "git executable not found")
         if command == ["git", "rev-parse", "--show-toplevel"]:
             if self.not_git:
+                return CommandResult(128, "", "fatal: not a git repository")
+            if self.package_not_git and cwd != Path.cwd():
                 return CommandResult(128, "", "fatal: not a git repository")
             return CommandResult(0, str(self.repo), "")
         if command == ["git", "fetch", "--tags", "--quiet"]:
@@ -119,6 +123,18 @@ class UpdateCheckTests(unittest.TestCase):
 
         self.assertEqual(result.status, "skipped")
         self.assertFalse(any(command[:2] == ["git", "fetch"] for command in runner.commands))
+
+    def test_update_check_uses_current_directory_nilo_checkout_when_installation_is_not_git(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "pyproject.toml").write_text('[project]\nname = "nilo"\n', encoding="utf-8")
+            runner = FakeTagRunner(repo, package_not_git=True)
+
+            with patch("pathlib.Path.cwd", return_value=repo):
+                result = check_for_update(run=runner, record_checked=False)
+
+        self.assertTrue(result.update_available)
+        self.assertIn(["git", "fetch", "--tags", "--quiet"], runner.commands)
 
     def test_update_check_skips_when_git_executable_is_missing(self) -> None:
         with TemporaryDirectory() as directory:
@@ -196,6 +212,30 @@ class UpdateCheckTests(unittest.TestCase):
                     main(["--db", str(db), "status", "--project", "project_test"])
 
         self.assertIn("Nilo の更新があります: 0.3.1 -> 0.3.2", output.getvalue())
+
+    def test_workflow_commands_print_auto_notice_after_command(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            output = TtyStringIO()
+            with patch("nilo.cli.auto_update_notice", return_value="Nilo の更新があります: 0.3.1 -> 0.3.2\n更新するには: nilo upgrade"):
+                with patch("sys.stdout", output):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "nilo"])
+                    main(["--db", str(db), "start", "Work", "--project", "nilo"])
+
+        self.assertIn("Nilo の更新があります: 0.3.1 -> 0.3.2", output.getvalue())
+
+    def test_machine_readable_commands_do_not_print_auto_notice(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            output = TtyStringIO()
+            with patch("nilo.cli.auto_update_notice", return_value="Nilo の更新があります: 0.3.1 -> 0.3.2\n更新するには: nilo upgrade") as notice:
+                with patch("sys.stdout", output):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "nilo"])
+                    main(["--db", str(db), "status", "--project", "nilo", "--json"])
+                    main(["--db", str(db), "status", "--project", "nilo", "--ai"])
+
+        self.assertEqual(notice.call_count, 1)
+        self.assertEqual(output.getvalue().count("Nilo の更新があります"), 1)
 
     def test_instruction_note_uses_cached_update_and_forbids_auto_upgrade(self) -> None:
         project = {

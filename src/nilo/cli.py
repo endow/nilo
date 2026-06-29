@@ -575,13 +575,23 @@ TOP_LEVEL_COMMANDS = {
 }
 
 
-UPDATE_NOTICE_COMMANDS = {
-    "doctor",
-    "init",
-    "next",
-    "review",
-    "status",
+UPDATE_NOTICE_EXCLUDED_COMMANDS = {
+    "backup",
+    "backups",
+    "mcp",
+    "restore",
+    "test",
+    "update-check",
+    "upgrade",
+    "verification",
 }
+
+
+def should_show_update_notice(args: argparse.Namespace) -> bool:
+    if bool(getattr(args, "json", False)) or bool(getattr(args, "ai", False)):
+        return False
+    command = str(getattr(args, "command", ""))
+    return command in TOP_LEVEL_COMMANDS and command not in UPDATE_NOTICE_EXCLUDED_COMMANDS
 
 
 def route_natural_language_intent(argv: list[str]) -> bool:
@@ -650,7 +660,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(raw_argv)
     args.func(args)
-    if args.command in UPDATE_NOTICE_COMMANDS:
+    if should_show_update_notice(args):
         notice = auto_update_notice()
         if notice:
             print()
