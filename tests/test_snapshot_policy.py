@@ -68,6 +68,18 @@ class SnapshotPolicyTests(unittest.TestCase):
         self.assertEqual(evidence_status(run, current), "recorded")
         self.assertEqual(evidence_status(run, current, strict=False), "present")
 
+    def test_non_git_snapshot_can_still_match_verification_evidence(self) -> None:
+        current = {
+            "git_head": None,
+            "git_diff_hash": "",
+            "working_tree_dirty": False,
+            "git_available": False,
+            "git_diff_hash_computed": False,
+        }
+        run = {"git_head": None, "git_diff_hash": "", "working_tree_dirty": False, "timed_out": False, "exit_code": 0}
+
+        self.assertEqual(evidence_status(run, current), "current")
+
     def test_niloignore_excludes_content_but_keeps_path_and_reason(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

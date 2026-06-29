@@ -145,6 +145,8 @@ def compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 def snapshot_has_diff_hash(snapshot: dict[str, Any] | None) -> bool:
     if not snapshot:
         return False
+    if snapshot.get("git_available") is False:
+        return True
     return bool(snapshot.get("git_diff_hash_computed", True)) and (snapshot.get("git_diff_hash") or "") != UNCOMPUTED_DIFF_HASH
 
 
