@@ -1,7 +1,7 @@
 schema_version: 1
 name: release
 title: Release {target_version}
-summary: Prepare a Nilo release with version updates, verification, and GitHub release handoff.
+summary: Prepare a Nilo release with version updates, verification, and an approval-gated GitHub release.
 instruction: |
   Prepare the requested release version in a narrow, auditable scope.
 
@@ -9,21 +9,24 @@ instruction: |
   references to the previous release number, update release-facing documentation
   when needed, and keep unrelated implementation changes out of the task.
 
-  Prepare local release evidence, a suggested tag, GitHub CLI commands, and a
-  release notes draft for human handoff. The release notes draft must include a
+  Prepare local release evidence, a suggested tag, GitHub release execution, and a
+  release notes draft. The release notes draft must include a
   Japanese section first and an English section second, using the headings
   "リリースノート（日本語）" and "Release Notes (English)" without labeling the
   sections as proposals. Here, draft means pre-human-gate handoff content, not
   tentative wording inside the release notes. Treat GitHub publication as a
   human gate: the agent must not commit, tag, push, create a GitHub release, or
-  use force options unless the human explicitly asks for that exact action.
+  use force options unless the human explicitly asks for that exact action. After
+  explicit approval, the agent should use Nilo's release public-operation execution
+  path instead of handing the tag, push, and GitHub release creation steps back to
+  the human.
 acceptance:
   - Project version sources are updated to {target_version}.
   - Builtin recipes and release documentation remain valid after the change.
   - Verification evidence includes the test suite or a documented reason it was not run.
   - Release notes draft covers notable changes, verification, and upgrade/install notes when relevant.
-  - Release notes draft is written in Japanese first and English second for GitHub release handoff.
-  - GitHub release next steps are prepared without crossing human-gated commit, tag, push, or release creation actions.
+  - Release notes draft is written in Japanese first and English second for GitHub release execution.
+  - GitHub release next steps remain approval-gated, and approved tag, push, and release creation actions can be executed by Nilo.
 variables:
   target_version:
     type: string
@@ -47,7 +50,7 @@ completion_contract:
     - version check output is recorded
     - verification command output is recorded
     - release notes draft text is included with Japanese first and English second
-    - GitHub release handoff notes are included
+    - GitHub release execution notes are included
 tags:
   - release
   - github

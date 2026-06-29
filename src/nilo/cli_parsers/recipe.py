@@ -44,4 +44,5 @@ def register_recipe(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     approve_public.add_argument("--approval", required=True, help="Explicit approval text, e.g. v0.3.1 を tag/push/release して")
     approve_public.add_argument("--release-url", default="")
     approve_public.add_argument("--executed", action="store_true", help="Record that the approved public operations were actually executed.")
+    approve_public.add_argument("--execute", action="store_true", help="Execute the approved tag, push, and GitHub release operations, then record completion.")
     approve_public.set_defaults(func=handlers.cmd_recipe_approve_public)

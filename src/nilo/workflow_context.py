@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import shlex
+import subprocess
+from pathlib import Path
 from typing import Any
 
 from .cli_support import make_id
@@ -171,12 +174,7 @@ def approve_pending_public_operations(
     if not pending:
         raise ValueError("release recipe has no pending public operations")
     version = release_version_from_run(run)
-    expected_tag = f"v{version.lstrip('v')}" if version else ""
-    lowered = approval.lower()
-    if expected_tag and expected_tag.lower() not in lowered:
-        raise ValueError(f"approval must mention {expected_tag}")
-    if not all(word in lowered for word in ("tag", "push", "release")):
-        raise ValueError("approval must explicitly mention tag, push, and release")
+    validate_public_operation_approval(approval, version)
     metadata = {
         **metadata,
         "public_operations_approved_by": approval,
@@ -220,6 +218,126 @@ def approve_pending_public_operations(
     return store.get("recipe_runs", run["id"])
 
 
+def validate_public_operation_approval(approval: str, version: str) -> None:
+    expected_tag = f"v{version.lstrip('v')}" if version else ""
+    lowered = approval.lower()
+    if expected_tag and expected_tag.lower() not in lowered:
+        raise ValueError(f"approval must mention {expected_tag}")
+    if not all(word in lowered for word in ("tag", "push", "release")):
+        raise ValueError("approval must explicitly mention tag, push, and release")
+
+
+def execute_pending_public_operations(
+    store,
+    *,
+    project_id: str,
+    approval: str,
+    cwd: Path,
+    release_url: str = "",
+    branch: str = "main",
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    run = active_recipe_run(store, project_id)
+    if not run or run.get("recipe_name") != "release":
+        raise ValueError("active release recipe run not found")
+    pending = run.get("pending_public_operations") or (run.get("metadata") or {}).get("public_operations_approved") or []
+    if not pending:
+        raise ValueError("release recipe has no pending public operations")
+    version = release_version_from_run(run)
+    validate_public_operation_approval(approval, version)
+
+    tag = _release_tag_from_operations(pending) or (f"v{version.lstrip('v')}" if version else "")
+    if not tag:
+        raise ValueError("release tag could not be resolved")
+
+    code, out, err = _run_command(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd)
+    if code != 0:
+        raise ValueError(err or "git status failed")
+    if out.strip():
+        raise ValueError("working tree must be clean before executing public release operations")
+
+    if run.get("pending_public_operations"):
+        # Record explicit approval immediately before crossing public-operation gates.
+        run = approve_pending_public_operations(
+            store,
+            project_id=project_id,
+            approval=approval,
+            release_url=release_url,
+            executed=False,
+        )
+        pending = (run.get("metadata") or {}).get("public_operations_approved") or pending
+
+    logs: list[dict[str, Any]] = []
+    for operation in pending:
+        name = operation.get("operation")
+        target = operation.get("target") or tag
+        if name == "create_tag":
+            logs.append(_ensure_git_tag(cwd, target))
+        elif name == "push_branch":
+            logs.append(_run_checked(["git", "push", "origin", target or branch], cwd))
+        elif name == "push_tag":
+            logs.append(_run_checked(["git", "push", "origin", target], cwd))
+        elif name == "create_github_release":
+            notes_file = Path("docs") / "releases" / f"{version}.md"
+            command = ["gh", "release", "create", target, "--title", target]
+            if (cwd / notes_file).exists():
+                command.extend(["--notes-file", str(notes_file)])
+            release_log = _run_checked(command, cwd)
+            logs.append(release_log)
+            if not release_url:
+                release_url = _extract_release_url(str(release_log.get("stdout") or ""))
+        else:
+            raise ValueError(f"unsupported public release operation: {name}")
+
+    if not release_url:
+        view_log = _run_checked(["gh", "release", "view", tag, "--json", "url", "-q", ".url"], cwd)
+        logs.append(view_log)
+        release_url = str(view_log.get("stdout") or "").strip()
+    if not release_url:
+        raise ValueError("GitHub release URL could not be determined")
+
+    completed = approve_pending_public_operations(
+        store,
+        project_id=project_id,
+        approval=approval,
+        release_url=release_url,
+        executed=True,
+    )
+    return completed, logs
+
+
+def _ensure_git_tag(cwd: Path, tag: str) -> dict[str, Any]:
+    code, _, _ = _run_command(["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"], cwd)
+    if code == 0:
+        return {"command": ["git", "tag", tag], "exit_code": 0, "stdout": "already exists", "stderr": "", "skipped": True}
+    return _run_checked(["git", "tag", tag], cwd)
+
+
+def _run_checked(command: list[str], cwd: Path) -> dict[str, Any]:
+    code, out, err = _run_command(command, cwd)
+    log = {"command": command, "exit_code": code, "stdout": out, "stderr": err}
+    if code != 0:
+        display = " ".join(command)
+        raise ValueError(err or f"command failed: {display}")
+    return log
+
+
+def _run_command(command: list[str], cwd: Path) -> tuple[int, str, str]:
+    proc = subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return proc.returncode, proc.stdout.rstrip("\n"), proc.stderr.rstrip("\n")
+
+
+def _extract_release_url(output: str) -> str:
+    match = re.search(r"https?://\S+", output)
+    return match.group(0) if match else ""
+
+
 def workflow_context(store, project_id: str) -> dict[str, Any]:
     run = active_recipe_run(store, project_id)
     if not run:
@@ -249,6 +367,7 @@ def workflow_context(store, project_id: str) -> dict[str, Any]:
     }
     if run["status"] == "waiting_public_approval":
         context["approval_prompt"] = public_approval_prompt(run)
+        context["public_execution_command"] = public_execution_command(project_id, run)
     return context
 
 
@@ -260,9 +379,28 @@ def next_step_for_recipe_run(run: dict[str, Any]) -> str:
 
 
 def public_approval_prompt(run: dict[str, Any]) -> str:
+    return f"To proceed, explicitly say: {public_approval_text(run)}"
+
+
+def public_approval_text(run: dict[str, Any]) -> str:
     version = release_version_from_run(run)
-    text = PUBLIC_OPERATION_APPROVAL_TEXT.format(version=version.lstrip("v") if version else "<target_version>")
-    return f"To proceed, explicitly say: {text}"
+    return PUBLIC_OPERATION_APPROVAL_TEXT.format(version=version.lstrip("v") if version else "<target_version>")
+
+
+def public_execution_command(project_id: str, run: dict[str, Any]) -> str:
+    approval = public_approval_text(run)
+    return " ".join(
+        [
+            "nilo",
+            "recipe",
+            "approve-public",
+            "--project",
+            shlex.quote(project_id),
+            "--approval",
+            shlex.quote(approval),
+            "--execute",
+        ]
+    )
 
 
 def release_completion_summary(store, run: dict[str, Any]) -> dict[str, Any]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import subprocess
 import unittest
 from contextlib import redirect_stdout
@@ -53,6 +54,45 @@ def verification_row(task_id: str, root: Path) -> dict:
         "finished_at": now,
         "created_at": now,
     }
+
+
+def install_fake_release_tools(root: Path) -> Path:
+    real_git = shutil.which("git")
+    if not real_git:
+        raise RuntimeError("git not found")
+    fake_bin = root / ".git" / "fake-bin"
+    fake_bin.mkdir()
+    log = root / ".git" / "release-tools.log"
+    git_script = fake_bin / "git"
+    git_script.write_text(
+        f"""#!/bin/sh
+if [ "$1" = "push" ]; then
+  echo "git $@" >> "{log}"
+  exit 0
+fi
+exec "{real_git}" "$@"
+""",
+        encoding="utf-8",
+    )
+    gh_script = fake_bin / "gh"
+    gh_script.write_text(
+        f"""#!/bin/sh
+echo "gh $@" >> "{log}"
+if [ "$1" = "release" ] && [ "$2" = "create" ]; then
+  echo "https://github.com/example/project/releases/tag/$3"
+  exit 0
+fi
+if [ "$1" = "release" ] && [ "$2" = "view" ]; then
+  echo "https://github.com/example/project/releases/tag/$3"
+  exit 0
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    git_script.chmod(0o755)
+    gh_script.chmod(0o755)
+    return fake_bin
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -221,6 +261,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     main(["--db", str(db), "next", "--project", root.name])
                 self.assertIn("pending_public_operations:", gated_output.getvalue())
                 self.assertIn("v0.3.1 を tag/push/release して", gated_output.getvalue())
+                self.assertIn("nilo recipe approve-public --project", gated_output.getvalue())
+                self.assertIn("--execute", gated_output.getvalue())
                 self.assertNotIn("Unrelated cleanup", gated_output.getvalue())
 
                 store = Store(db)
@@ -279,6 +321,130 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertEqual(run["pending_public_operations"], [])
                     context = workflow_context(store, root.name)
                     self.assertEqual(context["next_step"], "run_required_checks")
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_approve_public_execute_runs_release_operations_and_completes_recipe(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                root.joinpath("docs/releases").mkdir(parents=True)
+                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Add release notes")
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    store.insert("verification_runs", verification_row(release_task_id, root))
+                    run = mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha=run_git(root, "rev-parse", "HEAD"),
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                    self.assertEqual(run["status"], "waiting_public_approval")
+                finally:
+                    store.close()
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "recipe",
+                            "approve-public",
+                            "--project",
+                            root.name,
+                            "--approval",
+                            "v0.3.1 を tag/push/release して",
+                            "--execute",
+                        ]
+                    )
+
+                text = output.getvalue()
+                self.assertIn("release_recipe: completed", text)
+                self.assertIn("github_release: https://github.com/example/project/releases/tag/v0.3.1", text)
+                self.assertEqual(run_git(root, "rev-parse", "--verify", "refs/tags/v0.3.1"), run_git(root, "rev-parse", "HEAD"))
+                log_text = root.joinpath(".git/release-tools.log").read_text(encoding="utf-8")
+                self.assertIn("git push origin main", log_text)
+                self.assertIn("git push origin v0.3.1", log_text)
+                self.assertIn("gh release create v0.3.1 --title v0.3.1 --notes-file docs/releases/0.3.1.md", log_text)
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    self.assertEqual(context["type"], "project")
+                    summary = context["latest_completed_release"]
+                    self.assertEqual(summary["github_release"], "https://github.com/example/project/releases/tag/v0.3.1")
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_approve_public_execute_dirty_tree_does_not_consume_public_gate(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    store.insert("verification_runs", verification_row(release_task_id, root))
+                    mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha=run_git(root, "rev-parse", "HEAD"),
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                finally:
+                    store.close()
+
+                root.joinpath("tracked.txt").write_text("dirty after gate\n", encoding="utf-8")
+                with self.assertRaises(SystemExit) as raised:
+                    with redirect_stdout(io.StringIO()):
+                        main(
+                            [
+                                "--db",
+                                str(db),
+                                "recipe",
+                                "approve-public",
+                                "--project",
+                                root.name,
+                                "--approval",
+                                "v0.3.1 を tag/push/release して",
+                                "--execute",
+                            ]
+                        )
+                self.assertIn("working tree must be clean", str(raised.exception))
+
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    self.assertEqual(context["status"], "waiting_public_approval")
+                    self.assertEqual([item["operation"] for item in context["pending_public_operations"]], ["create_tag", "push_branch", "push_tag", "create_github_release"])
                 finally:
                     store.close()
             finally:

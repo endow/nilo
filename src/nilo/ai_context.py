@@ -147,7 +147,10 @@ def workflow_next_actions(workflow: dict[str, Any]) -> list[str]:
     if workflow.get("status") == "waiting_public_approval":
         operations = workflow.get("pending_public_operations") or []
         operation_text = ", ".join(f"{item['operation']}:{item['target']}" for item in operations)
-        return [f"release recipe waiting for explicit public operation approval: {operation_text}"]
+        action = f"release recipe waiting for explicit public operation approval: {operation_text}"
+        if workflow.get("public_execution_command"):
+            action += f"; after approval run: {workflow['public_execution_command']}"
+        return [action]
     return [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
 
 
@@ -217,8 +220,10 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
             required.append("pending_public_operations:")
             for item in workflow["pending_public_operations"]:
                 required.append(f"- {item['operation']}: {item['target']}")
-            if workflow.get("approval_prompt"):
-                required.append(workflow["approval_prompt"])
+        if workflow.get("approval_prompt"):
+            required.append(workflow["approval_prompt"])
+            if workflow.get("public_execution_command"):
+                required.append(f"execute_after_approval: {workflow['public_execution_command']}")
     elif workflow.get("latest_completed_release"):
         release = workflow["latest_completed_release"]
         required.append("Release recipe completed:")

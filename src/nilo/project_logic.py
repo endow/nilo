@@ -1659,7 +1659,10 @@ def project_summary_data(store: Store, project: dict, tasks: list[dict], statuse
     if workflow.get("type") == "recipe_run":
         if workflow.get("status") == "waiting_public_approval":
             operations = ", ".join(f"{item['operation']}:{item['target']}" for item in workflow.get("pending_public_operations") or [])
-            next_actions = [f"release recipe waiting for explicit public operation approval: {operations}"]
+            action = f"release recipe waiting for explicit public operation approval: {operations}"
+            if workflow.get("public_execution_command"):
+                action += f"; after approval run: {workflow['public_execution_command']}"
+            next_actions = [action]
         else:
             next_actions = [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
     elif not active_tasks:

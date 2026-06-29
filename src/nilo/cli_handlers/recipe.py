@@ -12,7 +12,7 @@ from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json
 from ..store import Store
 from ..timeutil import now_iso
 from ..version_advisor import advise_version_bump
-from ..workflow_context import approve_pending_public_operations, create_recipe_run
+from ..workflow_context import approve_pending_public_operations, create_recipe_run, execute_pending_public_operations
 
 
 def cmd_recipe_list(args: argparse.Namespace) -> None:
@@ -102,13 +102,25 @@ def cmd_recipe_approve_public(args: argparse.Namespace) -> None:
         if not store.get("projects", args.project):
             raise SystemExit(f"project not found: {args.project}")
         try:
-            run = approve_pending_public_operations(
-                store,
-                project_id=args.project,
-                approval=args.approval,
-                release_url=args.release_url,
-                executed=args.executed,
-            )
+            if args.execute:
+                run, logs = execute_pending_public_operations(
+                    store,
+                    project_id=args.project,
+                    approval=args.approval,
+                    release_url=args.release_url,
+                    cwd=Path.cwd(),
+                )
+                print("executed_public_operations:")
+                for log in logs:
+                    print(f"- {' '.join(log['command'])}: exit_code={log['exit_code']}")
+            else:
+                run = approve_pending_public_operations(
+                    store,
+                    project_id=args.project,
+                    approval=args.approval,
+                    release_url=args.release_url,
+                    executed=args.executed,
+                )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(f"release_recipe: {run['status']}")

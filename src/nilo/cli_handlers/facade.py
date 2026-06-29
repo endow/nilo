@@ -331,9 +331,13 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                     print(f"- {operation['operation']}: {operation['target']}")
                 if workflow.get("approval_prompt"):
                     print(workflow["approval_prompt"])
+                if workflow.get("public_execution_command"):
+                    print(f"execute_after_approval: {workflow['public_execution_command']}")
             print(f"{field_label('next_action')}:")
             if workflow.get("status") == "waiting_public_approval":
                 print("- Release recipe is waiting for explicit public operation approval.")
+                if workflow.get("public_execution_command"):
+                    print(f"- After approval, execute: {workflow['public_execution_command']}")
             else:
                 print(f"- Continue release recipe step: {workflow['next_step']}")
             return
