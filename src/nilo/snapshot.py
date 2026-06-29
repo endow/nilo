@@ -81,7 +81,7 @@ def current_git_snapshot(cwd: Path, mode: str = SNAPSHOT_MODE_FULL) -> dict[str,
             "git_diff_hash_computed": False,
         }
 
-    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "normal"
+    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "no"
     status_code, status, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", f"--untracked-files={untracked}"], cwd)
     if status_code != 0:
         status = ""
@@ -126,6 +126,16 @@ def current_git_snapshot(cwd: Path, mode: str = SNAPSHOT_MODE_FULL) -> dict[str,
             "default_ignore_patterns": True,
         },
     }
+
+
+def current_git_snapshot_fast(cwd: Path) -> dict[str, Any]:
+    """Return HEAD and dirty state without computing a diff hash."""
+    return current_git_snapshot(cwd, mode=SNAPSHOT_MODE_FAST)
+
+
+def current_git_snapshot_full(cwd: Path) -> dict[str, Any]:
+    """Return the full audit snapshot, including the diff hash."""
+    return current_git_snapshot(cwd, mode=SNAPSHOT_MODE_FULL)
 
 
 def snapshot_columns(snapshot: dict[str, Any]) -> dict[str, Any]:

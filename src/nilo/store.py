@@ -437,6 +437,21 @@ CREATE TABLE IF NOT EXISTS transition_events (
   warnings TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project_created
+ON tasks(project_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_task_completions_active_task
+ON task_completions(task_id, invalidated_at);
+
+CREATE INDEX IF NOT EXISTS idx_verification_runs_task_created
+ON verification_runs(task_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_review_findings_task_blocking
+ON review_findings(task_id, status, blocking);
+
+CREATE INDEX IF NOT EXISTS idx_todos_project_status
+ON todos(project_id, status);
 """
 
 JSON_COLUMNS = {

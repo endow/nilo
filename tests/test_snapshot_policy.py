@@ -7,7 +7,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nilo.snapshot import DEFAULT_SNAPSHOT_MAX_FILE_BYTES, UNCOMPUTED_DIFF_HASH, compact_snapshot, current_git_snapshot, evidence_status, max_snapshot_file_bytes
+from nilo.snapshot import (
+    DEFAULT_SNAPSHOT_MAX_FILE_BYTES,
+    UNCOMPUTED_DIFF_HASH,
+    compact_snapshot,
+    current_git_snapshot,
+    current_git_snapshot_fast,
+    current_git_snapshot_full,
+    evidence_status,
+    max_snapshot_file_bytes,
+)
 
 
 def run_git(cwd: Path, *args: str) -> None:
@@ -52,9 +61,54 @@ class SnapshotPolicyTests(unittest.TestCase):
             self.assertEqual(snapshot["snapshot_mode"], "fast")
             self.assertEqual(snapshot["git_diff_hash"], UNCOMPUTED_DIFF_HASH)
             self.assertFalse(snapshot["git_diff_hash_computed"])
-            self.assertEqual(snapshot["observed_paths"], ["README.md", "untracked.txt"])
+            self.assertEqual(snapshot["observed_paths"], ["README.md"])
             self.assertTrue(snapshot["working_tree_dirty"])
             self.assertNotIn("snapshot_hashed_paths", snapshot)
+
+    def test_fast_snapshot_uses_no_untracked_and_never_runs_git_diff(self) -> None:
+        calls = []
+
+        def fake_git_output(args: list[str], cwd: Path) -> tuple[int, str, str]:
+            calls.append(args)
+            self.assertNotEqual(args[:1], ["diff"])
+            if args == ["rev-parse", "--is-inside-work-tree"]:
+                return 0, "true", ""
+            if args == ["rev-parse", "HEAD"]:
+                return 0, "abc123", ""
+            if args[:4] == ["-c", "core.quotepath=false", "status", "--porcelain=v1"]:
+                self.assertEqual(args[4], "--untracked-files=no")
+                return 0, " M README.md", ""
+            return 1, "", "unexpected command"
+
+        with patch("nilo.snapshot.git_output", side_effect=fake_git_output), patch("nilo.snapshot.head_commit", return_value="abc123"):
+            snapshot = current_git_snapshot_fast(Path.cwd())
+
+        self.assertEqual(snapshot["git_head"], "abc123")
+        self.assertEqual(snapshot["git_diff_hash"], UNCOMPUTED_DIFF_HASH)
+        self.assertTrue(snapshot["working_tree_dirty"])
+        self.assertIn(["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=no"], calls)
+
+    def test_fast_snapshot_dirty_is_tracked_dirty_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "untracked.txt").write_text("new\n", encoding="utf-8")
+
+            snapshot = current_git_snapshot_fast(root)
+
+            self.assertFalse(snapshot["working_tree_dirty"])
+            self.assertEqual(snapshot["observed_paths"], [])
+
+    def test_full_snapshot_wrapper_uses_full_mode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("work\n", encoding="utf-8")
+
+            snapshot = current_git_snapshot_full(root)
+
+            self.assertEqual(snapshot["snapshot_mode"], "full")
+            self.assertTrue(snapshot["git_diff_hash_computed"])
 
     def test_fast_snapshot_evidence_is_recorded_or_present_not_stale(self) -> None:
         current = {

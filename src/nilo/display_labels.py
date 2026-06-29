@@ -3,6 +3,8 @@ from __future__ import annotations
 STATUS_LABELS_JA = {
     "missing": "未提出",
     "present": "提出あり",
+    "recorded": "記録あり",
+    "not checked in fast status": "fast status では未確認",
     "failed": "失敗",
     "stale": "古い証跡",
     "current": "現在の差分に対応",

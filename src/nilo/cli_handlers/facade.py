@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Any
 
 from ..ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_ai_context_text
-from ..display_labels import field_label, status_label
+from ..display_labels import bool_label, field_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
 from ..open_state import open_state_detector
@@ -18,9 +20,9 @@ from ..project_boundary import (
     boundary_warning_lines,
     resolve_project_boundary,
 )
-from ..snapshot import current_git_snapshot
+from ..snapshot import commit_aware_evidence_status, current_git_snapshot_fast, current_git_snapshot_full
 from ..store import Store
-from ..task_logic import active_task_completion, completion_audit_issues, is_task_completed_status
+from ..task_logic import active_task_completion, completion_audit_issues, is_task_completed_status, projected_task_status
 from ..timeutil import now_iso
 from ..workflow_context import workflow_context
 from .task import cmd_task_complete, cmd_task_create
@@ -70,7 +72,7 @@ def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbo
         raise SystemExit(f"project not found: {project_id}")
     tasks = []
     completion_audit_tasks = []
-    snapshot = current_git_snapshot(Path.cwd()) if audit else None
+    snapshot = current_git_snapshot_full(Path.cwd()) if audit else None
     task_rows, recorded_statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
     for task in task_rows:
         status = c.projected_task_status(store, task, current_snapshot=snapshot) if audit else recorded_statuses[task["id"]]
@@ -215,6 +217,275 @@ def summary_for_project(store: Store, project_id: str) -> dict:
     return c.project_summary_data(store, project, tasks, statuses)
 
 
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 3)
+
+
+def _short_command(command: str, limit: int = 80) -> str:
+    command = " ".join((command or "").split())
+    if len(command) <= limit:
+        return command
+    return command[: limit - 3] + "..."
+
+
+def _fast_evidence_status(verification_run: dict | None, snapshot: dict[str, Any]) -> str:
+    if not verification_run:
+        return "missing"
+    if verification_run.get("timed_out") or verification_run.get("exit_code") not in (0, "0"):
+        return "failed"
+    if not snapshot.get("git_available", True):
+        return "not checked in fast status"
+    return "recorded"
+
+
+def _fast_todo_counts(store: Store, project_id: str) -> dict[str, int]:
+    rows = store.conn.execute(
+        """
+        SELECT status, COUNT(*) AS count
+        FROM todos
+        WHERE project_id=? AND status IN ('ready', 'open')
+        GROUP BY status
+        """,
+        (project_id,),
+    ).fetchall()
+    counts = {"ready": 0, "open": 0}
+    counts.update({row["status"]: row["count"] for row in rows})
+    return counts
+
+
+def _fast_active_tasks_and_statuses(store: Store, project_id: str, *, limit: int = 3) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    statuses: dict[str, str] = {}
+    active_tasks = []
+    offset = 0
+    batch_size = max(limit * 4, 12)
+    while len(active_tasks) < limit:
+        rows = store.conn.execute(
+            """
+            SELECT *
+            FROM tasks t
+            WHERE t.project_id=?
+              AND t.status NOT IN ('completed_by_ai', 'completed_by_user')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM task_completions c
+                WHERE c.task_id=t.id AND COALESCE(c.invalidated_at, '')=''
+              )
+            ORDER BY t.created_at DESC, t.rowid DESC
+            LIMIT ? OFFSET ?
+            """,
+            (project_id, batch_size, offset),
+        ).fetchall()
+        if not rows:
+            break
+        for row in rows:
+            task = store._decode_row(row, "tasks")
+            latest = store.latest_task_status_event(task["id"])
+            status = latest["status"] if latest else task["status"]
+            if not is_task_completed_status(status):
+                active_tasks.append(task)
+                statuses[task["id"]] = status
+                if len(active_tasks) >= limit:
+                    break
+        offset += len(rows)
+    return active_tasks[:limit], statuses
+
+
+def fast_status_data(store: Store, project_id: str, *, cwd: Path | None = None) -> dict[str, Any]:
+    """Build the lightweight human status payload.
+
+    This deliberately avoids full snapshots, roadmap assessment, commit mapping,
+    history, failure-log summaries, and projected status audits.
+    """
+    timings: dict[str, float] = {}
+    total_started = time.perf_counter()
+
+    started = time.perf_counter()
+    project = store.get("projects", project_id)
+    timings["project_lookup_ms"] = _elapsed_ms(started)
+    if not project:
+        raise SystemExit(f"project not found: {project_id}")
+
+    started = time.perf_counter()
+    active_tasks, statuses = _fast_active_tasks_and_statuses(store, project_id, limit=3)
+    timings["fast_task_query_ms"] = _elapsed_ms(started)
+
+    started = time.perf_counter()
+    snapshot = current_git_snapshot_fast(cwd or Path.cwd())
+    timings["git_fast_status_ms"] = _elapsed_ms(started)
+
+    started = time.perf_counter()
+    task_summaries = []
+    for task in active_tasks:
+        verification_run = store.latest_for_task("verification_runs", task["id"])
+        task_summaries.append(
+            {
+                "id": task["id"],
+                "title": task["title"],
+                "status": statuses[task["id"]],
+                "task_type": task["task_type"],
+                "risk_level": task["risk_level"],
+                "latest_verification_run": {
+                    "exit_code": verification_run["exit_code"] if verification_run else None,
+                    "timed_out": bool(verification_run["timed_out"]) if verification_run else False,
+                    "command": _short_command(verification_run["command"]) if verification_run else "",
+                },
+                "evidence": _fast_evidence_status(verification_run, snapshot),
+            }
+        )
+    timings["verification_lookup_ms"] = _elapsed_ms(started)
+
+    started = time.perf_counter()
+    task_ids = [task["id"] for task in active_tasks]
+    blocking_counts: dict[str, int] = {}
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        rows = store.conn.execute(
+            f"""
+            SELECT task_id, COUNT(*) AS count
+            FROM review_findings
+            WHERE task_id IN ({placeholders}) AND status='unresolved' AND blocking=1
+            GROUP BY task_id
+            """,
+            tuple(task_ids),
+        ).fetchall()
+        blocking_counts = {row["task_id"]: row["count"] for row in rows}
+    for task in task_summaries:
+        task["unresolved_blocking_review_findings"] = int(blocking_counts.get(task["id"], 0))
+    timings["review_count_ms"] = _elapsed_ms(started)
+
+    todo_counts = _fast_todo_counts(store, project_id)
+    timings["total_ms"] = _elapsed_ms(total_started)
+
+    return {
+        "project": {"id": project["id"], "name": project["name"]},
+        "active_tasks": task_summaries,
+        "todo_counts": todo_counts,
+        "git": {
+            "head": snapshot.get("git_head"),
+            "tracked_dirty": bool(snapshot.get("working_tree_dirty")),
+            "git_available": bool(snapshot.get("git_available")),
+        },
+        "timings": timings,
+    }
+
+
+def print_fast_status(data: dict[str, Any], *, debug_timing: bool = False) -> None:
+    project = data["project"]
+    active_tasks = data["active_tasks"]
+    print(f"{field_label('project')}: {project['id']} ({project['name']})")
+    print(
+        "git: "
+        f"head={data['git']['head'] or 'none'} "
+        f"tracked_dirty={bool_label(data['git']['tracked_dirty'])} "
+        f"available={bool_label(data['git']['git_available'])}"
+    )
+    if not active_tasks:
+        print(f"{field_label('status')}: {status_label('no_active_task')}")
+        todos = data["todo_counts"]
+        print(f"todo: ready={todos['ready']} open={todos['open']}")
+        print(f"{field_label('next_action')}:")
+        print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
+    else:
+        print(f"{field_label('status')}: {status_label('in_progress')}")
+        print("作業中のタスク:")
+        for task in active_tasks:
+            verification = task["latest_verification_run"]
+            verification_bits = []
+            if verification["command"]:
+                verification_bits.append(f"command={verification['command']}")
+            if verification["exit_code"] is not None:
+                verification_bits.append(f"exit_code={verification['exit_code']}")
+            verification_bits.append(f"timed_out={str(verification['timed_out']).lower()}")
+            print(f"- {task['id']} [{status_label(task['status'])}] {task['title']}")
+            print(f"  {field_label('evidence')}: {status_label(task['evidence'])}")
+            print(f"  {field_label('latest_verification_run')}: {', '.join(verification_bits)}")
+            print(f"  {field_label('unresolved_blocking_count')}: {task['unresolved_blocking_review_findings']}")
+        todos = data["todo_counts"]
+        print(f"todo: ready={todos['ready']} open={todos['open']}")
+        print(f"{field_label('next_action')}:")
+        first = active_tasks[0]
+        print(f"- 次は {first['id']} の状態と検証結果を確認してください。")
+    if debug_timing:
+        print("debug_timing:")
+        for key in (
+            "project_lookup_ms",
+            "fast_task_query_ms",
+            "git_fast_status_ms",
+            "verification_lookup_ms",
+            "review_count_ms",
+            "total_ms",
+        ):
+            print(f"- {key}: {data['timings'][key]}")
+
+
+def audit_status_data(store: Store, project_id: str, *, cwd: Path | None = None) -> dict[str, Any]:
+    project = store.get("projects", project_id)
+    if not project:
+        raise SystemExit(f"project not found: {project_id}")
+    snapshot = current_git_snapshot_full(cwd or Path.cwd())
+    tasks = store.list_where("tasks", "project_id=?", (project_id,))
+    audited_tasks = []
+    for task in tasks:
+        status = projected_task_status(store, task, current_snapshot=snapshot)
+        verification_run = store.latest_for_task("verification_runs", task["id"])
+        completion = active_task_completion(store, task["id"])
+        evidence = commit_aware_evidence_status(verification_run, snapshot, completion)
+        blocking_count = store.conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM review_findings
+            WHERE task_id=? AND status='unresolved' AND blocking=1
+            """,
+            (task["id"],),
+        ).fetchone()["count"]
+        audited_tasks.append(
+            {
+                "id": task["id"],
+                "title": task["title"],
+                "status": status,
+                "evidence": evidence,
+                "verification_exit_code": verification_run["exit_code"] if verification_run else None,
+                "verification_timed_out": bool(verification_run["timed_out"]) if verification_run else False,
+                "unresolved_blocking_review_findings": int(blocking_count or 0),
+            }
+        )
+    return {
+        "project": {"id": project["id"], "name": project["name"]},
+        "git": {
+            "head": snapshot.get("git_head"),
+            "dirty": bool(snapshot.get("working_tree_dirty")),
+            "git_available": bool(snapshot.get("git_available")),
+            "diff_hash_computed": bool(snapshot.get("git_diff_hash_computed")),
+        },
+        "tasks": audited_tasks,
+    }
+
+
+def print_audit_status(data: dict[str, Any]) -> None:
+    project = data["project"]
+    print(f"{field_label('project')}: {project['id']} ({project['name']})")
+    print("モード: 厳密監査")
+    print(
+        "git: "
+        f"head={data['git']['head'] or 'none'} "
+        f"dirty={bool_label(data['git']['dirty'])} "
+        f"available={bool_label(data['git']['git_available'])} "
+        f"diff_hash_computed={bool_label(data['git']['diff_hash_computed'])}"
+    )
+    print("タスク監査:")
+    if not data["tasks"]:
+        print("- なし")
+        return
+    for task in data["tasks"]:
+        bits = [f"evidence={task['evidence']}"]
+        if task["verification_exit_code"] is not None:
+            bits.append(f"exit_code={task['verification_exit_code']}")
+        bits.append(f"timed_out={str(task['verification_timed_out']).lower()}")
+        bits.append(f"blocking_reviews={task['unresolved_blocking_review_findings']}")
+        print(f"- {task['id']} [{status_label(task['status'])}] {task['title']}")
+        print(f"  {', '.join(bits)}")
+
+
 def print_facade_next_for_task(store: Store, task_id: str) -> None:
     from .. import cli as c
     from .. import project_logic as p
@@ -264,17 +535,15 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
                 print(line)
             for warning in boundary_warning_lines(boundary):
                 print(warning)
-        if not getattr(args, "verbose", False):
-            project = store.get("projects", project_id)
-            if not project:
-                raise SystemExit(f"project not found: {project_id}")
-            active_tasks, statuses = active_tasks_for_project(store, project_id)
-            from .. import cli as c
-
-            c.print_human_project_status(store, project, active_tasks, statuses)
+        if not getattr(args, "verbose", False) and not getattr(args, "audit", False):
+            print_fast_status(fast_status_data(store, project_id), debug_timing=bool(getattr(args, "debug_timing", False)))
+            return
+        if getattr(args, "audit", False):
+            print_audit_status(audit_status_data(store, project_id))
             return
         summary = summary_for_project(store, project_id)
         print(f"{field_label('project')}: {summary['project_id']} ({summary['project_name']})")
+        print("モード: 詳細表示")
         print(f"ロードマップ: {summary['roadmap_position']}")
         print(f"作業状態: {summary['work_state']}")
         print("作業中:")

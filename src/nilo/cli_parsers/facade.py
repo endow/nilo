@@ -15,11 +15,16 @@ def add_task_option(parser: argparse.ArgumentParser) -> None:
 
 
 def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> None:
-    status = sub.add_parser("status")
+    status = sub.add_parser(
+        "status",
+        help="Lightweight current-position check. Use --verbose for details, --audit for strict evidence checks, or --ai for agent context.",
+    )
     add_project_option(status)
-    status.add_argument("--verbose", action="store_true")
-    status.add_argument("--ai", action="store_true")
-    status.add_argument("--json", action="store_true")
+    status.add_argument("--verbose", action="store_true", help="Show detailed project status with heavier summaries.")
+    status.add_argument("--audit", action="store_true", help="Run strict evidence-oriented status checks.")
+    status.add_argument("--ai", action="store_true", help="Show AI-oriented project context.")
+    status.add_argument("--json", action="store_true", help="Show AI-oriented project context as JSON.")
+    status.add_argument("--debug-timing", action="store_true", help="Print fast status timing buckets.")
     status.set_defaults(func=handlers.cmd_facade_status)
 
     next_step = sub.add_parser("next")

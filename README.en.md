@@ -127,6 +127,9 @@ python -m unittest discover tests
 nilo status --project nilo
 ```
 
+`nilo status` is the lightweight current-position check. The default view avoids diff hashes and heavy roadmap, commit-mapping, and history summaries. Its git dirty indicator covers tracked-file changes only.
+Use `nilo status --verbose` for detailed status, `nilo status --audit` for strict evidence checks, and `nilo status --ai` for agent-oriented context.
+
 When recording verification during a Nilo task, choose the test scope first and record it with `nilo check --task <task_id> ... --mode quick`, `--mode targeted`, or `--mode full`. Timeouts are guardrails for the chosen scope, not the main way to make full-suite verification practical.
 
 ## Update Nilo

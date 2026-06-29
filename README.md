@@ -42,6 +42,9 @@ nilo --version
 nilo status
 ```
 
+`nilo status` は軽量な現在地確認です。通常表示では diff hash や roadmap/commit/history の重い集計を行いません。git の dirty 表示は tracked file の変更だけを対象にします。
+詳細な状態を見たい場合は `nilo status --verbose`、厳密な証跡確認は `nilo status --audit`、AI 向けコンテキストは `nilo status --ai` を使います。
+
 このリポジトリ自体のテストを実行する場合:
 
 ```bash

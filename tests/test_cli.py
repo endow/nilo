@@ -1821,7 +1821,7 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-    def test_facade_status_non_verbose_does_not_take_git_snapshot(self) -> None:
+    def test_facade_status_non_verbose_uses_fast_path_only(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1844,11 +1844,104 @@ variables:
                     "git_diff_hash_computed": False,
                 }
                 output = io.StringIO()
-                with patch("nilo.project_logic.current_git_snapshot", return_value=fast_snapshot) as snapshot_mock, redirect_stdout(output):
+                with (
+                    patch("nilo.cli_handlers.facade.current_git_snapshot_fast", return_value=fast_snapshot) as fast_snapshot_mock,
+                    patch("nilo.cli_handlers.facade.current_git_snapshot_full", side_effect=AssertionError("full snapshot must not run")),
+                    patch("nilo.cli_handlers.facade.summary_for_project", side_effect=AssertionError("project summary must not run")),
+                    patch("nilo.project_logic.project_summary_data", side_effect=AssertionError("project_summary_data must not run")),
+                    patch("nilo.project_logic.roadmap_assessments", side_effect=AssertionError("roadmap_assessments must not run")),
+                    patch("nilo.project_logic.project_commit_mapping", side_effect=AssertionError("project_commit_mapping must not run")),
+                    patch("nilo.project_logic.recent_project_history", side_effect=AssertionError("recent_project_history must not run")),
+                    redirect_stdout(output),
+                ):
                     main(["--db", str(db), "status", "--project", project_id])
 
                 self.assertIn("Status fast", output.getvalue())
-                self.assertEqual(snapshot_mock.call_args.kwargs["mode"], "fast")
+                fast_snapshot_mock.assert_called_once()
+                self.assertIn("tracked_dirty=はい", output.getvalue())
+                self.assertIn("未提出", output.getvalue())
+                self.assertNotIn("古い証跡", output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_facade_status_debug_timing_prints_fast_buckets(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "status", "--project", project_id, "--debug-timing"])
+
+                body = output.getvalue()
+                self.assertIn("debug_timing:", body)
+                self.assertIn("project_lookup_ms", body)
+                self.assertIn("fast_task_query_ms", body)
+                self.assertIn("git_fast_status_ms", body)
+                self.assertIn("verification_lookup_ms", body)
+                self.assertIn("review_count_ms", body)
+                self.assertIn("total_ms", body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_facade_status_audit_prints_strict_evidence_terms(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_audit", "--title", "Audit task"])
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "status", "--project", project_id, "--audit"])
+
+                body = output.getvalue()
+                self.assertIn("モード: 厳密監査", body)
+                self.assertIn("task_audit", body)
+                self.assertIn("evidence=missing", body)
+                self.assertIn("diff_hash_computed=", body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_facade_status_fast_path_skips_legacy_completed_task_rows_before_limit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_active", "--title", "Old active"])
+                    for index in range(3):
+                        task_id = f"task_done_{index}"
+                        main(["--db", str(db), "task", "create", "--project", project_id, "--id", task_id, "--title", f"Done {index}"])
+                        store = Store(db)
+                        try:
+                            store.update("tasks", task_id, {"status": "completed_by_ai"})
+                        finally:
+                            store.close()
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "status", "--project", project_id])
+
+                body = output.getvalue()
+                self.assertIn("Old active", body)
+                self.assertNotIn("Done 0", body)
+                self.assertNotIn("作業中のタスクなし", body)
             finally:
                 os.chdir(previous_cwd)
 
