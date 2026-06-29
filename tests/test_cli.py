@@ -1606,8 +1606,8 @@ variables:
                     main(["--db", str(db), "status", "--ai"])
 
                 body = status_text.getvalue()
-                self.assertIn("状態: 作業中のタスクなし (no_active_task)", body)
-                self.assertIn("現在のタスク: なし", body)
+                self.assertIn("active_task: none", body)
+                self.assertIn("detail_commands:", body)
                 self.assertNotIn("現在タスク完了診断", body)
                 self.assertNotIn("完了可否", body)
             finally:
@@ -1672,16 +1672,25 @@ variables:
                 body = status_text.getvalue()
                 compact_body = body.split("\n\n", 1)[-1]
                 self.assertLessEqual(len(compact_body), AI_CONTEXT_TEXT_MAX_CHARS)
-                self.assertIn("タスク: task_compact_budget", compact_body)
-                self.assertIn("次の作業:", compact_body)
+                self.assertIn("active_task: task_compact_budget", compact_body)
+                self.assertIn("next_action:", compact_body)
+                self.assertIn("detail_commands:", compact_body)
 
                 status_json = io.StringIO()
                 with redirect_stdout(status_json):
                     main(["--db", str(db), "status", "--ai", "--json"])
                 data = json.loads(status_json.getvalue())
-                self.assertEqual(data["current_task"]["task"]["title"], "CLI status next failure docs review roadmap compact budget")
+                self.assertTrue(data["compact"])
+                self.assertEqual(data["active_task"]["title"], "CLI status next failure docs review roadmap compact budget")
                 self.assertEqual(data["failure_summary"]["open_failures"], 3)
-                self.assertGreaterEqual(len(data["next_required_actions"]), 2)
+                self.assertIn("detail_commands", data)
+
+                verbose_json = io.StringIO()
+                with redirect_stdout(verbose_json):
+                    main(["--db", str(db), "status", "--ai", "--verbose", "--json"])
+                verbose_data = json.loads(verbose_json.getvalue())
+                self.assertEqual(verbose_data["current_task"]["task"]["title"], "CLI status next failure docs review roadmap compact budget")
+                self.assertGreaterEqual(len(verbose_data["next_required_actions"]), 2)
             finally:
                 os.chdir(previous_cwd)
 
@@ -1690,23 +1699,27 @@ variables:
             {
                 "project_id": "project_test",
                 "project_name": "Project Test",
-                "current_task": None,
-                "next_required_actions": [
-                    'no active task; create or select a Nilo task before implementation; if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; ask the user for the next concrete task or design direction'
-                ],
+                "compact": True,
+                "active_task": None,
+                "next_action": 'no active task; create or select a Nilo task before implementation; if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; ask the user for the next concrete task or design direction',
+                "blockers": {"count": 0, "items": []},
+                "latest_verification": {"status": "none", "verification_run_id": "", "exit_code": None},
+                "latest_review": {"unresolved_count": 0, "unresolved_blocking_count": 0},
                 "failure_summary": {
                     "open_failures": 0,
                     "high_open_failures": 0,
                     "latest_open_failure": None,
                 },
+                "required_commands": ["nilo next --project project_test"],
+                "detail_commands": ["nilo status --ai --verbose --project project_test"],
             },
             max_chars=AI_CONTEXT_TEXT_MAX_CHARS,
         )
 
         self.assertLessEqual(len(body), AI_CONTEXT_TEXT_MAX_CHARS)
-        self.assertIn("語彙ルール", body)
-        self.assertIn("Todo ではなく Task 作成を優先する", body)
-        self.assertIn("create_todo=受付だけ", body)
+        self.assertIn("active_task: none", body)
+        self.assertIn("next_action:", body)
+        self.assertIn("detail_commands:", body)
 
     def test_ai_status_missing_project_exits_cleanly(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3768,7 +3781,7 @@ project status からロードマップ現在地を読めるようにする。
 
             store = Store(db)
             try:
-                ai_context = render_ai_context_text(project_ai_context(store, "project_test", cwd=root))
+                ai_context = render_ai_context_text(project_ai_context(store, "project_test", cwd=root, verbose=True))
             finally:
                 store.close()
             self.assertIn("ロードマップ承認待ちの応答ルール", ai_context)

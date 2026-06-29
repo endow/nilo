@@ -10,6 +10,7 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
 
     roadmap_status = roadmap_sub.add_parser("status")
     roadmap_status.add_argument("--project", required=True)
+    roadmap_status.add_argument("--ai", action="store_true", help="Accepted for AI detail-command compatibility.")
     roadmap_status.set_defaults(func=handlers.cmd_roadmap_status)
 
     roadmap_assess = roadmap_sub.add_parser("assess")

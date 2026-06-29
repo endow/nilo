@@ -966,11 +966,14 @@ class McpServerTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
-        current = status["current_task"]
-        self.assertEqual(current["task"]["id"], "task_test")
-        self.assertTrue(current["write_context_token"].startswith("task:task_test:"))
-        self.assertEqual(current["write_context_token"], task_status["write_context_token"])
-        self.assertEqual(current["latest_task_status_event_id"], task_status["latest_task_status_event_id"])
+        self.assertTrue(status["compact"])
+        self.assertEqual(status["active_task"]["id"], "task_test")
+        self.assertIn("detail_commands", status)
+        self.assertTrue(status["write_context_token"].startswith("task:task_test:"))
+        self.assertEqual(status["write_context_token"], task_status["write_context_token"])
+        self.assertEqual(status["latest_task_status_event_id"], task_status["latest_task_status_event_id"])
+        self.assertTrue(task_status["write_context_token"].startswith("task:task_test:"))
+        self.assertEqual(task_status["latest_task_status_event_id"], task_status["write_context_token"].split(":")[-1])
 
     def test_get_status_reports_missing_project_as_mcp_error(self) -> None:
         with TemporaryDirectory() as directory:

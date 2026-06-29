@@ -442,8 +442,10 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
         "\n".join(
             [
                 "Nilo AI normal work:",
-                "- Start with `nilo status --ai`.",
-                "- Follow the first action shown by `nilo next`.",
+                "- Start with `nilo status --ai`; the default AI context is a short index-first work card.",
+                "- Follow the first action shown by `nilo next`; use `nilo next --verbose` only when background context is needed.",
+                "- Detailed evidence, roadmap, failure, review, and recipe context is retained, but fetched on demand instead of expanded every turn.",
+                "- Set `NILO_AI_CONTEXT_MAX_CHARS` before starting Nilo to cap compact AI text; overflow keeps the action card and points to detail commands.",
                 "- When a recipe/workflow is active, generic continuation commands such as \"進めて\", \"続けて\", or \"next\" continue that workflow only.",
                 "- Do not switch to unrelated project tasks unless the user explicitly asks to proceed to another task.",
                 "- For release recipes, tag/push/GitHub release/package publish are public operations and require explicit user approval.",
@@ -498,10 +500,13 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "",
                 "Useful commands:",
                 "- nilo status --ai",
+                "- nilo status --ai --verbose",
                 "- nilo status --ai --json",
-                "- nilo task show --task <task_id> --ai",
-                "- nilo review show --task <task_id> --ai",
+                "- nilo task status --task <task_id> --ai",
                 "- nilo evidence show --task <task_id> --ai",
+                "- nilo review status --task <task_id> --format json",
+                "- nilo roadmap status --project <project_id> --ai",
+                "- nilo failure list --project <project_id>",
                 "- nilo doctor ai-context",
             ]
         )

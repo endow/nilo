@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,17 @@ from .task_logic import active_task_completion, is_task_completed_status, projec
 from .workflow_context import workflow_context
 
 
-AI_CONTEXT_TEXT_MAX_CHARS = 700
+def _ai_context_text_max_chars() -> int:
+    """Return the compact AI text budget resolved at process start."""
+    value = os.environ.get("NILO_AI_CONTEXT_MAX_CHARS", "1000")
+    try:
+        parsed = int(value)
+    except ValueError:
+        return 1000
+    return max(parsed, 320)
+
+
+AI_CONTEXT_TEXT_MAX_CHARS = _ai_context_text_max_chars()
 
 
 def active_tasks(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
@@ -98,7 +109,14 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snap
     }
 
 
-def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None, snapshot_mode: str = "full") -> dict[str, Any]:
+def project_ai_context(
+    store: Store,
+    project_id: str,
+    *,
+    cwd: Path | None = None,
+    snapshot_mode: str = "full",
+    verbose: bool = False,
+) -> dict[str, Any]:
     from . import project_logic as p
 
     cwd = cwd or Path.cwd()
@@ -122,7 +140,7 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
         next_actions = current["next_required_actions"]
     else:
         next_actions = p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
-    return {
+    verbose_context = {
         "project_id": project_id,
         "project_name": project["name"],
         "workflow_context": workflow,
@@ -140,6 +158,76 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
                 else None
             ),
         },
+    }
+    if verbose:
+        verbose_context["detail_commands"] = _detail_commands(project_id, current["task"]["id"] if current else None)
+        return verbose_context
+    return compact_project_ai_context(verbose_context)
+
+
+def _detail_commands(project_id: str, task_id: str | None) -> list[str]:
+    commands = [
+        f"nilo status --ai --verbose --project {project_id}",
+        f"nilo roadmap status --ai --project {project_id}",
+        f"nilo failure list --project {project_id}",
+    ]
+    if task_id:
+        commands.insert(1, f"nilo task status --task {task_id} --ai")
+        commands.insert(2, f"nilo evidence show --task {task_id} --ai")
+        commands.insert(3, f"nilo review status --task {task_id} --format json")
+    return commands
+
+
+def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
+    current = data.get("current_task")
+    task_id = current["task"]["id"] if current else None
+    active_task = None
+    blockers: list[str] = []
+    latest_verification = {"status": "none", "verification_run_id": "", "exit_code": None}
+    latest_review = {"unresolved_count": 0, "unresolved_blocking_count": 0}
+    write_context_token = ""
+    latest_task_status_event_id = ""
+    if current:
+        task = current["task"]
+        completion = current["completion"]
+        evidence = current["evidence"]
+        review = current["review"]
+        active_task = {"id": task["id"], "title": task["title"], "status": task["state"]}
+        blockers = completion.get("blocking_reasons", [])
+        latest_verification = {
+            "status": evidence["status"],
+            "verification_run_id": evidence["verification_run_id"],
+            "exit_code": evidence["verification_exit_code"],
+        }
+        latest_review = {
+            "unresolved_count": review["unresolved_count"],
+            "unresolved_blocking_count": review["unresolved_blocking_count"],
+        }
+        write_context_token = current.get("write_context_token", "")
+        latest_task_status_event_id = current.get("latest_task_status_event_id", "")
+
+    next_actions = data.get("next_required_actions") or []
+    next_action = next_actions[0] if next_actions else ""
+    detail_commands = _detail_commands(data["project_id"], task_id)
+    required_commands = []
+    if next_action:
+        required_commands.append("nilo next --project " + data["project_id"])
+    if next_action.startswith("run nilo "):
+        required_commands.append(next_action.removeprefix("run "))
+    return {
+        "compact": True,
+        "project_id": data["project_id"],
+        "project_name": data["project_name"],
+        "active_task": active_task,
+        "next_action": next_action,
+        "blockers": {"count": len(blockers), "items": blockers[:3]},
+        "latest_verification": latest_verification,
+        "latest_review": latest_review,
+        "write_context_token": write_context_token,
+        "latest_task_status_event_id": latest_task_status_event_id,
+        "failure_summary": data.get("failure_summary", {}),
+        "required_commands": required_commands,
+        "detail_commands": detail_commands,
     }
 
 
@@ -200,12 +288,15 @@ def _render_with_budget(required: list[str], optional_sections: list[list[str]],
     if len(body) <= max_chars:
         return body
 
-    overflow_note = "\n... compact output truncated; use --json or doctor ai-context for details"
+    overflow_note = "\n... compact output truncated; use detail_commands for details"
     budget = max(max_chars - len(overflow_note), 0)
     return _shorten(body, budget) + overflow_note
 
 
 def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None) -> str:
+    if data.get("compact"):
+        return render_compact_ai_context_text(data, max_chars=max_chars)
+
     required: list[str] = [f"{field_label('project')}: {data['project_id']} ({data['project_name']})"]
     optional_sections: list[list[str]] = []
     current = data.get("current_task")
@@ -330,6 +421,68 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
         roadmap_lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
     optional_sections.append(roadmap_lines)
     return _render_with_budget(required, optional_sections, max_chars)
+
+
+def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None) -> str:
+    active = data.get("active_task")
+    required: list[str] = [
+        f"project_id: {data['project_id']}",
+    ]
+    if active:
+        required.append(f"active_task: {active['id']} [{active['status']}] {_shorten(active['title'], 64)}")
+    else:
+        required.append("active_task: none")
+
+    action = data.get("next_action") or ""
+    required.append("next_action:")
+    required.append(f"- {_compact_next_action_text(action) if action else 'なし'}")
+
+    required.append("detail_commands:")
+    detail_commands = data.get("detail_commands", [])
+    if detail_commands:
+        required.extend(f"- {command}" for command in detail_commands)
+    else:
+        required.append("- none")
+
+    blockers = data.get("blockers") or {}
+    blocker_items = blockers.get("items") or []
+    required.append(f"blockers: count={blockers.get('count', 0)}")
+    for blocker in blocker_items:
+        required.append(f"- {blocker}")
+
+    verification = data.get("latest_verification") or {}
+    required.append(
+        "latest_verification: "
+        f"status={verification.get('status', 'none')} "
+        f"id={verification.get('verification_run_id') or 'none'} "
+        f"exit_code={verification.get('exit_code')}"
+    )
+    review = data.get("latest_review") or {}
+    required.append(
+        "latest_review: "
+        f"unresolved={review.get('unresolved_count', 0)} "
+        f"blocking={review.get('unresolved_blocking_count', 0)}"
+    )
+
+    failure_summary = data.get("failure_summary") or {}
+    if failure_summary:
+        latest = failure_summary.get("latest_open_failure")
+        latest_text = "none" if not latest else f"{latest['task_id']} {latest['category']}"
+        required.append(
+            "failure_summary: "
+            f"open={failure_summary.get('open_failures', 0)} "
+            f"high={failure_summary.get('high_open_failures', 0)} "
+            f"latest={latest_text}"
+        )
+
+    required.append("required_commands:")
+    commands = data.get("required_commands") or []
+    if commands:
+        required.extend(f"- {command}" for command in commands)
+    else:
+        required.append("- none")
+
+    return _render_with_budget(required, [], max_chars)
 
 
 def evidence_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> dict[str, Any]:

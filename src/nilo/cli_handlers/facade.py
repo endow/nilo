@@ -516,7 +516,7 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
         if getattr(args, "ai", False) or getattr(args, "json", False):
             try:
                 snapshot_mode = "full" if getattr(args, "verbose", False) else "fast"
-                data = project_ai_context(store, project_id, snapshot_mode=snapshot_mode)
+                data = project_ai_context(store, project_id, snapshot_mode=snapshot_mode, verbose=bool(getattr(args, "verbose", False)))
             except ValueError as exc:
                 raise SystemExit(str(exc)) from exc
             data["project_boundary"] = boundary.to_dict()
@@ -528,7 +528,8 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
                     for warning in boundary_warning_lines(boundary):
                         print(warning)
                     print()
-                print(render_ai_context_text({key: value for key, value in data.items() if key != "project_boundary"}, max_chars=AI_CONTEXT_TEXT_MAX_CHARS))
+                max_chars = None if getattr(args, "verbose", False) else AI_CONTEXT_TEXT_MAX_CHARS
+                print(render_ai_context_text({key: value for key, value in data.items() if key != "project_boundary"}, max_chars=max_chars))
             return
         if boundary.should_print_text():
             for line in boundary.text_lines():
@@ -589,26 +590,32 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
         workflow = workflow_context(store, project_id)
         if workflow.get("type") == "recipe_run":
             print(f"{field_label('project')}: {project_id} ({project['name']})")
-            print("workflow_context:")
-            print(f"- recipe: {workflow['recipe_name']}")
-            print(f"- status: {workflow['status']}")
-            print(f"- current_step: {workflow['current_step']}")
-            print(f"- next_step: {workflow['next_step']}")
-            if workflow.get("pending_public_operations"):
-                print("pending_public_operations:")
-                for operation in workflow["pending_public_operations"]:
-                    print(f"- {operation['operation']}: {operation['target']}")
-                if workflow.get("approval_prompt"):
-                    print(workflow["approval_prompt"])
-                if workflow.get("public_execution_command"):
-                    print(f"execute_after_approval: {workflow['public_execution_command']}")
+            if getattr(args, "verbose", False):
+                print("workflow_context:")
+                print(f"- recipe: {workflow['recipe_name']}")
+                print(f"- status: {workflow['status']}")
+                print(f"- current_step: {workflow['current_step']}")
+                print(f"- next_step: {workflow['next_step']}")
+                if workflow.get("pending_public_operations"):
+                    print("pending_public_operations:")
+                    for operation in workflow["pending_public_operations"]:
+                        print(f"- {operation['operation']}: {operation['target']}")
+                    if workflow.get("approval_prompt"):
+                        print(workflow["approval_prompt"])
+                    if workflow.get("public_execution_command"):
+                        print(f"execute_after_approval: {workflow['public_execution_command']}")
             print(f"{field_label('next_action')}:")
             if workflow.get("status") == "waiting_public_approval":
                 print("- Release recipe is waiting for explicit public operation approval.")
                 if workflow.get("public_execution_command"):
-                    print(f"- After approval, execute: {workflow['public_execution_command']}")
+                    if getattr(args, "verbose", False):
+                        print(f"- After approval, execute: {workflow['public_execution_command']}")
+                    else:
+                        print(f"execute_after_approval: {workflow['public_execution_command']}")
             else:
                 print(f"- Continue release recipe step: {workflow['next_step']}")
+            if not getattr(args, "verbose", False):
+                print(f"details: nilo status --ai --verbose --project {project_id}")
             return
         active_task = first_active_task_for_project(store, project_id)
         if active_task:

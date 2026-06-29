@@ -295,9 +295,9 @@ class FailureLedgerTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "status", "--project", "project_test", "--ai"])
             body = output.getvalue()
-            self.assertIn("失敗ログ概要:", body)
-            self.assertIn("- 未解決の失敗: 1", body)
-            self.assertIn("詳細は `nilo failure list --project project_test` を確認してください。", body)
+            self.assertIn("failure_summary: open=1", body)
+            self.assertIn("detail_commands:", body)
+            self.assertIn("nilo failure list --project project_test", body)
             self.assertNotIn("metadata_mismatch message metadata_mismatch message", body)
 
     def test_status_text_surfaces_use_japanese_labels_but_json_stays_machine_readable(self) -> None:
@@ -317,17 +317,26 @@ class FailureLedgerTests(unittest.TestCase):
             with redirect_stdout(ai_output):
                 main(["--db", str(db), "status", "--project", "project_test", "--ai"])
             ai_body = ai_output.getvalue()
-            self.assertIn("状態", ai_body)
-            self.assertIn("次の作業", ai_body)
-            self.assertIn("証跡", ai_body)
-            self.assertIn("未提出 (missing)", ai_body)
+            self.assertIn("active_task:", ai_body)
+            self.assertIn("next_action:", ai_body)
+            self.assertIn("latest_verification: status=missing", ai_body)
+            self.assertIn("detail_commands:", ai_body)
+
+            verbose_ai_output = io.StringIO()
+            with redirect_stdout(verbose_ai_output):
+                main(["--db", str(db), "status", "--project", "project_test", "--ai", "--verbose"])
+            verbose_ai_body = verbose_ai_output.getvalue()
+            self.assertIn("状態", verbose_ai_body)
+            self.assertIn("次の作業", verbose_ai_body)
+            self.assertIn("証跡", verbose_ai_body)
+            self.assertIn("未提出 (missing)", verbose_ai_body)
 
             json_output = io.StringIO()
             with redirect_stdout(json_output):
                 main(["--db", str(db), "status", "--project", "project_test", "--json"])
             data = json.loads(json_output.getvalue())
-            self.assertIn("current_task", data)
-            self.assertEqual(data["current_task"]["task"]["state"], "planned")
+            self.assertTrue(data["compact"])
+            self.assertEqual(data["active_task"]["status"], "planned")
             self.assertNotIn("状態", data)
 
     def test_failure_text_surfaces_use_japanese_labels_but_db_values_stay_english(self) -> None:

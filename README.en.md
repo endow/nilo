@@ -129,6 +129,8 @@ nilo status --project nilo
 
 `nilo status` is the lightweight current-position check. The default view avoids diff hashes and heavy roadmap, commit-mapping, and history summaries. Its git dirty indicator covers tracked-file changes only.
 Use `nilo status --verbose` for detailed status, `nilo status --audit` for strict evidence checks, and `nilo status --ai` for agent-oriented context.
+By default, `nilo status --ai` prints a short index-first work card: project, active task, one next action, blocker summary, latest verification, latest review, required commands, and detail commands. It does not expand full evidence, roadmap, failure-log, recipe, history, review-finding, or verification-output details on every turn. Fetch details on demand with `nilo status --ai --verbose`, `nilo task status --task <task_id> --ai`, `nilo evidence show --task <task_id> --ai`, `nilo review status --task <task_id> --format json`, `nilo roadmap status --project <project_id> --ai`, or `nilo failure list --project <project_id>`.
+Evidence is retained; compact AI context only avoids expanding it every time. Completion, audit, and evidence-show commands still enforce strict evidence checks. Set `NILO_AI_CONTEXT_MAX_CHARS` before starting the Nilo process to tune the compact text budget.
 
 When recording verification during a Nilo task, choose the test scope first and record it with `nilo check --task <task_id> ... --mode quick`, `--mode targeted`, or `--mode full`. Timeouts are guardrails for the chosen scope, not the main way to make full-suite verification practical.
 

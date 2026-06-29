@@ -202,13 +202,12 @@ class CliGitIntegrationTests(unittest.TestCase):
                 with redirect_stdout(status_text):
                     main(["--db", str(db), "status", "--ai"])
                 body = status_text.getvalue()
-                self.assertIn("タスク: task_ai AI compact", body)
-                self.assertIn("状態: 計画済み (planned)", body)
-                self.assertIn("証跡: 未提出 (missing)", body)
-                self.assertIn("未解決レビュー指摘数: 1", body)
-                self.assertIn("現在タスク完了診断: 条件未充足 (completion_blocked)", body)
+                self.assertIn("active_task: task_ai [planned] AI compact", body)
+                self.assertIn("latest_verification: status=missing", body)
+                self.assertIn("latest_review: unresolved=1", body)
+                self.assertIn("detail_commands:", body)
                 self.assertNotIn("完了可否", body)
-                self.assertLess(len(body), 700)
+                self.assertLess(len(body), 1200)
 
                 task_status_text = io.StringIO()
                 with redirect_stdout(task_status_text):
@@ -221,12 +220,22 @@ class CliGitIntegrationTests(unittest.TestCase):
                 with redirect_stdout(status_json):
                     main(["--db", str(db), "status", "--ai", "--json"])
                 data = json.loads(status_json.getvalue())
-                self.assertEqual(data["current_task"]["task"]["id"], "task_ai")
-                self.assertEqual(data["current_task"]["evidence"]["status"], "missing")
-                self.assertEqual(data["current_task"]["git"]["git_diff_hash"], "__not_computed__")
-                self.assertFalse(data["current_task"]["git"]["diff_hash_computed"])
-                self.assertEqual(data["current_task"]["review"]["unresolved_count"], 1)
-                self.assertFalse(data["current_task"]["completion"]["allowed"])
+                self.assertTrue(data["compact"])
+                self.assertEqual(data["active_task"]["id"], "task_ai")
+                self.assertEqual(data["latest_verification"]["status"], "missing")
+                self.assertEqual(data["latest_review"]["unresolved_count"], 1)
+                self.assertEqual(data["blockers"]["count"], 2)
+
+                verbose_status_json = io.StringIO()
+                with redirect_stdout(verbose_status_json):
+                    main(["--db", str(db), "status", "--ai", "--verbose", "--json"])
+                verbose_data = json.loads(verbose_status_json.getvalue())
+                self.assertEqual(verbose_data["current_task"]["task"]["id"], "task_ai")
+                self.assertEqual(verbose_data["current_task"]["evidence"]["status"], "missing")
+                self.assertNotEqual(verbose_data["current_task"]["git"]["git_diff_hash"], "__not_computed__")
+                self.assertTrue(verbose_data["current_task"]["git"]["diff_hash_computed"])
+                self.assertEqual(verbose_data["current_task"]["review"]["unresolved_count"], 1)
+                self.assertFalse(verbose_data["current_task"]["completion"]["allowed"])
 
                 store = Store(db)
                 try:
@@ -248,12 +257,17 @@ class CliGitIntegrationTests(unittest.TestCase):
                 with redirect_stdout(status_with_report):
                     main(["--db", str(db), "status", "--ai"])
                 status_body = status_with_report.getvalue()
-                self.assertIn("証跡: 提出あり (present)", status_body)
-                self.assertIn("作業規模の判定:", status_body)
-                self.assertIn("複数ファイルだけでは roadmap 扱いにせず", status_body)
-                self.assertIn("複数機能・複数実装トラック", status_body)
-                self.assertIn("CLI", status_body)
-                self.assertIn("roadmap", status_body)
+                self.assertIn("latest_verification: status=present", status_body)
+                verbose_status_with_report = io.StringIO()
+                with redirect_stdout(verbose_status_with_report):
+                    main(["--db", str(db), "status", "--ai", "--verbose"])
+                verbose_status_body = verbose_status_with_report.getvalue()
+                self.assertIn("証跡: 提出あり (present)", verbose_status_body)
+                self.assertIn("作業規模の判定:", verbose_status_body)
+                self.assertIn("複数ファイルだけでは roadmap 扱いにせず", verbose_status_body)
+                self.assertIn("複数機能・複数実装トラック", verbose_status_body)
+                self.assertIn("CLI", verbose_status_body)
+                self.assertIn("roadmap", verbose_status_body)
 
                 for command in (
                     ["task", "show", "--task", "task_ai", "--ai"],

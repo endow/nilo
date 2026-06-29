@@ -233,9 +233,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 next_output = io.StringIO()
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next", "--project", root.name])
-                self.assertIn("workflow_context:", next_output.getvalue())
                 self.assertIn("Continue release recipe step", next_output.getvalue())
+                self.assertIn("details: nilo status --ai --verbose --project", next_output.getvalue())
                 self.assertNotIn("Unrelated cleanup", next_output.getvalue())
+                verbose_next_output = io.StringIO()
+                with redirect_stdout(verbose_next_output):
+                    main(["--db", str(db), "next", "--project", root.name, "--verbose"])
+                self.assertIn("workflow_context:", verbose_next_output.getvalue())
 
                 store = Store(db)
                 try:
@@ -251,7 +255,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertEqual(context["status"], "waiting_public_approval")
                     self.assertEqual(context["next_step"], "await_public_operation_confirmation")
                     self.assertEqual([item["operation"] for item in context["pending_public_operations"]], ["create_tag", "push_branch", "push_tag", "create_github_release"])
-                    status_context = project_ai_context(store, root.name, cwd=root)
+                    status_context = project_ai_context(store, root.name, cwd=root, verbose=True)
                     self.assertEqual(status_context["current_task"]["task"]["id"], release_task_id)
                 finally:
                     store.close()
@@ -259,10 +263,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 gated_output = io.StringIO()
                 with redirect_stdout(gated_output):
                     main(["--db", str(db), "next", "--project", root.name])
-                self.assertIn("pending_public_operations:", gated_output.getvalue())
-                self.assertIn("v0.3.1 を tag/push/release して", gated_output.getvalue())
-                self.assertIn("nilo recipe approve-public --project", gated_output.getvalue())
+                self.assertIn("Release recipe is waiting for explicit public operation approval.", gated_output.getvalue())
+                self.assertIn("execute_after_approval: nilo recipe approve-public --project", gated_output.getvalue())
                 self.assertIn("--execute", gated_output.getvalue())
+                self.assertIn("details: nilo status --ai --verbose --project", gated_output.getvalue())
+                self.assertNotIn("pending_public_operations:", gated_output.getvalue())
+                verbose_gated_output = io.StringIO()
+                with redirect_stdout(verbose_gated_output):
+                    main(["--db", str(db), "next", "--project", root.name, "--verbose"])
+                self.assertIn("pending_public_operations:", verbose_gated_output.getvalue())
+                self.assertIn("v0.3.1 を tag/push/release して", verbose_gated_output.getvalue())
+                self.assertIn("nilo recipe approve-public --project", verbose_gated_output.getvalue())
+                self.assertIn("--execute", verbose_gated_output.getvalue())
                 self.assertNotIn("Unrelated cleanup", gated_output.getvalue())
 
                 store = Store(db)
@@ -286,7 +298,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertEqual(run["pending_public_operations"], [])
                     completed_context = workflow_context(store, root.name)
                     self.assertEqual(completed_context["type"], "project")
-                    rendered = render_ai_context_text(project_ai_context(store, root.name, cwd=root))
+                    rendered = render_ai_context_text(project_ai_context(store, root.name, cwd=root, verbose=True))
                     self.assertIn("Release recipe completed:", rendered)
                     self.assertIn("github_release: https://example.test/release/v0.3.1", rendered)
                 finally:

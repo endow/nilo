@@ -30,6 +30,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     next_step = sub.add_parser("next")
     add_project_option(next_step)
     add_task_option(next_step)
+    next_step.add_argument("--verbose", action="store_true", help="Show background context in addition to the first action.")
     next_step.set_defaults(func=handlers.cmd_facade_next)
 
     queue = sub.add_parser("queue")

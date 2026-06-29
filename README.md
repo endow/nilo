@@ -44,6 +44,8 @@ nilo status
 
 `nilo status` は軽量な現在地確認です。通常表示では diff hash や roadmap/commit/history の重い集計を行いません。git の dirty 表示は tracked file の変更だけを対象にします。
 詳細な状態を見たい場合は `nilo status --verbose`、厳密な証跡確認は `nilo status --audit`、AI 向けコンテキストは `nilo status --ai` を使います。
+`nilo status --ai` の既定出力は短い作業カードです。project / active task / next action / blocker summary / latest verification / latest review / required commands / detail commands だけを出し、証跡や roadmap や review findings の本文は毎回展開しません。詳細が必要な場合は `nilo status --ai --verbose`、`nilo task status --task <task_id> --ai`、`nilo evidence show --task <task_id> --ai`、`nilo review status --task <task_id> --format json`、`nilo roadmap status --project <project_id> --ai`、`nilo failure list --project <project_id>` を使います。
+証跡は消さず、completion / audit / evidence show 側で厳密性を維持します。compact AI context の文字数上限は `NILO_AI_CONTEXT_MAX_CHARS` で調整できます。この値は Nilo プロセス起動時に読み込まれます。
 
 このリポジトリ自体のテストを実行する場合:
 
