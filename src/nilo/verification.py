@@ -19,6 +19,7 @@ def _timeout_text(value: str | bytes | None) -> str:
 
 
 SHELL_CONTROL_TOKENS = {"&&", "||", "|", ";", "&", "<", ">", ">>", "2>", "2>>"}
+ENV_ASSIGNMENT_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*=.*"
 
 
 def _split_command(command: str) -> tuple[list[str] | str, bool, str]:
@@ -28,9 +29,17 @@ def _split_command(command: str) -> tuple[list[str] | str, bool, str]:
         return command, True, f"parse_error: {exc}"
     if not args:
         return command, True, "empty command"
+    if any(_is_env_assignment(token) for token in args[:1]):
+        return command, True, "environment assignment"
     if any(token in SHELL_CONTROL_TOKENS for token in args):
         return command, True, "shell control token"
     return args, False, "argv"
+
+
+def _is_env_assignment(token: str) -> bool:
+    import re
+
+    return bool(re.match(ENV_ASSIGNMENT_PATTERN, token))
 
 
 def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> dict:

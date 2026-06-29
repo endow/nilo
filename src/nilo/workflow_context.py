@@ -202,6 +202,15 @@ def approve_pending_public_operations(
         "github_release_url": release_url,
         "public_operations_completed": pending,
     }
+    completion_id = _record_release_task_completion_if_needed(
+        store,
+        task_id=run["task_id"],
+        approval=approval,
+        metadata=metadata,
+        cwd=Path.cwd(),
+    )
+    if completion_id:
+        metadata["release_task_completion_id"] = completion_id
     store.update(
         "recipe_runs",
         run["id"],
@@ -241,7 +250,10 @@ def execute_pending_public_operations(
         raise ValueError("active release recipe run not found")
     pending = run.get("pending_public_operations") or (run.get("metadata") or {}).get("public_operations_approved") or []
     if not pending:
-        raise ValueError("release recipe has no pending public operations")
+        run = recover_missing_release_public_operations(store, project_id=project_id, cwd=cwd)
+        pending = run.get("pending_public_operations") or (run.get("metadata") or {}).get("public_operations_approved") or []
+    if not pending:
+        raise ValueError("release recipe has no pending public operations and automatic recovery was not possible")
     version = release_version_from_run(run)
     validate_public_operation_approval(approval, version)
 
@@ -303,6 +315,120 @@ def execute_pending_public_operations(
         executed=True,
     )
     return completed, logs
+
+
+def recover_missing_release_public_operations(store, *, project_id: str, cwd: Path) -> dict[str, Any]:
+    run = active_recipe_run(store, project_id)
+    if not run or run.get("recipe_name") != "release":
+        raise ValueError("active release recipe run not found")
+    metadata = run.get("metadata") or {}
+    if run.get("pending_public_operations"):
+        return run
+    if metadata.get("public_operations_approved"):
+        return run
+    if not release_required_checks_passed(store, run["task_id"]):
+        raise ValueError("release recipe has no pending public operations and required checks have not passed")
+
+    code, out, err = _run_command(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd)
+    if code != 0:
+        raise ValueError(err or "git status failed")
+    if out.strip():
+        raise ValueError("release recipe has no pending public operations and working tree is dirty")
+
+    version = release_version_from_run(run)
+    tag = f"v{version.lstrip('v')}" if version else ""
+    if tag:
+        tag_code, _, _ = _run_command(["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"], cwd)
+        if tag_code == 0:
+            raise ValueError(f"release recipe has no pending public operations and tag already exists: {tag}")
+
+    commit_sha = metadata.get("commit_sha") or _git_value_or_empty(cwd, ["rev-parse", "HEAD"])
+    if not commit_sha:
+        raise ValueError("release recipe has no pending public operations and release commit could not be resolved")
+    commit_message = metadata.get("commit_message") or _git_value_or_empty(cwd, ["log", "-1", "--pretty=%s"]) or f"Release {version}"
+    from .snapshot import compact_snapshot, current_git_snapshot
+
+    recovered = mark_release_commit_recorded(
+        store,
+        task_id=run["task_id"],
+        commit_sha=commit_sha,
+        commit_message=commit_message,
+        post_commit_snapshot=compact_snapshot(current_git_snapshot(cwd)),
+    )
+    if not recovered or not recovered.get("pending_public_operations"):
+        raise ValueError("release recipe pending public operations could not be recovered")
+    recovered_metadata = recovered.get("metadata") or {}
+    recovered_metadata["public_operations_recovered"] = True
+    store.update("recipe_runs", recovered["id"], {"metadata": recovered_metadata, "updated_at": now_iso()})
+    return store.get("recipe_runs", recovered["id"])
+
+
+def _record_release_task_completion_if_needed(store, *, task_id: str, approval: str, metadata: dict[str, Any], cwd: Path) -> str:
+    from .snapshot import compact_snapshot, current_git_snapshot
+    from .task_logic import active_task_completion
+
+    if active_task_completion(store, task_id):
+        return ""
+    verification = store.latest_for_task("verification_runs", task_id)
+    now = now_iso()
+    snapshot = compact_snapshot(current_git_snapshot(cwd))
+    commit_transition = {
+        "verified_snapshot": metadata.get("verification_snapshot") or compact_snapshot(verification or {}),
+        "pre_commit_snapshot": metadata.get("pre_commit_snapshot") or metadata.get("verification_snapshot") or compact_snapshot(verification or {}),
+        "post_commit_snapshot": metadata.get("post_commit_snapshot") or snapshot,
+        "commit_sha": metadata.get("commit_sha", ""),
+        "commit_message": metadata.get("commit_message", ""),
+        "committed_from_verified_dirty_tree": True,
+        "verified_diff_hash": (metadata.get("verification_snapshot") or verification or {}).get("git_diff_hash", ""),
+        "committed_tree_hash": metadata.get("committed_tree_hash", ""),
+        "committed_files": metadata.get("committed_files") or [],
+    }
+    completion_id = make_id("completion")
+    store.insert(
+        "task_completions",
+        {
+            "id": completion_id,
+            "task_id": task_id,
+            "actor": "human",
+            "completed_by": "human",
+            "completed_snapshot": {**snapshot, "commit_transition": commit_transition},
+            "completion_note": "release publish completed",
+            "accepted_verification_run_ids": [verification["id"]] if verification else [],
+            "accepted_review_result_ids": [],
+            "human_decision_note": approval,
+            "completed_with_reservations": False,
+            "decision_source": "human_explicit",
+            "human_confirmed": True,
+            "completed_at": now,
+            "reason": "release publish completed",
+            "created_at": now,
+        },
+    )
+    store.insert(
+        "transition_events",
+        {
+            "id": make_id("transition"),
+            "transition": "complete_task",
+            "entity_type": "task",
+            "entity_id": task_id,
+            "actor": "human",
+            "decision_source": "human_explicit",
+            "human_confirmed": True,
+            "reason": "release publish completed",
+            "previous_state": "",
+            "new_state": "completed_by_user",
+            "related_ids": {"completion": completion_id, "release_publish": "approved_public_operations"},
+            "snapshot": snapshot,
+            "warnings": [],
+            "created_at": now,
+        },
+    )
+    return completion_id
+
+
+def _git_value_or_empty(cwd: Path, args: list[str]) -> str:
+    code, out, _ = _run_command(["git", *args], cwd)
+    return out.strip() if code == 0 else ""
 
 
 def _ensure_git_tag(cwd: Path, tag: str) -> dict[str, Any]:
@@ -368,6 +494,10 @@ def workflow_context(store, project_id: str) -> dict[str, Any]:
     if run["status"] == "waiting_public_approval":
         context["approval_prompt"] = public_approval_prompt(run)
         context["public_execution_command"] = public_execution_command(project_id, run)
+        context["release_publish_command"] = release_publish_command(project_id, run)
+        context["required_approval_text"] = public_approval_text(run).strip('"')
+    elif run["recipe_name"] == "release":
+        context["release_prepare_command"] = release_prepare_command(project_id, run)
     return context
 
 
@@ -401,6 +531,19 @@ def public_execution_command(project_id: str, run: dict[str, Any]) -> str:
             "--execute",
         ]
     )
+
+
+def release_prepare_command(project_id: str, run: dict[str, Any]) -> str:
+    version = release_version_from_run(run)
+    parts = ["nilo", "release", "prepare", "--project", shlex.quote(project_id)]
+    if version:
+        parts.extend(["--target-version", shlex.quote(version)])
+    return " ".join(parts)
+
+
+def release_publish_command(project_id: str, run: dict[str, Any]) -> str:
+    approval = public_approval_text(run).strip('"')
+    return " ".join(["nilo", "release", "publish", "--project", shlex.quote(project_id), "--approval", shlex.quote(approval)])
 
 
 def release_completion_summary(store, run: dict[str, Any]) -> dict[str, Any]:

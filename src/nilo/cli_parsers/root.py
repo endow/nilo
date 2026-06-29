@@ -12,6 +12,7 @@ from .overdrive import register_run
 from .project import register_project
 from .quality import register_quality
 from .recipe import register_recipe
+from .release import register_release
 from .roadmap import register_roadmap
 from .task import register_task
 from .test import register_test
@@ -77,6 +78,7 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     register_failure(sub, handlers)
     register_project(sub, handlers)
     register_recipe(sub, handlers)
+    register_release(sub, handlers)
     register_roadmap(sub, handlers)
     register_agent(sub, handlers)
     register_task(sub, handlers)

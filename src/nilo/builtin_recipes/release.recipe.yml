@@ -32,8 +32,8 @@ variables:
     type: string
     required: true
 verification:
-  - command: "nilo check \"python -m unittest discover tests\" --project {project_id} --mode full --timeout 300"
-    reason: "Run and record the full project test suite before release handoff; the timeout is only a guardrail."
+  - command: "nilo check \"PYTHONPATH=src python tests/run_shards.py --all --jobs auto\" --project {project_id} --mode full --timeout 600"
+    reason: "Run and record the parallel shard full check before release handoff."
   - command: "nilo recipe doctor --project {project_id}"
     reason: "Confirm bundled and project recipes are valid."
   - command: "nilo status --project {project_id}"

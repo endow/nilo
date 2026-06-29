@@ -606,14 +606,22 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                         print(f"execute_after_approval: {workflow['public_execution_command']}")
             print(f"{field_label('next_action')}:")
             if workflow.get("status") == "waiting_public_approval":
-                print("- Release recipe is waiting for explicit public operation approval.")
-                if workflow.get("public_execution_command"):
+                print("- next_action: await_public_approval")
+                if workflow.get("required_approval_text"):
+                    print(f"required_approval_text: {workflow['required_approval_text']}")
+                if workflow.get("release_publish_command"):
+                    print(f"command_after_approval: {workflow['release_publish_command']}")
+                elif workflow.get("public_execution_command"):
                     if getattr(args, "verbose", False):
                         print(f"- After approval, execute: {workflow['public_execution_command']}")
                     else:
                         print(f"execute_after_approval: {workflow['public_execution_command']}")
             else:
-                print(f"- Continue release recipe step: {workflow['next_step']}")
+                print("- next_action: run_release_prepare")
+                if workflow.get("release_prepare_command"):
+                    print(f"command: {workflow['release_prepare_command']}")
+                else:
+                    print(f"- Continue release recipe step: {workflow['next_step']}")
             if not getattr(args, "verbose", False):
                 print(f"details: nilo status --ai --verbose --project {project_id}")
             return
