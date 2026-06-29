@@ -5,12 +5,18 @@ import fnmatch
 import hashlib
 import os
 from pathlib import Path
+import sys
+import time
 from typing import Any
 
 from .gitmeta import git_output, head_commit, porcelain_path
 
 
 SNAPSHOT_KEYS = ("git_head", "git_diff_hash", "working_tree_dirty")
+SNAPSHOT_MODE_FULL = "full"
+SNAPSHOT_MODE_FAST = "fast"
+UNCOMPUTED_DIFF_HASH = "__not_computed__"
+SNAPSHOT_WARNING_SECONDS = 5.0
 DEFAULT_SNAPSHOT_MAX_FILE_BYTES = 1_000_000
 DEFAULT_SNAPSHOT_IGNORE_PATTERNS = [
     ".git/**",
@@ -59,7 +65,9 @@ class SnapshotHashResult:
     binary_paths: list[str]
 
 
-def current_git_snapshot(cwd: Path) -> dict[str, Any]:
+def current_git_snapshot(cwd: Path, mode: str = SNAPSHOT_MODE_FULL) -> dict[str, Any]:
+    if mode not in {SNAPSHOT_MODE_FULL, SNAPSHOT_MODE_FAST}:
+        raise ValueError(f"unknown git snapshot mode: {mode}")
     code, inside, _ = git_output(["rev-parse", "--is-inside-work-tree"], cwd)
     if code != 0 or inside.strip().lower() != "true":
         return {
@@ -69,13 +77,34 @@ def current_git_snapshot(cwd: Path) -> dict[str, Any]:
             "git_status_porcelain": "",
             "observed_paths": [],
             "git_available": False,
+            "snapshot_mode": mode,
+            "git_diff_hash_computed": False,
         }
 
-    status_code, status, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"], cwd)
+    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "normal"
+    status_code, status, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", f"--untracked-files={untracked}"], cwd)
     if status_code != 0:
         status = ""
     paths = sorted({path for line in status.splitlines() if (path := porcelain_path(line).replace("\\", "/"))})
+    if mode == SNAPSHOT_MODE_FAST:
+        return {
+            "git_head": head_commit(cwd),
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": bool(status.strip()),
+            "git_status_porcelain": status,
+            "observed_paths": paths,
+            "git_available": True,
+            "snapshot_mode": SNAPSHOT_MODE_FAST,
+            "git_diff_hash_computed": False,
+        }
+    started = time.monotonic()
     hash_result = _diff_hash(cwd, status, paths)
+    elapsed = time.monotonic() - started
+    warnings = []
+    if elapsed > SNAPSHOT_WARNING_SECONDS:
+        warning = f"snapshot warning: git diff hash took {elapsed:.1f}s; consider .niloignore or use fast status"
+        warnings.append(warning)
+        print(warning, file=sys.stderr)
     return {
         "git_head": head_commit(cwd),
         "git_diff_hash": hash_result.digest,
@@ -83,6 +112,10 @@ def current_git_snapshot(cwd: Path) -> dict[str, Any]:
         "git_status_porcelain": status,
         "observed_paths": paths,
         "git_available": True,
+        "snapshot_mode": SNAPSHOT_MODE_FULL,
+        "git_diff_hash_computed": True,
+        "snapshot_timing": {"diff_hash_seconds": elapsed},
+        "snapshot_warnings": warnings,
         "snapshot_excluded_paths": hash_result.excluded_paths,
         "snapshot_hashed_paths": hash_result.hashed_paths,
         "snapshot_large_paths": hash_result.large_paths,
@@ -109,6 +142,12 @@ def compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {key: snapshot.get(key) for key in SNAPSHOT_KEYS}
 
 
+def snapshot_has_diff_hash(snapshot: dict[str, Any] | None) -> bool:
+    if not snapshot:
+        return False
+    return bool(snapshot.get("git_diff_hash_computed", True)) and (snapshot.get("git_diff_hash") or "") != UNCOMPUTED_DIFF_HASH
+
+
 def record_snapshot(record: dict[str, Any], field: str = "") -> dict[str, Any]:
     if field:
         value = record.get(field)
@@ -124,11 +163,13 @@ def snapshots_match(left: dict[str, Any] | None, right: dict[str, Any] | None) -
     return all((left.get(key) or "") == (right.get(key) or "") for key in SNAPSHOT_KEYS)
 
 
-def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: dict[str, Any]) -> str:
+def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: dict[str, Any], *, strict: bool = True) -> str:
     if not verification_run:
         return "missing"
     if verification_run.get("timed_out") or verification_run.get("exit_code") not in (0, "0"):
         return "failed"
+    if not snapshot_has_diff_hash(current_snapshot):
+        return "recorded" if strict else "present"
     if snapshots_match(record_snapshot(verification_run), compact_snapshot(current_snapshot)):
         return "current"
     return "stale"
@@ -174,8 +215,10 @@ def commit_aware_evidence_status(
     verification_run: dict[str, Any] | None,
     current_snapshot: dict[str, Any],
     completion: dict[str, Any] | None,
+    *,
+    strict: bool = True,
 ) -> str:
-    status = evidence_status(verification_run, current_snapshot)
+    status = evidence_status(verification_run, current_snapshot, strict=strict)
     if status == "stale" and committed_evidence_matches(verification_run, current_snapshot, completion):
         return "current"
     return status

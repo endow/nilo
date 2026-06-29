@@ -244,7 +244,8 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
     try:
         if getattr(args, "ai", False) or getattr(args, "json", False):
             try:
-                data = project_ai_context(store, project_id)
+                snapshot_mode = "full" if getattr(args, "verbose", False) else "fast"
+                data = project_ai_context(store, project_id, snapshot_mode=snapshot_mode)
             except ValueError as exc:
                 raise SystemExit(str(exc)) from exc
             data["project_boundary"] = boundary.to_dict()
@@ -263,7 +264,6 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
                 print(line)
             for warning in boundary_warning_lines(boundary):
                 print(warning)
-        summary = summary_for_project(store, project_id)
         if not getattr(args, "verbose", False):
             project = store.get("projects", project_id)
             if not project:
@@ -273,6 +273,7 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
 
             c.print_human_project_status(store, project, active_tasks, statuses)
             return
+        summary = summary_for_project(store, project_id)
         print(f"{field_label('project')}: {summary['project_id']} ({summary['project_name']})")
         print(f"ロードマップ: {summary['roadmap_position']}")
         print(f"作業状態: {summary['work_state']}")

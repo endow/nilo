@@ -1688,6 +1688,7 @@ variables:
             project_id = root.name
             previous_cwd = Path.cwd()
             try:
+                self.init_git_with_tags(root, [])
                 os.chdir(root)
                 with redirect_stdout(io.StringIO()):
                     main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
@@ -1740,6 +1741,8 @@ variables:
                 data = json.loads(status_json.getvalue())
                 self.assertEqual(data["current_task"]["task"]["id"], "task_ai")
                 self.assertEqual(data["current_task"]["evidence"]["status"], "missing")
+                self.assertEqual(data["current_task"]["git"]["git_diff_hash"], "__not_computed__")
+                self.assertFalse(data["current_task"]["git"]["diff_hash_computed"])
                 self.assertEqual(data["current_task"]["review"]["unresolved_count"], 1)
                 self.assertFalse(data["current_task"]["completion"]["allowed"])
 
@@ -1815,6 +1818,37 @@ variables:
                 self.assertIn("register_reviewer", doctor_body)
                 self.assertIn(f"status_ai_max_chars: {AI_CONTEXT_TEXT_MAX_CHARS}", doctor_body)
                 self.assertIn("status_ai_within_budget: True", doctor_body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_facade_status_non_verbose_does_not_take_git_snapshot(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_status", "--title", "Status fast"])
+
+                fast_snapshot = {
+                    "git_head": "head",
+                    "git_diff_hash": "__not_computed__",
+                    "working_tree_dirty": True,
+                    "git_status_porcelain": " M tracked.txt\n",
+                    "observed_paths": ["tracked.txt"],
+                    "git_available": True,
+                    "snapshot_mode": "fast",
+                    "git_diff_hash_computed": False,
+                }
+                output = io.StringIO()
+                with patch("nilo.project_logic.current_git_snapshot", return_value=fast_snapshot) as snapshot_mock, redirect_stdout(output):
+                    main(["--db", str(db), "status", "--project", project_id])
+
+                self.assertIn("Status fast", output.getvalue())
+                self.assertEqual(snapshot_mock.call_args.kwargs["mode"], "fast")
             finally:
                 os.chdir(previous_cwd)
 

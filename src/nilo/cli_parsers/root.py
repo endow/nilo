@@ -44,6 +44,10 @@ def build_parser(add_common: Callable[[argparse.ArgumentParser], None], handlers
     doctor_state.add_argument("--project", help="Project id. Defaults to the current directory name.")
     doctor_state.add_argument("--json", action="store_true")
     doctor_state.set_defaults(func=handlers.cmd_doctor_state)
+    doctor_performance = doctor_sub.add_parser("performance")
+    doctor_performance.add_argument("--project", help="Project id. Defaults to the current directory name.")
+    doctor_performance.add_argument("--json", action="store_true")
+    doctor_performance.set_defaults(func=handlers.cmd_doctor_performance)
     for doctor_name in ("workflow", "recipe", "release"):
         doctor_workflow = doctor_sub.add_parser(doctor_name)
         doctor_workflow.add_argument("--project", help="Project id. Defaults to the current directory name.")

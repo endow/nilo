@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, evidence_status
+from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, evidence_status, snapshot_has_diff_hash
 from pathlib import Path
 
 
@@ -24,7 +24,7 @@ def projected_task_status(store, task: dict, *, current_snapshot: dict | None = 
     if latest["source"] == "completion":
         if completion_structural_issues(store, task):
             return "completion_needs_review"
-        if current_snapshot is not None:
+        if current_snapshot is not None and snapshot_has_diff_hash(current_snapshot):
             from .state_audit import task_completion_invalid
 
             if task_completion_invalid(store, task["id"], current_snapshot=current_snapshot):

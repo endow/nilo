@@ -348,6 +348,48 @@ def cmd_doctor_state(args: argparse.Namespace) -> None:
         store.close()
 
 
+def cmd_doctor_performance(args: argparse.Namespace) -> None:
+    import json
+
+    project_id = args.project or Path.cwd().name
+    store = Store(args.db)
+    try:
+        project = store.get("projects", project_id)
+        if not project:
+            raise SystemExit(f"project not found: {project_id}")
+        snapshot = current_git_snapshot(Path.cwd(), mode="full")
+        timing = snapshot.get("snapshot_timing") or {}
+        result = {
+            "project_id": project_id,
+            "snapshot_mode": snapshot.get("snapshot_mode", "full"),
+            "git_available": bool(snapshot.get("git_available", True)),
+            "git_diff_hash_computed": bool(snapshot.get("git_diff_hash_computed", True)),
+            "diff_hash_seconds": timing.get("diff_hash_seconds", 0.0),
+            "observed_paths": len(snapshot.get("observed_paths") or []),
+            "hashed_paths": len(snapshot.get("snapshot_hashed_paths") or []),
+            "excluded_paths": len(snapshot.get("snapshot_excluded_paths") or []),
+            "large_paths": len(snapshot.get("snapshot_large_paths") or []),
+            "binary_paths": len(snapshot.get("snapshot_binary_paths") or []),
+            "warnings": snapshot.get("snapshot_warnings") or [],
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        print(f"project: {project_id} ({project['name']})")
+        print("git_snapshot:")
+        print(f"- mode: {result['snapshot_mode']}")
+        print(f"- diff_hash_seconds: {result['diff_hash_seconds']:.3f}")
+        print(f"- observed_paths: {result['observed_paths']}")
+        print(f"- hashed_paths: {result['hashed_paths']}")
+        print(f"- excluded_paths: {result['excluded_paths']}")
+        print(f"- large_paths: {result['large_paths']}")
+        print(f"- binary_paths: {result['binary_paths']}")
+        for warning in result["warnings"]:
+            print(warning)
+    finally:
+        store.close()
+
+
 def cmd_doctor_workflow(args: argparse.Namespace) -> None:
     import json
     from ..state_audit import audit_workflow

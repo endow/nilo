@@ -1800,7 +1800,7 @@ def print_project_summary_text(summary: dict) -> None:
         print(f"- {item['source']} [{item['status']}] {item['suggested_task_type']}: {item['summary']}")
 
 
-def print_human_project_status(store: Store, project: dict, active_tasks: list[dict], statuses: dict[str, str]) -> None:
+def print_human_project_status(store: Store, project: dict, active_tasks: list[dict], statuses: dict[str, str], *, current_snapshot: dict | None = None) -> None:
     from .failure import summarize_failure_logs
 
     print(f"{field_label('project')}: {project['id']}")
@@ -1816,14 +1816,17 @@ def print_human_project_status(store: Store, project: dict, active_tasks: list[d
     print("作業中のタスク:")
 
     next_lines: list[str] = []
+    snapshot = current_snapshot or current_git_snapshot(Path.cwd(), mode="fast")
     for task in active_tasks[:3]:
         task = {**task, "status": statuses[task["id"]]}
         verification_run = store.latest_for_task("verification_runs", task["id"])
         blocking = unresolved_blocking_review_findings(store, task["id"])
-        evidence = commit_aware_evidence_status(verification_run, current_git_snapshot(Path.cwd()), active_task_completion(store, task["id"]))
+        evidence = commit_aware_evidence_status(verification_run, snapshot, active_task_completion(store, task["id"]), strict=False)
         print(f"- {task['title']}")
         print(f"  {field_label('status')}: {status_label(task['status'])}")
         print(f"  {field_label('evidence')}: {status_label(evidence)}")
+        if evidence in {"present", "recorded"}:
+            print("  証跡あり。厳密な差分一致は詳細確認で確認してください。")
         for line in human_active_task_lines(task, verification_run, len(blocking)):
             print(f"  {line}")
         recipe_label = human_recipe_provenance_label(recipe_provenance_summary(store, task["id"]))

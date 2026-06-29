@@ -22,18 +22,19 @@ def active_tasks(store: Store, project_id: str) -> tuple[list[dict], dict[str, s
     return [task for task in tasks if not is_task_completed_status(statuses[task["id"]])], statuses
 
 
-def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> dict[str, Any]:
+def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snapshot_mode: str = "full") -> dict[str, Any]:
     from . import project_logic as p
 
     cwd = cwd or Path.cwd()
     task = store.get("tasks", task_id)
     if not task:
         raise ValueError(f"task not found: {task_id}")
-    snapshot = current_git_snapshot(cwd)
+    snapshot = current_git_snapshot(cwd, mode=snapshot_mode)
     verification_run = store.latest_for_task("verification_runs", task_id)
     latest_report = store.latest_for_task("agent_reports", task_id)
     completion = active_task_completion(store, task_id)
-    evidence = commit_aware_evidence_status(verification_run, snapshot, completion)
+    strict_evidence = snapshot_mode == "full"
+    evidence = commit_aware_evidence_status(verification_run, snapshot, completion, strict=strict_evidence)
     if evidence == "missing" and latest_report:
         evidence = "present"
     unresolved = unresolved_review_findings(store, task_id)
@@ -44,7 +45,8 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
     next_actions = p.task_next_actions(task, status, verification_run, unexecuted)
     failures = list_failure_logs(store, task_id=task_id, status="open", limit=5)
     blocking_reasons: list[str] = []
-    if evidence != "current":
+    usable_evidence_statuses = {"current"} if strict_evidence else {"current", "present", "recorded"}
+    if evidence not in usable_evidence_statuses:
         blocking_reasons.append(f"evidence_{evidence}")
     if unresolved:
         blocking_reasons.append(f"unresolved_review_findings:{len(unresolved)}")
@@ -61,6 +63,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
             "git_head": snapshot.get("git_head"),
             "git_diff_hash": snapshot.get("git_diff_hash") or "",
             "dirty": bool(snapshot.get("working_tree_dirty")),
+            "diff_hash_computed": bool(snapshot.get("git_diff_hash_computed", True)),
         },
         "evidence": {
             "status": evidence,
@@ -95,7 +98,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None) -> d
     }
 
 
-def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None) -> dict[str, Any]:
+def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None, snapshot_mode: str = "full") -> dict[str, Any]:
     from . import project_logic as p
 
     cwd = cwd or Path.cwd()
@@ -110,9 +113,9 @@ def project_ai_context(store: Store, project_id: str, *, cwd: Path | None = None
     failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
     workflow = workflow_context(store, project_id)
     if workflow.get("type") == "recipe_run" and workflow.get("task_id"):
-        current = task_ai_context(store, workflow["task_id"], cwd=cwd)
+        current = task_ai_context(store, workflow["task_id"], cwd=cwd, snapshot_mode=snapshot_mode)
     else:
-        current = task_ai_context(store, active[0]["id"], cwd=cwd) if active else None
+        current = task_ai_context(store, active[0]["id"], cwd=cwd, snapshot_mode=snapshot_mode) if active else None
     if workflow.get("type") == "recipe_run":
         next_actions = workflow_next_actions(workflow)
     elif current:
@@ -236,6 +239,9 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
         completion = current["completion"]
         git_head = git["git_head"] or "none"
         diff_hash = git["git_diff_hash"] or "none"
+        exact_freshness_checked = bool(git.get("diff_hash_computed", True))
+        if diff_hash == "__not_computed__":
+            diff_hash = "not_computed"
         if max_chars is not None:
             git_head = git_head[:12] if git_head != "none" else git_head
             diff_hash = diff_hash[:12] if diff_hash != "none" else diff_hash
@@ -249,6 +255,8 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
                 f"{field_label('completion')}: {ai_value_label('completion_allowed' if completion['allowed'] else 'completion_blocked')}",
             ]
         )
+        if not exact_freshness_checked and evidence["status"] in {"recorded", "present"}:
+            required.append(f"{field_label('evidence')}: 証跡あり。厳密な差分一致は詳細確認で確認してください。")
         if completion["blocking_reasons"]:
             required.append(f"{field_label('blocking_reasons')}:")
             required.extend(f"- {reason}" for reason in completion["blocking_reasons"])

@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nilo.snapshot import DEFAULT_SNAPSHOT_MAX_FILE_BYTES, compact_snapshot, current_git_snapshot, evidence_status, max_snapshot_file_bytes
+from nilo.snapshot import DEFAULT_SNAPSHOT_MAX_FILE_BYTES, UNCOMPUTED_DIFF_HASH, compact_snapshot, current_git_snapshot, evidence_status, max_snapshot_file_bytes
 
 
 def run_git(cwd: Path, *args: str) -> None:
@@ -38,6 +38,35 @@ class SnapshotPolicyTests(unittest.TestCase):
             self.assertIn("src.txt", first["snapshot_hashed_paths"])
             self.assertIn("src.txt", first["observed_paths"])
             self.assertNotEqual(first["git_diff_hash"], second["git_diff_hash"])
+
+    def test_fast_snapshot_does_not_compute_diff_hash_or_file_content_hashes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("work\n", encoding="utf-8")
+            (root / "untracked.txt").write_text("new\n", encoding="utf-8")
+
+            with patch("nilo.snapshot._diff_hash", side_effect=AssertionError("full diff hash should not run")):
+                snapshot = current_git_snapshot(root, mode="fast")
+
+            self.assertEqual(snapshot["snapshot_mode"], "fast")
+            self.assertEqual(snapshot["git_diff_hash"], UNCOMPUTED_DIFF_HASH)
+            self.assertFalse(snapshot["git_diff_hash_computed"])
+            self.assertEqual(snapshot["observed_paths"], ["README.md", "untracked.txt"])
+            self.assertTrue(snapshot["working_tree_dirty"])
+            self.assertNotIn("snapshot_hashed_paths", snapshot)
+
+    def test_fast_snapshot_evidence_is_recorded_or_present_not_stale(self) -> None:
+        current = {
+            "git_head": "abc",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": False,
+        }
+        run = {"git_head": "abc", "git_diff_hash": "old", "working_tree_dirty": True, "timed_out": False, "exit_code": 0}
+
+        self.assertEqual(evidence_status(run, current), "recorded")
+        self.assertEqual(evidence_status(run, current, strict=False), "present")
 
     def test_niloignore_excludes_content_but_keeps_path_and_reason(self) -> None:
         with TemporaryDirectory() as directory:
