@@ -747,7 +747,16 @@ def cmd_facade_check(args: argparse.Namespace) -> None:
         store.close()
     if warning:
         print(warning)
-    cmd_verification_run(argparse.Namespace(db=args.db, task=task_id, command=args.command, mode=args.mode, timeout=args.timeout))
+    cmd_verification_run(
+        argparse.Namespace(
+            db=args.db,
+            task=task_id,
+            command=args.command,
+            mode=args.mode,
+            snapshot=args.snapshot,
+            timeout=args.timeout,
+        )
+    )
 
 
 def cmd_facade_report(args: argparse.Namespace) -> None:

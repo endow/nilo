@@ -81,7 +81,7 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         if not task:
             raise SystemExit(f"task not found: {args.task}")
         if getattr(args, "ai", False):
-            data = task_ai_context(store, args.task)
+            data = task_ai_context(store, args.task, snapshot_mode="fast")
             if getattr(args, "format", "text") == "json":
                 print(json.dumps(data, ensure_ascii=False, indent=2))
             else:

@@ -34,6 +34,7 @@ from nilo.cli import handson_language, main
 from nilo.project_logic import project_tasks_and_statuses, selected_roadmap_commitment
 from nilo.roadmap_render import render_human_roadmap_markdown
 from nilo.review_dispatcher import find_executable
+from nilo.snapshot import UNCOMPUTED_DIFF_HASH
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
@@ -10236,7 +10237,9 @@ close 済み commitment を表示できるようにした。
             store.close()
             self.assertIsNone(check)
             self.assertIsNone(run["evidence_check_id"])
-            self.assertTrue(run["git_diff_hash"])
+            self.assertEqual(run["git_diff_hash"], UNCOMPUTED_DIFF_HASH)
+            self.assertEqual(run["metadata"]["snapshot_mode"], "fast")
+            self.assertFalse(run["metadata"]["git_diff_hash_computed"])
             self.assertIn("git_status_porcelain", run)
             self.assertIsInstance(run["observed_paths"], list)
 

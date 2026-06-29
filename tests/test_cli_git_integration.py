@@ -65,6 +65,81 @@ class CliGitIntegrationTests(unittest.TestCase):
             text=True,
         )
 
+    def test_task_status_ai_allows_fast_snapshot_verification_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.init_git_with_tags(root, [])
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "fast evidence"])
+                    main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_test"])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "task", "status", "--task", "task_test", "--ai"])
+            finally:
+                os.chdir(previous_cwd)
+
+        body = output.getvalue()
+        self.assertIn("証跡: 提出あり (present)", body)
+        self.assertIn("現在タスク完了診断: 完了可能 (completion_allowed)", body)
+        self.assertIn("ブロック理由:\n- なし", body)
+
+    def test_task_status_ai_does_not_allow_none_snapshot_verification_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.init_git_with_tags(root, [])
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "none evidence"])
+                    main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_test", "--snapshot", "none"])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "task", "status", "--task", "task_test", "--ai"])
+            finally:
+                os.chdir(previous_cwd)
+
+        body = output.getvalue()
+        self.assertIn("証跡: 古い証跡 (stale)", body)
+        self.assertIn("現在タスク完了診断: 条件未充足 (completion_blocked)", body)
+        self.assertIn("- evidence_stale", body)
+
+    def test_task_status_ai_marks_fast_snapshot_stale_after_new_code_path_changes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.init_git_with_tags(root, [])
+            db = root / "nilo.db"
+            src = root / "src"
+            src.mkdir()
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "fast stale"])
+                    (src / "first.py").write_text("print('first')\n", encoding="utf-8")
+                    subprocess.run(["git", "add", "src/first.py"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_test"])
+                    (src / "second.py").write_text("print('second')\n", encoding="utf-8")
+                    subprocess.run(["git", "add", "src/second.py"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "task", "status", "--task", "task_test", "--ai"])
+            finally:
+                os.chdir(previous_cwd)
+
+        body = output.getvalue()
+        self.assertIn("証跡: 古い証跡 (stale)", body)
+        self.assertIn("現在タスク完了診断: 条件未充足 (completion_blocked)", body)
+        self.assertIn("- evidence_stale", body)
+
     def test_release_recipe_infers_target_version_when_current_matches_latest_tag(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

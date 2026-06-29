@@ -211,6 +211,7 @@ def register_verification(sub: argparse._SubParsersAction, handlers: ModuleType)
     verification_run.add_argument("--task", required=True)
     verification_run.add_argument("--command", required=True)
     verification_run.add_argument("--mode", choices=["quick", "targeted", "full"], default="targeted")
+    verification_run.add_argument("--snapshot", choices=["fast", "full", "none", "audit"], default="fast")
     verification_run.add_argument("--timeout", type=float, default=300.0)
     verification_run.set_defaults(func=handlers.cmd_verification_run)
 

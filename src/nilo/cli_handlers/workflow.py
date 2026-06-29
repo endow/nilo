@@ -751,7 +751,8 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        result = run_local_verification(args.command, Path.cwd(), args.timeout)
+        snapshot_mode = getattr(args, "snapshot", "fast")
+        result = run_local_verification(args.command, Path.cwd(), args.timeout, snapshot_mode=snapshot_mode)
         result.setdefault("metadata", {})["verification_mode"] = args.mode
         boundary = resolve_project_boundary(db_path=args.db)
         try:
@@ -786,6 +787,7 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
             )
         print(f"verification_run: {row['id']}")
         print(f"mode: {args.mode}")
+        print(f"snapshot: {row['metadata']['snapshot_mode']}")
         print(f"exit_code: {row['exit_code']}")
         print(f"timed_out: {bool(row['timed_out'])}")
     finally:

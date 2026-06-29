@@ -157,7 +157,56 @@ def snapshot_has_diff_hash(snapshot: dict[str, Any] | None) -> bool:
         return False
     if snapshot.get("git_available") is False:
         return True
-    return bool(snapshot.get("git_diff_hash_computed", True)) and (snapshot.get("git_diff_hash") or "") != UNCOMPUTED_DIFF_HASH
+    diff_hash = snapshot.get("git_diff_hash") or ""
+    return bool(snapshot.get("git_diff_hash_computed", True)) and bool(diff_hash) and diff_hash != UNCOMPUTED_DIFF_HASH
+
+
+def snapshot_mode(record: dict[str, Any] | None) -> str:
+    if not record:
+        return ""
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    return str(record.get("snapshot_mode") or metadata.get("snapshot_mode") or "")
+
+
+def snapshot_is_explicit_fast(record: dict[str, Any] | None) -> bool:
+    if not record:
+        return False
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    computed = record.get("git_diff_hash_computed", metadata.get("git_diff_hash_computed", True))
+    return snapshot_mode(record) == SNAPSHOT_MODE_FAST and not bool(computed) and (record.get("git_diff_hash") or "") == UNCOMPUTED_DIFF_HASH
+
+
+def execution_impact_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    if normalized.startswith(("src/", "tests/")):
+        return True
+    return normalized in {
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "tox.ini",
+        "pytest.ini",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "uv.lock",
+        "poetry.lock",
+    }
+
+
+def fast_snapshot_paths_still_match(verification_run: dict[str, Any], current_snapshot: dict[str, Any]) -> bool:
+    if (verification_run.get("git_head") or "") != (current_snapshot.get("git_head") or ""):
+        return False
+    verified_paths = {
+        path.replace("\\", "/")
+        for path in (verification_run.get("observed_paths") or [])
+        if isinstance(path, str) and execution_impact_path(path)
+    }
+    current_paths = {
+        path.replace("\\", "/")
+        for path in (current_snapshot.get("observed_paths") or [])
+        if isinstance(path, str) and execution_impact_path(path)
+    }
+    return current_paths.issubset(verified_paths)
 
 
 def record_snapshot(record: dict[str, Any], field: str = "") -> dict[str, Any]:
@@ -180,6 +229,16 @@ def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: d
         return "missing"
     if verification_run.get("timed_out") or verification_run.get("exit_code") not in (0, "0"):
         return "failed"
+    if snapshot_mode(verification_run) == "none":
+        return "stale"
+    if not snapshot_has_diff_hash(verification_run):
+        if snapshot_is_explicit_fast(verification_run):
+            if not fast_snapshot_paths_still_match(verification_run, current_snapshot):
+                return "stale"
+            return "recorded" if strict else "present"
+        if current_snapshot.get("git_available") is False and snapshots_match(record_snapshot(verification_run), compact_snapshot(current_snapshot)):
+            return "current"
+        return "stale"
     if not snapshot_has_diff_hash(current_snapshot):
         return "recorded" if strict else "present"
     if snapshots_match(record_snapshot(verification_run), compact_snapshot(current_snapshot)):

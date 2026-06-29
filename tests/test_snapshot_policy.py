@@ -122,6 +122,141 @@ class SnapshotPolicyTests(unittest.TestCase):
         self.assertEqual(evidence_status(run, current), "recorded")
         self.assertEqual(evidence_status(run, current, strict=False), "present")
 
+    def test_fast_verification_evidence_is_recorded_against_full_current_snapshot(self) -> None:
+        current = {
+            "git_head": "abc",
+            "git_diff_hash": "full-hash",
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": True,
+            "observed_paths": ["src/nilo/app.py"],
+        }
+        run = {
+            "git_head": "abc",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": False,
+            "observed_paths": ["src/nilo/app.py"],
+            "metadata": {"snapshot_mode": "fast", "git_diff_hash_computed": False},
+            "timed_out": False,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(evidence_status(run, current), "recorded")
+        self.assertEqual(evidence_status(run, current, strict=False), "present")
+
+    def test_fast_verification_evidence_is_stale_when_new_code_path_is_dirty(self) -> None:
+        current = {
+            "git_head": "abc",
+            "git_diff_hash": "full-hash",
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": True,
+            "observed_paths": ["src/nilo/app.py", "tests/test_app.py"],
+        }
+        run = {
+            "git_head": "abc",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": False,
+            "observed_paths": ["src/nilo/app.py"],
+            "metadata": {"snapshot_mode": "fast", "git_diff_hash_computed": False},
+            "timed_out": False,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(evidence_status(run, current), "stale")
+
+    def test_fast_verification_evidence_ignores_new_docs_only_dirty_path(self) -> None:
+        current = {
+            "git_head": "abc",
+            "git_diff_hash": "full-hash",
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": True,
+            "observed_paths": ["src/nilo/app.py", "docs/readme.md"],
+        }
+        run = {
+            "git_head": "abc",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": False,
+            "observed_paths": ["src/nilo/app.py"],
+            "metadata": {"snapshot_mode": "fast", "git_diff_hash_computed": False},
+            "timed_out": False,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(evidence_status(run, current, strict=False), "present")
+
+    def test_fast_verification_evidence_is_stale_when_head_changes(self) -> None:
+        current = {
+            "git_head": "new",
+            "git_diff_hash": "full-hash",
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": True,
+            "observed_paths": ["src/nilo/app.py"],
+        }
+        run = {
+            "git_head": "old",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": False,
+            "observed_paths": ["src/nilo/app.py"],
+            "metadata": {"snapshot_mode": "fast", "git_diff_hash_computed": False},
+            "timed_out": False,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(evidence_status(run, current), "stale")
+
+    def test_none_snapshot_verification_is_not_fast_completion_evidence(self) -> None:
+        current = {
+            "git_head": "abc",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": False,
+            "git_diff_hash_computed": False,
+        }
+        run = {
+            "git_head": None,
+            "git_diff_hash": "",
+            "working_tree_dirty": False,
+            "git_diff_hash_computed": False,
+            "metadata": {"snapshot_mode": "none", "git_diff_hash_computed": False},
+            "timed_out": False,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(evidence_status(run, current), "stale")
+        self.assertEqual(evidence_status(run, current, strict=False), "stale")
+
+    def test_none_snapshot_verification_is_not_current_in_non_git_workspace(self) -> None:
+        current = {
+            "git_head": None,
+            "git_diff_hash": "",
+            "working_tree_dirty": False,
+            "git_available": False,
+            "git_diff_hash_computed": False,
+        }
+        run = {
+            "git_head": None,
+            "git_diff_hash": "",
+            "working_tree_dirty": False,
+            "metadata": {"snapshot_mode": "none", "git_diff_hash_computed": False},
+            "timed_out": False,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(evidence_status(run, current), "stale")
+
+    def test_legacy_empty_diff_hash_is_not_treated_as_fast_evidence(self) -> None:
+        current = {
+            "git_head": "abc",
+            "git_diff_hash": UNCOMPUTED_DIFF_HASH,
+            "working_tree_dirty": True,
+            "git_diff_hash_computed": False,
+        }
+        run = {"git_head": "abc", "git_diff_hash": "", "working_tree_dirty": True, "timed_out": False, "exit_code": 0}
+
+        self.assertEqual(evidence_status(run, current), "stale")
+
     def test_non_git_snapshot_can_still_match_verification_evidence(self) -> None:
         current = {
             "git_head": None,

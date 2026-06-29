@@ -6,7 +6,7 @@ from pathlib import Path
 from subprocess import TimeoutExpired
 
 from .secret import detect_secret_issues, mask_secrets
-from .snapshot import current_git_snapshot, snapshot_columns
+from .snapshot import UNCOMPUTED_DIFF_HASH, current_git_snapshot, snapshot_columns
 from .timeutil import now_iso
 
 
@@ -42,7 +42,27 @@ def _is_env_assignment(token: str) -> bool:
     return bool(re.match(ENV_ASSIGNMENT_PATTERN, token))
 
 
-def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> dict:
+SNAPSHOT_MODES = {"fast", "full", "none", "audit"}
+
+
+def verification_snapshot(cwd: Path, snapshot_mode: str) -> dict:
+    if snapshot_mode not in SNAPSHOT_MODES:
+        raise ValueError(f"unknown verification snapshot mode: {snapshot_mode}")
+    if snapshot_mode == "none":
+        return {
+            "git_head": None,
+            "git_diff_hash": "",
+            "working_tree_dirty": False,
+            "git_status_porcelain": "",
+            "observed_paths": [],
+            "git_available": False,
+            "snapshot_mode": "none",
+            "git_diff_hash_computed": False,
+        }
+    return current_git_snapshot(cwd, mode="full" if snapshot_mode == "audit" else snapshot_mode)
+
+
+def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, snapshot_mode: str = "fast") -> dict:
     started_at = now_iso()
     timed_out = False
     exit_code: int | None
@@ -78,7 +98,9 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> d
     finished_at = now_iso()
     raw_log = f"{stdout}\n{stderr}"
     secret_issues = detect_secret_issues(raw_log)
-    snapshot = current_git_snapshot(cwd)
+    snapshot = verification_snapshot(cwd, snapshot_mode)
+    snapshot_mode_recorded = snapshot_mode if snapshot_mode == "audit" else snapshot.get("snapshot_mode", snapshot_mode)
+    git_diff_hash_computed = bool(snapshot.get("git_diff_hash_computed", snapshot.get("git_diff_hash") not in {"", UNCOMPUTED_DIFF_HASH}))
     return {
         "source": "nilo_executed",
         "command": command,
@@ -99,6 +121,9 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float) -> d
             "working_tree_available": snapshot.get("git_available", False),
             "working_tree_dirty": snapshot.get("working_tree_dirty", False),
             "working_tree_files": snapshot.get("observed_paths", []),
+            "snapshot_mode": snapshot_mode_recorded,
+            "requested_snapshot_mode": snapshot_mode,
+            "git_diff_hash_computed": git_diff_hash_computed,
             "snapshot_policy": snapshot.get("snapshot_policy", {}),
             "snapshot_excluded_paths": snapshot.get("snapshot_excluded_paths", []),
             "snapshot_hashed_paths": snapshot.get("snapshot_hashed_paths", []),

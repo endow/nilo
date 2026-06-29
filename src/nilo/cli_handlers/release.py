@@ -47,7 +47,7 @@ def cmd_release_prepare(args: argparse.Namespace) -> None:
         for path in changed:
             print(f"- updated: {path}")
 
-        verification = run_local_verification(RELEASE_FULL_CHECK_COMMAND, cwd, args.timeout)
+        verification = run_local_verification(RELEASE_FULL_CHECK_COMMAND, cwd, args.timeout, snapshot_mode="full")
         verification.setdefault("metadata", {})["verification_mode"] = "full"
         verification["metadata"]["release_prepare"] = True
         verification_row = {"id": make_id("verification"), "task_id": run["task_id"], "evidence_check_id": None, **verification}
