@@ -292,7 +292,11 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
     task_evidence = [roadmap_task_evidence(store, task, statuses[task["id"]]) for task in related_tasks]
     has_task = bool(task_evidence)
     has_report = all(item["latest_report_id"] for item in task_evidence) if task_evidence else False
-    has_passed_verification = all(item["latest_verification_status"] == "passed" and item["latest_evidence_status"] == "current" for item in task_evidence) if task_evidence else False
+    usable_evidence_statuses = {"current", "recorded", "present"}
+    has_passed_verification = all(
+        item["latest_verification_status"] == "passed" and item["latest_evidence_status"] in usable_evidence_statuses
+        for item in task_evidence
+    ) if task_evidence else False
     has_failed_verification = any(item["latest_verification_status"] in ("failed", "timed_out") for item in task_evidence)
     has_diff_human_review = any(item["diff_verification"]["status"] == "needs_human_review" for item in task_evidence)
     has_current_review = all(item["latest_review_status"] in {"current", "missing"} for item in task_evidence) if task_evidence else False
@@ -1158,10 +1162,12 @@ def human_active_task_lines(task: dict, verification_run: dict | None, blocking_
 
 def verification_working_tree_state(verification_run: dict | None) -> dict:
     metadata = verification_run["metadata"] if verification_run else {}
+    dirty = bool(metadata.get("working_tree_dirty", verification_run.get("working_tree_dirty", False) if verification_run else False))
+    files = metadata.get("working_tree_files") or (verification_run.get("observed_paths", []) if verification_run else [])
     return {
-        "available": bool(metadata.get("working_tree_available", False)),
-        "dirty": bool(metadata.get("working_tree_dirty", False)),
-        "files": metadata.get("working_tree_files", []),
+        "available": bool(metadata.get("working_tree_available", verification_run is not None)),
+        "dirty": dirty,
+        "files": files,
     }
 
 

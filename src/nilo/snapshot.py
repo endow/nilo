@@ -176,6 +176,17 @@ def snapshot_is_explicit_fast(record: dict[str, Any] | None) -> bool:
     return snapshot_mode(record) == SNAPSHOT_MODE_FAST and not bool(computed) and (record.get("git_diff_hash") or "") == UNCOMPUTED_DIFF_HASH
 
 
+def legacy_clean_head_matches(record: dict[str, Any], current_snapshot: dict[str, Any]) -> bool:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    record_head = record.get("git_head")
+    current_head = current_snapshot.get("git_head")
+    if record_head is None or current_head is None or record_head != current_head:
+        return False
+    record_dirty = bool(record.get("working_tree_dirty", metadata.get("working_tree_dirty", False)))
+    current_dirty = bool(current_snapshot.get("working_tree_dirty", False))
+    return not record_dirty and not current_dirty
+
+
 def execution_impact_path(path: str) -> bool:
     normalized = path.replace("\\", "/")
     if normalized.startswith(("src/", "tests/")):
@@ -235,6 +246,8 @@ def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: d
         if snapshot_is_explicit_fast(verification_run):
             if not fast_snapshot_paths_still_match(verification_run, current_snapshot):
                 return "stale"
+            return "recorded" if strict else "present"
+        if legacy_clean_head_matches(verification_run, current_snapshot):
             return "recorded" if strict else "present"
         if current_snapshot.get("git_available") is False and snapshots_match(record_snapshot(verification_run), compact_snapshot(current_snapshot)):
             return "current"

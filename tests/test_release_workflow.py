@@ -142,7 +142,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 os.chdir(root)
                 self.create_project(db, root.name)
                 output = io.StringIO()
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout: release_verification_result(cwd)), patch(
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd)), patch(
                     "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
                 ) as lightweight_checks:
                     with redirect_stdout(output):

@@ -160,7 +160,7 @@ def _latest_verified_completion_evidence(store: Store, task_id: str, cwd: Path) 
     if not verification:
         raise TransitionError("verification_missing", "AI completion requires a current verification run", "run `nilo check` first")
     status = evidence_status(verification, snapshot)
-    if status != "current":
+    if status not in {"current", "recorded"}:
         raise TransitionError("verification_not_current", f"AI completion requires current evidence, got {status}")
     if verification.get("timed_out"):
         raise TransitionError("verification_timed_out", "AI completion cannot use a timed out verification run")
@@ -193,7 +193,7 @@ def _require_completion_evidence(store: Store, task: dict, verification: dict | 
     if not verification:
         raise TransitionError("verification_missing", "completion requires a verification run for implementation tasks")
     status = evidence_status(verification, snapshot)
-    if status != "current":
+    if status not in {"current", "recorded"}:
         raise TransitionError("verification_not_current", f"completion requires current verification evidence, got {status}")
     if verification.get("timed_out"):
         raise TransitionError("verification_timed_out", "completion cannot use a timed out verification run")

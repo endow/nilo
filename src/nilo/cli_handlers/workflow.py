@@ -787,7 +787,7 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
             )
         print(f"verification_run: {row['id']}")
         print(f"mode: {args.mode}")
-        print(f"snapshot: {row['metadata']['snapshot_mode']}")
+        print(f"snapshot: {row['metadata'].get('snapshot_mode', snapshot_mode)}")
         print(f"exit_code: {row['exit_code']}")
         print(f"timed_out: {bool(row['timed_out'])}")
     finally:

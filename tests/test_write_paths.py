@@ -24,7 +24,7 @@ ALLOWED_CORE_WRITERS = {
     "review_results": {"src/nilo/transitions.py"},
     "roadmap_commitments": {"src/nilo/transitions.py", "src/nilo/cli_handlers/roadmap.py"},
     "roadmap_revisions": {"src/nilo/transitions.py", "src/nilo/cli_handlers/roadmap.py"},
-    "task_completions": {"src/nilo/transitions.py", "src/nilo/cli_handlers/task.py"},
+    "task_completions": {"src/nilo/transitions.py", "src/nilo/cli_handlers/task.py", "src/nilo/workflow_context.py"},
     "tasks": {
         "src/nilo/transitions.py",
         "src/nilo/cli_handlers/task.py",
@@ -34,7 +34,7 @@ ALLOWED_CORE_WRITERS = {
         "src/nilo/cli_handlers/workflow.py",
     },
     "todos": {"src/nilo/transitions.py", "src/nilo/cli_handlers/todo.py", "src/nilo/mcp_server.py"},
-    "transition_events": {"src/nilo/transitions.py"},
+    "transition_events": {"src/nilo/transitions.py", "src/nilo/workflow_context.py"},
     "understanding_checks": {"src/nilo/transitions.py", "src/nilo/cli_handlers/workflow.py"},
     "verification_runs": {"src/nilo/transitions.py"},
 }

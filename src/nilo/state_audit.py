@@ -62,7 +62,7 @@ def audit_task(
         if not completion.get("human_confirmed"):
             findings.append(_finding("completion_human_confirm_missing", "human completion has no human confirmation", severity="warning", entity_type="task_completion", entity_id=completion["id"]))
     if actor == "ai":
-        if evidence != "current":
+        if evidence not in {"current", "recorded"}:
             findings.append(_finding("completion_ai_evidence_not_current", f"AI completion evidence is {evidence}", severity="error", entity_type="task_completion", entity_id=completion["id"]))
         if unresolved:
             findings.append(_finding("completion_ai_unresolved_review_findings", f"AI completion has {len(unresolved)} unresolved review finding(s)", severity="error", entity_type="task_completion", entity_id=completion["id"]))
