@@ -5,11 +5,19 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from nilo.backup import (
     BackupError,
