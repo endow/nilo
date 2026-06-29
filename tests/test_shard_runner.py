@@ -8,19 +8,30 @@ from tempfile import TemporaryDirectory
 
 try:
     from run_shards import load_failed_shards, parse_jobs, run_shards, selected_shards
-    from test_shards import UNIT_MODULES, TestShard, auto_jobs, get_shard, shard_names, shards_for_changed_files
+    from test_shards import UNIT_MODULES, TestShard, all_shards, auto_jobs, get_shard, shard_names, shards_for_changed_files
+    from run_cli_group import selected_test_names
 except ModuleNotFoundError:
     from tests.run_shards import load_failed_shards, parse_jobs, run_shards, selected_shards
-    from tests.test_shards import UNIT_MODULES, TestShard, auto_jobs, get_shard, shard_names, shards_for_changed_files
+    from tests.test_shards import UNIT_MODULES, TestShard, all_shards, auto_jobs, get_shard, shard_names, shards_for_changed_files
+    from tests.run_cli_group import selected_test_names
 
 
 class ShardDefinitionTests(unittest.TestCase):
     def test_shard_list_includes_cli_and_unit_shards(self) -> None:
         names = shard_names()
         self.assertIn("cli:recipe", names)
+        self.assertIn("cli:smoke", names)
+        self.assertIn("cli:compat", names)
+        self.assertIn("cli:roadmap-assess", names)
+        self.assertIn("integration:git", names)
         self.assertIn("unit:backup", names)
         self.assertIn("unit:other", names)
         self.assertIn("tests.test_shards", UNIT_MODULES["unit:other"])
+        full_names = [shard.name for shard in all_shards()]
+        self.assertNotIn("cli:smoke", full_names)
+        self.assertNotIn("cli:compat", full_names)
+        self.assertIn("cli:compat-core", full_names)
+        self.assertIn("cli:help", full_names)
 
     def test_cli_recipe_resolves_to_cli_group_runner(self) -> None:
         shard = get_shard("cli:recipe")
@@ -34,9 +45,39 @@ class ShardDefinitionTests(unittest.TestCase):
 
     def test_changed_file_mapping_selects_expected_shards(self) -> None:
         self.assertEqual(shards_for_changed_files(["src/nilo/backup.py"]), ["unit:backup"])
-        self.assertEqual(shards_for_changed_files(["src/nilo/review_dispatcher.py"]), ["cli:review", "unit:review_dispatcher"])
+        self.assertEqual(shards_for_changed_files(["src/nilo/review_dispatcher.py"]), ["cli:review-dispatch", "unit:review_dispatcher"])
+        self.assertEqual(shards_for_changed_files(["src/nilo/cli_handlers/task.py"]), ["cli:task"])
+        self.assertEqual(
+            shards_for_changed_files(["src/nilo/cli_handlers/roadmap.py"]),
+            ["cli:roadmap-assess", "cli:roadmap-discuss", "cli:roadmap-import", "cli:roadmap-lifecycle"],
+        )
+        self.assertEqual(
+            shards_for_changed_files(["src/nilo/cli_handlers/review.py"]),
+            ["cli:review-core", "cli:review-dispatch", "cli:review-mcp", "cli:review-workflow"],
+        )
         self.assertEqual(shards_for_changed_files(["src/nilo/verification.py"]), ["cli:verification", "unit:verification"])
-        self.assertEqual(shards_for_changed_files(["unknown.file"]), ["cli:compat", "cli:task", "unit:other"])
+        self.assertEqual(shards_for_changed_files(["src/nilo/version_advisor.py"]), ["integration:git"])
+        self.assertEqual(shards_for_changed_files(["tests/test_cli.py"]), ["cli:compat", "cli:smoke", "integration:git"])
+        self.assertEqual(shards_for_changed_files(["unknown.file"]), ["cli:compat", "cli:smoke", "unit:other"])
+
+    def test_full_cli_shards_cover_every_cli_test_once(self) -> None:
+        try:
+            from test_cli import CliTests
+        except ModuleNotFoundError:
+            from tests.test_cli import CliTests
+
+        all_cli_tests = set(unittest.TestLoader().getTestCaseNames(CliTests))
+        selected: dict[str, list[str]] = {}
+        for shard in all_shards():
+            if len(shard.command) > 2 and shard.command[1] == "tests/run_cli_group.py":
+                group = shard.command[2]
+                for name in selected_test_names(group):
+                    selected.setdefault(name, []).append(shard.name)
+
+        missing = sorted(all_cli_tests - set(selected))
+        duplicated = {name: shards for name, shards in selected.items() if len(shards) > 1}
+        self.assertEqual(missing, [])
+        self.assertEqual(duplicated, {})
 
 
 class ShardRunnerTests(unittest.TestCase):

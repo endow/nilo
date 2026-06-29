@@ -17,6 +17,10 @@ try:
 except ModuleNotFoundError:
     from tests.run_cli_group import GROUPS as CLI_GROUPS
 
+CLI_REVIEW_SHARDS = ["cli:review-core", "cli:review-dispatch", "cli:review-mcp", "cli:review-workflow"]
+CLI_ROADMAP_SHARDS = ["cli:roadmap-assess", "cli:roadmap-discuss", "cli:roadmap-import", "cli:roadmap-lifecycle"]
+TARGETED_CLI_GROUPS = {"smoke", "compat"}
+
 
 @dataclass(frozen=True)
 class TestShard:
@@ -42,7 +46,20 @@ CLI_SHARDS: dict[str, TestShard] = {
         command=(sys.executable, "tests/run_cli_group.py", group),
         description=f"tests.test_cli focused group: {group}",
     )
-    for group in sorted([*CLI_GROUPS, "ungrouped"])
+    for group in sorted([group for group in CLI_GROUPS if group != "workflow"])
+}
+
+INTEGRATION_SHARDS: dict[str, TestShard] = {
+    "integration:git": TestShard(
+        name="integration:git",
+        command=(sys.executable, "-m", "unittest", "tests.test_cli_git_integration", "tests.test_version_advisor"),
+        description="git/subprocess-backed CLI and version advisor integration tests",
+    ),
+    "integration:workflow": TestShard(
+        name="integration:workflow",
+        command=(sys.executable, "tests/run_cli_group.py", "workflow"),
+        description="cross-feature CLI workflows that intentionally chain commands",
+    ),
 }
 
 
@@ -79,11 +96,13 @@ UNIT_SHARDS: dict[str, TestShard] = {
     for name, modules in UNIT_MODULES.items()
 }
 
-SHARDS: dict[str, TestShard] = {**CLI_SHARDS, **UNIT_SHARDS}
+SHARDS: dict[str, TestShard] = {**CLI_SHARDS, **INTEGRATION_SHARDS, **UNIT_SHARDS}
+TARGETED_SHARD_NAMES = {f"cli:{group}" for group in TARGETED_CLI_GROUPS}
+FULL_SHARD_NAMES = sorted(name for name in SHARDS if name not in TARGETED_SHARD_NAMES)
 
 
 def all_shards() -> list[TestShard]:
-    return [SHARDS[name] for name in sorted(SHARDS)]
+    return [SHARDS[name] for name in FULL_SHARD_NAMES]
 
 
 def shard_names() -> list[str]:
@@ -131,29 +150,57 @@ def shards_for_changed_files(paths: list[str]) -> list[str]:
     for raw_path in paths:
         path = raw_path.replace("\\", "/")
         if path.startswith("tests/run_cli_group.py") or path.startswith("tests/run_shards.py") or path.startswith("tests/test_shards.py"):
-            selected.update(["cli:compat", "unit:other"])
+            selected.update(["cli:smoke", "cli:compat", "unit:other"])
         elif path.startswith("tests/test_cli.py"):
-            selected.update(CLI_SHARDS)
+            selected.update(["cli:smoke", "cli:compat", "integration:git"])
+        elif path.startswith("tests/test_cli_git_integration.py"):
+            selected.add("integration:git")
         elif path.startswith("tests/test_backup") or path == "src/nilo/backup.py" or path.startswith("src/nilo/cli_parsers/backup") or path.startswith("src/nilo/cli_handlers/backup"):
             selected.add("unit:backup")
+        elif path.startswith("src/nilo/cli_handlers/recipe") or path.startswith("src/nilo/cli_parsers/recipe"):
+            selected.add("cli:recipe")
+        elif path.startswith("src/nilo/cli_handlers/roadmap") or path.startswith("src/nilo/cli_parsers/roadmap"):
+            selected.update(CLI_ROADMAP_SHARDS)
+        elif path.startswith("src/nilo/cli_handlers/project") or path.startswith("src/nilo/cli_parsers/project"):
+            selected.add("cli:project")
+        elif path.startswith("src/nilo/cli_handlers/task") or path.startswith("src/nilo/cli_parsers/task"):
+            selected.add("cli:task")
+        elif path.startswith("src/nilo/cli_handlers/todo") or path.startswith("src/nilo/cli_parsers/todo"):
+            selected.add("cli:todo")
+        elif path.startswith("src/nilo/cli_handlers/quality") or path.startswith("src/nilo/cli_parsers/quality"):
+            selected.add("cli:quality")
+        elif path.startswith("src/nilo/cli_handlers/review") or path.startswith("src/nilo/cli_parsers/review"):
+            selected.update(CLI_REVIEW_SHARDS)
+        elif path.startswith("src/nilo/cli_handlers/report") or path.startswith("src/nilo/cli_parsers/report"):
+            selected.add("cli:report")
+        elif path.startswith("src/nilo/cli_handlers/backup") or path.startswith("src/nilo/cli_parsers/backup"):
+            selected.add("unit:backup")
+        elif path.startswith("src/nilo/cli_handlers/facade") or path.startswith("src/nilo/cli_parsers/facade"):
+            selected.add("cli:status")
+        elif path.startswith("src/nilo/cli_handlers/overdrive") or path.startswith("src/nilo/cli_parsers/overdrive"):
+            selected.add("cli:status")
+        elif path.startswith("src/nilo/cli_handlers/mcp") or path.startswith("src/nilo/cli_parsers/mcp"):
+            selected.update(["unit:mcp", "cli:compat"])
         elif path.startswith("tests/test_review_dispatcher") or path.startswith("src/nilo/review_dispatcher") or path.startswith("src/nilo/reviewer_registry"):
-            selected.update(["cli:review", "unit:review_dispatcher"])
+            selected.update(["cli:review-dispatch", "unit:review_dispatcher"])
         elif path.startswith("tests/test_review") or path.startswith("src/nilo/review_") or path == "src/nilo/review.py" or path.startswith("src/nilo/cli_handlers/quality") or path.startswith("src/nilo/cli_parsers/quality"):
-            selected.update(["cli:review", "unit:review_dispatcher"])
+            selected.update([*CLI_REVIEW_SHARDS, "unit:review_dispatcher"])
         elif path.startswith("tests/test_mcp") or path.startswith("src/nilo/mcp"):
             selected.update(["unit:mcp", "cli:compat"])
         elif path.startswith("tests/test_snapshot") or path.startswith("src/nilo/snapshot"):
             selected.add("unit:snapshot")
         elif path.startswith("tests/test_gitmeta") or path.startswith("src/nilo/gitmeta"):
             selected.add("unit:gitmeta")
-        elif path.startswith("tests/test_upgrade") or path.startswith("tests/test_update_check") or path.startswith("src/nilo/upgrade") or path.startswith("src/nilo/update_check") or path.startswith("src/nilo/version_advisor"):
+        elif path.startswith("tests/test_version_advisor") or path.startswith("src/nilo/version_advisor"):
+            selected.add("integration:git")
+        elif path.startswith("tests/test_upgrade") or path.startswith("tests/test_update_check") or path.startswith("src/nilo/upgrade") or path.startswith("src/nilo/update_check"):
             selected.add("unit:upgrade")
         elif path.startswith("tests/test_verification") or path.startswith("src/nilo/verification"):
             selected.update(["cli:verification", "unit:verification"])
         elif path.startswith("src/nilo/recipe"):
             selected.add("cli:recipe")
         elif path.startswith("src/nilo/roadmap"):
-            selected.add("cli:roadmap")
+            selected.update(CLI_ROADMAP_SHARDS)
         elif path.startswith("src/nilo/project"):
             selected.add("cli:project")
         elif path.startswith("src/nilo/report"):
@@ -166,10 +213,8 @@ def shards_for_changed_files(paths: list[str]) -> list[str]:
             selected.add("cli:quality")
         elif path.startswith("src/nilo/guard") or path.startswith("src/nilo/secret"):
             selected.update(["cli:guard", "unit:other"])
-        elif path.startswith("src/nilo/cli_handlers/todo") or path.startswith("src/nilo/cli_parsers/todo"):
-            selected.add("cli:todo")
         elif path.startswith("src/nilo/cli") or path.startswith("src/nilo/cli_handlers") or path.startswith("src/nilo/cli_parsers"):
-            selected.update(["cli:compat", "cli:task"])
+            selected.update(["cli:smoke", "cli:compat"])
         elif path.startswith("tests/"):
             selected.add("unit:other")
         elif path.startswith("README") or path.startswith("docs/"):
@@ -177,5 +222,5 @@ def shards_for_changed_files(paths: list[str]) -> list[str]:
         else:
             unknown = True
     if unknown or not selected:
-        selected.update(["cli:task", "cli:compat", "unit:other"])
+        selected.update(["cli:smoke", "cli:compat", "unit:other"])
     return sorted(selected)
