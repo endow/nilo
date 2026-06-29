@@ -1186,7 +1186,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("identity", result)
         self.assertEqual(result["identity"]["db_path"], str(db.resolve()))
 
-    def test_mcp_expected_project_mismatch_returns_repository_mismatch(self) -> None:
+    def test_mcp_expected_project_mismatch_allows_read_only_status(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1199,6 +1199,34 @@ class McpServerTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+        self.assertEqual(result["project_id"], "project_test")
+        self.assertIn("next_action", result)
+        self.assertEqual(result["identity_mismatch"]["error"], "repository_mismatch")
+        self.assertEqual(result["identity_mismatch"]["mode"], "read_only_external_reference")
+        self.assertIn("actual", result["identity_mismatch"])
+
+    def test_mcp_expected_project_mismatch_blocks_write_tool(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                result = call_tool(
+                    "create_todo",
+                    {
+                        "project_id": "project_test",
+                        "title": "outside write",
+                        "kind": "ad_hoc",
+                        "expected_project": "Chiffon",
+                    },
+                    db,
+                )
+            finally:
+                os.chdir(previous_cwd)
+
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "repository_mismatch")
         self.assertEqual(result["expected"]["project"], "Chiffon")
@@ -1207,6 +1235,51 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("actual", result)
         self.assertNotIn("project", result)
         self.assertNotIn("tasks", result)
+
+    def test_mcp_write_fence_does_not_record_failure_to_external_db(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            external_db = Path(directory) / "external-nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                root.mkdir()
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(external_db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(external_db), "task", "create", "--project", "project_test", "--title", "External DB write"])
+                store = Store(external_db)
+                try:
+                    task = store.list_where("tasks", "project_id=?", ("project_test",))[0]
+                finally:
+                    store.close()
+
+                result = call_tool(
+                    "record_verification_run",
+                    {
+                        "task_id": task["id"],
+                        "last_seen_event_id": "task:start",
+                        "command": "python -m unittest",
+                        "cwd": str(root),
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "timed_out": False,
+                    },
+                    external_db,
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+            store = Store(external_db)
+            try:
+                failures = store.list_where("failure_logs", "task_id=?", (task["id"],))
+            finally:
+                store.close()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "write_fence_violation")
+        self.assertIn(str(external_db.resolve()), result["write_fence"]["outside_write_targets"])
+        self.assertEqual(failures, [])
 
     def test_todo_mcp_tools_create_triage_start_and_promote_with_status_guards(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2375,33 +2448,38 @@ MCP でも承認待ちの計画を人間向けに返す。
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-                main(["--db", str(db), "task", "create", "--project", "project_test", "--title", "Invalid mode"])
-            store = Store(db)
             try:
-                task = store.list_where("tasks", "project_id=?", ("project_test",))[0]
-                task_id = task["id"]
-                last_seen_event_id = store.latest_task_status_event(task_id)["event_id"]
-            finally:
-                store.close()
+                previous_cwd = Path.cwd()
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--title", "Invalid mode"])
+                store = Store(db)
+                try:
+                    task = store.list_where("tasks", "project_id=?", ("project_test",))[0]
+                    task_id = task["id"]
+                    last_seen_event_id = store.latest_task_status_event(task_id)["event_id"]
+                finally:
+                    store.close()
 
-            with self.assertRaises(McpToolError):
-                call_tool(
-                    "record_verification_run",
-                    {
-                        "task_id": task_id,
-                        "last_seen_event_id": last_seen_event_id,
-                        "command": "python -m unittest",
-                        "cwd": str(root),
-                        "stdout": "",
-                        "stderr": "",
-                        "exit_code": 0,
-                        "timed_out": False,
-                        "mode": "smoke",
-                    },
-                    db,
-                )
+                with self.assertRaises(McpToolError):
+                    call_tool(
+                        "record_verification_run",
+                        {
+                            "task_id": task_id,
+                            "last_seen_event_id": last_seen_event_id,
+                            "command": "python -m unittest",
+                            "cwd": str(root),
+                            "stdout": "",
+                            "stderr": "",
+                            "exit_code": 0,
+                            "timed_out": False,
+                            "mode": "smoke",
+                        },
+                        db,
+                    )
+            finally:
+                os.chdir(previous_cwd)
 
     def test_record_verification_run_rejects_stale_event_without_writing(self) -> None:
         with TemporaryDirectory() as directory:

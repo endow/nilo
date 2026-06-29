@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from nilo.cli import main
 from nilo.mcp_server import call_tool
-from nilo.project_boundary import ProjectBoundaryError, require_write_fence, resolve_project_boundary
+from nilo.project_boundary import ProjectBoundaryError, project_boundary_prompt, require_write_fence, resolve_project_boundary
 from nilo.snapshot import compact_snapshot
 from nilo.store import Store
 from nilo.timeutil import now_iso
@@ -133,6 +133,19 @@ class ProjectBoundaryTests(unittest.TestCase):
         self.assertIn("Self modification: disabled", status_output.getvalue())
         self.assertIn("Current project: Chiffon", next_output.getvalue())
 
+    def test_project_boundary_prompt_separates_read_only_references_from_writes(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory) / "Chiffon"
+            self.init_git(repo)
+            self.write_binding(repo, project_name="Chiffon", repository_id="Chiffon")
+            boundary = resolve_project_boundary(repo, db_path=repo / ".nilo" / "nilo.db")
+            prompt = project_boundary_prompt(boundary)
+
+        self.assertIn("Forbidden: No writes outside the current writable repository.", prompt)
+        self.assertIn("External files explicitly provided by the user may be read as read-only references.", prompt)
+        self.assertIn("Do not modify sibling repositories, parent directories, or another project's .nilo database.", prompt)
+        self.assertNotIn("No paths outside the writable repository", prompt)
+
     def test_project_root_mismatch_blocks_write_command(self) -> None:
         with TemporaryDirectory() as directory:
             repo = Path(directory) / "Chiffon"
@@ -152,6 +165,22 @@ class ProjectBoundaryTests(unittest.TestCase):
                 os.chdir(previous)
 
         self.assertIn("project binding mismatch", str(raised.exception).lower())
+
+    def test_write_fence_blocks_db_outside_writable_repository(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory) / "Chiffon"
+            other = Path(directory) / "Other"
+            self.init_git(repo)
+            self.init_git(other)
+            self.write_binding(repo, project_name="Chiffon", repository_id="Chiffon")
+            external_db = other / ".nilo" / "nilo.db"
+            boundary = resolve_project_boundary(repo, db_path=external_db)
+
+            with self.assertRaises(ProjectBoundaryError) as raised:
+                require_write_fence(boundary)
+
+        self.assertEqual(raised.exception.code, "write_fence_violation")
+        self.assertIn(str(external_db.resolve()), raised.exception.details["outside_write_targets"])
 
     def test_completion_invalidate_uses_project_write_fence(self) -> None:
         with TemporaryDirectory() as directory:

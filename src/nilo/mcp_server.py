@@ -707,11 +707,19 @@ WRITE_FENCE_TOOL_NAMES = {
     "record_test_result",
     "request_task_review",
     "dispatch_review",
+    "register_reviewer",
+    "claim_next_review",
+    "mark_stale_review_requests",
     "request_review",
     "import_review_result",
     "update_review_finding",
+    "create_task",
     "import_agent_report",
     "record_verification_run",
+    "create_todo",
+    "triage_todo",
+    "promote_todo_to_roadmap_proposal",
+    "create_task_from_todo",
 }
 
 
@@ -2099,6 +2107,8 @@ def maybe_record_mcp_boundary_failure(
     error: ProjectBoundaryError,
     boundary: Any,
 ) -> None:
+    if error.details.get("outside_write_targets"):
+        return
     task_id = arguments.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         return
@@ -2131,9 +2141,26 @@ def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) ->
         identity["project_boundary_warnings"] = boundary_warning_lines(boundary)
         expected_project = optional_string(arguments, "expected_project")
         expected_git_root = optional_string(arguments, "expected_git_root")
-        matches, _reasons = identity_matches_expected(identity, expected_project, expected_git_root)
+        matches, mismatch_reasons = identity_matches_expected(identity, expected_project, expected_git_root)
+        identity_mismatch = None
         if not matches:
-            return repository_mismatch_response(identity, expected_project, expected_git_root)
+            if name in WRITE_FENCE_TOOL_NAMES:
+                return repository_mismatch_response(identity, expected_project, expected_git_root)
+            identity_mismatch = {
+                "ok": False,
+                "error": "repository_mismatch",
+                "mode": "read_only_external_reference",
+                "reasons": mismatch_reasons,
+                "expected": {"project": expected_project, "git_root": expected_git_root},
+                "actual": {
+                    "project_id": identity.get("project_id", ""),
+                    "repository_name": identity.get("repository_name", ""),
+                    "git_root": identity.get("git_root", ""),
+                    "db_path": identity.get("db_path", ""),
+                },
+                "message": "Identity mismatch detected; read-only MCP inspection is allowed, writes remain blocked.",
+            }
+            identity["identity_mismatch"] = identity_mismatch
         if name in WRITE_FENCE_TOOL_NAMES:
             try:
                 require_write_fence(boundary)
@@ -2151,6 +2178,8 @@ def call_tool(name: str, arguments: dict | None, db_path: Path | None = None) ->
         result = TOOL_HANDLERS[name](store, handler_arguments)
         if isinstance(result, dict) and "identity" not in result:
             result = {**result, "identity": identity}
+        if isinstance(result, dict) and identity_mismatch is not None and "identity_mismatch" not in result:
+            result = {**result, "identity_mismatch": identity_mismatch}
         return result
     finally:
         store.close()

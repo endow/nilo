@@ -98,6 +98,7 @@ class WriteFenceResult:
     inspected_repositories: list[str]
     changed_files: list[str]
     outside_writable_scope: list[str]
+    outside_write_targets: list[str]
     tool_owner_changes: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -106,6 +107,7 @@ class WriteFenceResult:
             "inspected_repositories": self.inspected_repositories,
             "changed_files": self.changed_files,
             "outside_writable_scope": self.outside_writable_scope,
+            "outside_write_targets": self.outside_write_targets,
             "tool_owner_changes": self.tool_owner_changes,
             "boundary": self.boundary.to_dict(),
         }
@@ -272,13 +274,15 @@ def evaluate_write_fence(boundary: ProjectBoundary, *, include_tool_owner_reposi
     owner_changes: list[str] = []
     if include_tool_owner_repository and boundary.tool_owner_repository is not None:
         owner_changes = [str(path) for path in changed if is_relative_to(path, boundary.tool_owner_repository)]
-    ok = not outside and not (owner_changes and not self_modification_allowed(boundary))
+    outside_write_targets = [] if is_relative_to(boundary.db_path, boundary.project_root) else [str(boundary.db_path)]
+    ok = not outside and not outside_write_targets and not (owner_changes and not self_modification_allowed(boundary))
     return WriteFenceResult(
         ok=ok,
         boundary=boundary,
         inspected_repositories=inspected,
         changed_files=[str(path) for path in changed],
         outside_writable_scope=outside,
+        outside_write_targets=outside_write_targets,
         tool_owner_changes=owner_changes,
     )
 
@@ -335,6 +339,9 @@ def require_write_fence(boundary: ProjectBoundary, *, include_tool_owner_reposit
         "",
         "Changed files outside writable scope:",
         *[f"  {path}" for path in result.outside_writable_scope],
+        "",
+        "Write targets outside writable scope:",
+        *[f"  {path}" for path in result.outside_write_targets],
         "",
         "This task cannot be completed from the current project session.",
     ]
@@ -404,19 +411,21 @@ def boundary_warning_lines(boundary: ProjectBoundary) -> list[str]:
 
 
 def project_boundary_prompt(boundary: ProjectBoundary) -> str:
-    forbidden = []
+    tool_owner_forbidden = []
     if boundary.tool_owner_repository and not self_modification_allowed(boundary):
-        forbidden.extend(
+        tool_owner_forbidden.extend(
             [
                 f"- Do not modify {boundary.tool_owner_repository}",
                 "- Do not modify Nilo source code from this session",
                 "- If a Nilo defect is found, record it as ToolFailure/NiloIssue and stop",
             ]
         )
-    forbidden_text = "; ".join(item[2:] if item.startswith("- ") else item for item in (forbidden or ["No paths outside the writable repository"]))
     return "\n".join(
         [
             f"Project boundary: current={boundary.project_name}; writable={boundary.project_root}; Nilo self-modification={'enabled' if self_modification_allowed(boundary) else 'disabled'}.",
-            f"Forbidden: {forbidden_text}",
+            "Forbidden: No writes outside the current writable repository.",
+            "External files explicitly provided by the user may be read as read-only references.",
+            "Do not modify sibling repositories, parent directories, or another project's .nilo database.",
+            *tool_owner_forbidden,
         ]
     )
