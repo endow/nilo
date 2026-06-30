@@ -1379,7 +1379,7 @@ def review_worker_recovery_action(reviewer: str, review_id: str, availability: s
 
 def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     refresh_review_dispatch_state(store, project_id)
-    tasks = store.list_where("tasks", "project_id=?", (project_id,))
+    tasks = project_tasks_in_created_order(store, project_id)
     current_snapshot = current_git_snapshot(Path.cwd())
     statuses = {task["id"]: projected_task_status(store, task, current_snapshot=current_snapshot) for task in tasks}
     return tasks, statuses
@@ -1387,7 +1387,7 @@ def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict
 
 def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     """Return project tasks and their latest recorded status without snapshot/audit work."""
-    tasks = store.list_where("tasks", "project_id=?", (project_id,))
+    tasks = project_tasks_in_created_order(store, project_id)
     if not tasks:
         return tasks, {}
     rows = store.conn.execute(
@@ -1463,6 +1463,19 @@ def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> t
             status = "review_approved" if latest_review_verdicts.get(row["task_id"]) == "approved" else "review_commented"
         statuses[row["task_id"]] = status
     return tasks, statuses
+
+
+def project_tasks_in_created_order(store: Store, project_id: str) -> list[dict]:
+    rows = store.conn.execute(
+        """
+        SELECT *
+        FROM tasks
+        WHERE project_id=?
+        ORDER BY created_at ASC, rowid ASC
+        """,
+        (project_id,),
+    ).fetchall()
+    return [store._decode_row(row, "tasks") for row in rows]
 
 
 def fast_unfinished_verification_targets(store: Store, project_id: str) -> list[dict]:

@@ -270,7 +270,7 @@ def _fast_active_tasks_and_statuses(store: Store, project_id: str, *, limit: int
                 FROM task_completions c
                 WHERE c.task_id=t.id AND COALESCE(c.invalidated_at, '')=''
               )
-            ORDER BY t.created_at DESC, t.rowid DESC
+            ORDER BY t.created_at ASC, t.rowid ASC
             LIMIT ? OFFSET ?
             """,
             (project_id, batch_size, offset),

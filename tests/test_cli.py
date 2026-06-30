@@ -1185,6 +1185,60 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
+    def test_facade_next_chooses_oldest_active_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            project_id,
+                            "--id",
+                            "task_oldest",
+                            "--title",
+                            "Oldest task",
+                        ]
+                    )
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            project_id,
+                            "--id",
+                            "task_newest",
+                            "--title",
+                            "Newest task",
+                        ]
+                    )
+
+                next_output = io.StringIO()
+                with redirect_stdout(next_output):
+                    main(["--db", str(db), "next", "--project", project_id])
+
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "status", "--ai", "--project", project_id])
+
+                self.assertIn("タスク: task_oldest", next_output.getvalue())
+                self.assertNotIn("タスク: task_newest", next_output.getvalue())
+                self.assertIn("task_oldest", status_output.getvalue())
+                self.assertNotIn("task_newest", status_output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
     def test_queue_lists_unfinished_tasks_and_actionable_todos_only(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
