@@ -169,11 +169,9 @@ class ProjectBoundaryTests(unittest.TestCase):
     def test_write_fence_blocks_db_outside_writable_repository(self) -> None:
         with TemporaryDirectory() as directory:
             repo = Path(directory) / "Chiffon"
-            other = Path(directory) / "Other"
             self.init_git(repo)
-            self.init_git(other)
             self.write_binding(repo, project_name="Chiffon", repository_id="Chiffon")
-            external_db = other / ".nilo" / "nilo.db"
+            external_db = Path("/nilo-external-db") / "nilo.db"
             boundary = resolve_project_boundary(repo, db_path=external_db)
 
             with self.assertRaises(ProjectBoundaryError) as raised:
@@ -181,6 +179,22 @@ class ProjectBoundaryTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "write_fence_violation")
         self.assertIn(str(external_db.resolve()), raised.exception.details["outside_write_targets"])
+
+    def test_write_fence_allows_db_in_temporary_directory(self) -> None:
+        with TemporaryDirectory() as directory:
+            temp_root = Path(directory)
+            repo = temp_root / "Chiffon"
+            other = temp_root / "Other"
+            self.init_git(repo)
+            other.mkdir()
+            self.write_binding(repo, project_name="Chiffon", repository_id="Chiffon")
+            external_db = other / ".nilo" / "nilo.db"
+            boundary = resolve_project_boundary(repo, db_path=external_db)
+
+            result = require_write_fence(boundary)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.outside_write_targets, [])
 
     def test_completion_invalidate_uses_project_write_fence(self) -> None:
         with TemporaryDirectory() as directory:

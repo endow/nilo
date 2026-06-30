@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from .failure import record_failure_log
@@ -274,7 +276,11 @@ def evaluate_write_fence(boundary: ProjectBoundary, *, include_tool_owner_reposi
     owner_changes: list[str] = []
     if include_tool_owner_repository and boundary.tool_owner_repository is not None:
         owner_changes = [str(path) for path in changed if is_relative_to(path, boundary.tool_owner_repository)]
-    outside_write_targets = [] if is_relative_to(boundary.db_path, boundary.project_root) else [str(boundary.db_path)]
+    outside_write_targets = (
+        []
+        if is_relative_to(boundary.db_path, boundary.project_root) or is_temporary_path(boundary.db_path)
+        else [str(boundary.db_path)]
+    )
     ok = not outside and not outside_write_targets and not (owner_changes and not self_modification_allowed(boundary))
     return WriteFenceResult(
         ok=ok,
@@ -393,6 +399,24 @@ def is_relative_to(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def temporary_roots() -> list[Path]:
+    roots = [tempfile.gettempdir(), "/tmp"]
+    roots.extend(value for key in ("TMPDIR", "TMP", "TEMP") if (value := os.environ.get(key)))
+    resolved: list[Path] = []
+    for root in roots:
+        try:
+            path = Path(root).expanduser().resolve()
+        except OSError:
+            continue
+        if path not in resolved:
+            resolved.append(path)
+    return resolved
+
+
+def is_temporary_path(path: Path) -> bool:
+    return any(is_relative_to(path, root) for root in temporary_roots())
 
 
 def boundary_warning_lines(boundary: ProjectBoundary) -> list[str]:

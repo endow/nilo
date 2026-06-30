@@ -312,9 +312,9 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 {boundary_prompt}
 
 Normal work:
-- 作業開始と現在地確認は `nilo status --ai --project {project_id}` を使う。
+- 作業開始は `nilo status --ai --project {project_id}`。
 - `nilo next --project {project_id}` の先頭 action だけに従う。
-- active recipe 中の next は recipe のみ。
+- active recipe 中は recipe のみ。
 - release公開操作は明示承認待ち。
 - 検証済み dirty tree 由来の Nilo commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
@@ -323,30 +323,28 @@ Normal work:
 - 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
-- 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録が必要な場合だけ、利用可能な Nilo MCP tool を使う。
-- MCP は通常入口ではない。必要な連携場面でだけ使う。
+- 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録だけ Nilo MCP tool を使う。MCP は通常入口ではない。
 - AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
 - `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は CLI reviewer process fallback/human-launch 専用。
-- review サブコマンドは各 help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
+- review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
 - repository 固定: CLI cwd、MCP `project_root`
 
 MCP identity guard:
-- MCP tool が呼べる場合でも、それだけで正しい Nilo 状態とは判断しない。
-- MCP を使う前に identity の repository / project / git_root / db_path が現在作業中のリポジトリと一致しているか確認する。
-- `expected_project` は repository directory name 用の guard。`repository_mismatch` は通常 status payload を返さない。
-- 複数 repository では `project_root` または `workspace` を指定する。
-- MCP response の repository / db_path 不一致は使わず、CLI fallback する。
+- MCP tool 可でも正しい Nilo 状態とは判断しない。
+- 使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認する。
+- `expected_project` は repository directory name 用。複数 repository では `project_root` または `workspace`。
+- MCP response の repository / db_path 不一致は使わず、CLI fallback。
 - fallback: `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
 
 大きな作業の扱い:
-- 実装前に、その指示が小さい作業か大きい作業かを判定する。
-- 小さく明確なら通常 task。
+- 実装前に小さい作業か大きい作業かを判定する。
+- 小さく明確なら task。
 - 複数ファイルだけでは roadmap 扱いしない。明確な一まとまりの修正は通常 task。
-- 大作業は自動 roadmap 化しない。承認後だけ `nilo roadmap discuss` -> RoadmapProposal `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
+- 大作業は自動 roadmap 化しない。承認後だけ `nilo roadmap discuss` -> `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
 
 質問抑制:
 - Nilo 出力や状態から一意推定できる不足値は質問しない。
-- release recipe の `target_version` は現在バージョンと最新 git tag が一致する場合、または SemVer tag が無く現在バージョンから一意に決まる場合、次 patch を採用して進める。
+- release recipe の `target_version` は現在バージョンと最新 git tag が一致、または SemVer tag が無く一意なら次 patch。
 - 質問は候補複数、状態矛盾、公開・破壊的操作の直前確認だけ。
 
 詳細は `nilo help ai` を参照する。
