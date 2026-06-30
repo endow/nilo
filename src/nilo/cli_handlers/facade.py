@@ -616,6 +616,14 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                         print(f"- After approval, execute: {workflow['public_execution_command']}")
                     else:
                         print(f"execute_after_approval: {workflow['public_execution_command']}")
+            elif workflow.get("status") == "paused_for_fix":
+                print("- next_action: fix_and_resume")
+                if workflow.get("reason"):
+                    print(f"reason: {workflow['reason']}")
+                if workflow.get("failed_verification_id"):
+                    print(f"failed_verification_id: {workflow['failed_verification_id']}")
+                if workflow.get("resume_command"):
+                    print(f"resume_command: {workflow['resume_command']}")
             else:
                 print("- next_action: run_release_prepare")
                 if workflow.get("release_prepare_command"):

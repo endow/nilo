@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import shlex
 import subprocess
@@ -9,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from ..cli_support import make_id
+from ..project_boundary import resolve_project_boundary
 from ..recipe import discover_recipes
 from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
 from ..timeutil import now_iso
 from ..transitions import TransitionError, record_verification_run
+from ..version_advisor import advise_version_bump
 from ..verification import run_local_verification
 from ..workflow_context import (
     active_recipe_run,
@@ -29,47 +32,128 @@ RELEASE_FULL_CHECK_COMMAND = "PYTHONPATH=src python tests/run_shards.py --all --
 
 
 def cmd_release_prepare(args: argparse.Namespace) -> None:
+    _release_prepare_or_resume(args, resume=False)
+
+
+def cmd_release_resume(args: argparse.Namespace) -> None:
+    _release_prepare_or_resume(args, resume=True)
+
+
+def cmd_release_run(args: argparse.Namespace) -> None:
     project_id = args.project or Path.cwd().name
     cwd = Path.cwd()
-    store = Store(args.db)
+    target_version = (args.target_version or "").lstrip("v")
+    if args.auto_patch:
+        resolution = advise_version_bump(cwd)
+        current = resolution.get("current_version") or ""
+        latest = resolution.get("latest_tag") or ""
+        latest_version = resolution.get("latest_tag_version") or latest.lstrip("v")
+        patch_candidate = str(resolution.get("patch_candidate") or "").lstrip("v")
+        can_auto_patch = bool(current and patch_candidate and latest_version == current)
+        if not can_auto_patch:
+            reason = resolution.get("reason") or "auto patch target could not be resolved"
+            raise SystemExit(
+                "\n".join(
+                    [
+                        "target_version を自動採用できませんでした。",
+                        f"現在バージョン: {current or '不明'}",
+                        f"最新タグ: {latest or 'なし'}",
+                        f"理由: {reason}",
+                        "明示する場合: nilo release run --project "
+                        f"{project_id} --target-version {patch_candidate or '<version>'}",
+                    ]
+                )
+            )
+        target_version = patch_candidate
+        print(f"target_version: {target_version}")
+        print("target_source: auto_patch")
+    _release_prepare_or_resume(argparse.Namespace(**{**vars(args), "target_version": target_version}), resume=False)
+
+
+def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> None:
+    project_id = args.project or Path.cwd().name
+    cwd = Path.cwd()
+    db_path = _resolved_db_path(args.db, cwd)
+    store = Store(db_path)
     try:
         if not store.get("projects", project_id):
             raise SystemExit(f"project not found: {project_id}")
-        run = _ensure_release_run(store, args, project_id, cwd)
-        target_version = (args.target_version or release_version_from_run(run)).lstrip("v")
+        run = _ensure_release_run(store, args, project_id, cwd, resume=resume)
+        target_version = (getattr(args, "target_version", "") or release_version_from_run(run)).lstrip("v")
         if not target_version:
             raise SystemExit("target version could not be resolved")
 
-        _require_clean_or_release_managed(cwd, target_version)
+        managed_files = _managed_files_for_run(run, target_version)
+        dirty = _classify_dirty_files(cwd, managed_files)
+        if dirty["unmanaged_dirty"]:
+            _pause_release_for_fix(
+                store,
+                run,
+                reason="unmanaged_dirty",
+                managed_release_dirty=dirty["managed_release_dirty"],
+                unmanaged_dirty=dirty["unmanaged_dirty"],
+            )
+            _raise_unmanaged_dirty(dirty, project_id)
         changed = _update_release_managed_files(cwd, target_version)
+        managed_files = release_managed_files(target_version)
+        run = _store_release_metadata(store, run, {"target_version": target_version, "managed_release_files": managed_files})
         print("release_prepare:")
         print(f"- target_version: {target_version}")
         for path in changed:
             print(f"- updated: {path}")
 
-        verification = run_local_verification(RELEASE_FULL_CHECK_COMMAND, cwd, args.timeout, snapshot_mode="full")
-        verification.setdefault("metadata", {})["verification_mode"] = "full"
-        verification["metadata"]["release_prepare"] = True
-        verification_row = {"id": make_id("verification"), "task_id": run["task_id"], "evidence_check_id": None, **verification}
-        try:
-            record_verification_run(store, run["task_id"], row=verification_row, actor="nilo")
-        except TransitionError as exc:
-            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
-        print(f"- verification_run: {verification_row['id']}")
+        verification_row = reusable_full_verification_for_release(store, run["task_id"], cwd, target_version=target_version)
+        if verification_row:
+            print(f"- verification_run: {verification_row['id']}")
+            print(f"- verification_reused: {verification_row.get('reuse_reason', 'current_full_check')}")
+        else:
+            verification_row = _run_release_full_check(store, run, cwd, args.timeout)
+            print(f"- verification_run: {verification_row['id']}")
         print(f"- full_check: {RELEASE_FULL_CHECK_COMMAND}")
         print(f"- exit_code: {verification_row['exit_code']}")
         if verification_row.get("timed_out") or verification_row.get("exit_code") != 0:
-            raise SystemExit("release full check failed")
+            _pause_release_for_fix(
+                store,
+                run,
+                reason="full_check_failed",
+                failed_verification_id=verification_row["id"],
+                managed_release_dirty=sorted(_git_changed_files(cwd).intersection(managed_files)),
+                unmanaged_dirty=sorted(_git_changed_files(cwd).difference(managed_files)),
+            )
+            print("- recipe_run: paused_for_fix")
+            print("- reason: full_check_failed")
+            print(f"- failed_verification_id: {verification_row['id']}")
+            print(f"resume: nilo release resume --project {shlex.quote(project_id)}")
+            raise SystemExit("release full check failed; release recipe paused_for_fix")
 
         pre_commit_snapshot = current_git_snapshot(cwd)
-        if compact_snapshot(verification_row) != compact_snapshot(pre_commit_snapshot):
+        reuse_after_commit = verification_row.get("snapshot_relation") == "verified_dirty_tree_committed"
+        if not reuse_after_commit and not _release_snapshot_matches_verification(verification_row, pre_commit_snapshot, cwd):
             raise SystemExit("verification snapshot changed before commit; rerun release prepare")
-        managed_files = release_managed_files(target_version)
         dirty_files = _git_changed_files(cwd)
         unexpected = sorted(path for path in dirty_files if path not in managed_files)
         if unexpected:
-            raise SystemExit("release prepare found unmanaged dirty files: " + ", ".join(unexpected))
+            _pause_release_for_fix(
+                store,
+                run,
+                reason="unmanaged_dirty",
+                managed_release_dirty=sorted(set(dirty_files).intersection(managed_files)),
+                unmanaged_dirty=unexpected,
+            )
+            _raise_unmanaged_dirty(_classify_dirty_files(cwd, managed_files), project_id)
         if not dirty_files:
+            recovered = mark_release_commit_recorded(
+                store,
+                task_id=run["task_id"],
+                commit_sha=_git_value(cwd, ["rev-parse", "HEAD"]),
+                commit_message=_git_value(cwd, ["log", "-1", "--pretty=%s"]) or f"Release {target_version}",
+                post_commit_snapshot=compact_snapshot(pre_commit_snapshot),
+            )
+            if recovered and recovered.get("status") == "waiting_public_approval":
+                print("- recipe_run: waiting_public_approval")
+                print(f"approval: {public_approval_text(recovered)}")
+                print(f"publish: {_release_publish_command(project_id, recovered)}")
+                return
             raise SystemExit("no release managed file changes to commit")
 
         _git_checked(cwd, ["add", *managed_files])
@@ -82,8 +166,9 @@ def cmd_release_prepare(args: argparse.Namespace) -> None:
         commit_sha = _git_value(cwd, ["rev-parse", "HEAD"])
         committed_tree_hash = _git_value(cwd, ["rev-parse", "HEAD^{tree}"])
         post_commit_snapshot = current_git_snapshot(cwd)
-        if post_commit_snapshot.get("working_tree_dirty"):
+        if _git_changed_files(cwd):
             raise SystemExit("working tree is dirty after release commit")
+        post_commit_snapshot = _release_sanitize_snapshot(post_commit_snapshot)
 
         updated_run = mark_release_commit_recorded(
             store,
@@ -109,7 +194,7 @@ def cmd_release_prepare(args: argparse.Namespace) -> None:
         )
         store.update("recipe_runs", updated_run["id"], {"metadata": metadata, "updated_at": now_iso()})
 
-        _run_lightweight_post_commit_checks(project_id, cwd, str(args.db))
+        _run_lightweight_post_commit_checks(project_id, cwd, str(db_path))
         final_run = store.get("recipe_runs", updated_run["id"])
         print(f"- commit: {commit_sha}")
         print("- recipe_run: waiting_public_approval")
@@ -120,8 +205,23 @@ def cmd_release_prepare(args: argparse.Namespace) -> None:
         store.close()
 
 
+def _run_release_full_check(store: Store, run: dict[str, Any], cwd: Path, timeout: float) -> dict[str, Any]:
+    verification = run_local_verification(RELEASE_FULL_CHECK_COMMAND, cwd, timeout, snapshot_mode="full")
+    verification.setdefault("metadata", {})["verification_mode"] = "full"
+    verification["metadata"]["release_prepare"] = True
+    verification["metadata"]["release_full_check_command"] = RELEASE_FULL_CHECK_COMMAND
+    verification["metadata"]["release_target_version"] = release_version_from_run(run).lstrip("v")
+    verification["metadata"]["release_effective_dirty_hash"] = _release_effective_worktree_hash(cwd)
+    verification_row = {"id": make_id("verification"), "task_id": run["task_id"], "evidence_check_id": None, **verification}
+    try:
+        record_verification_run(store, run["task_id"], row=verification_row, actor="nilo")
+    except TransitionError as exc:
+        raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
+    return verification_row
+
+
 def cmd_release_publish(args: argparse.Namespace) -> None:
-    store = Store(args.db)
+    store = Store(_resolved_db_path(args.db, Path.cwd()))
     try:
         if not store.get("projects", args.project):
             raise SystemExit(f"project not found: {args.project}")
@@ -149,16 +249,22 @@ def cmd_release_publish(args: argparse.Namespace) -> None:
         store.close()
 
 
-def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str, cwd: Path) -> dict[str, Any]:
+def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str, cwd: Path, *, resume: bool = False) -> dict[str, Any]:
     run = active_recipe_run(store, project_id)
     if run:
         if run.get("recipe_name") != "release":
             raise SystemExit("another recipe is already active")
+        if resume and run.get("status") != "paused_for_fix":
+            raise SystemExit(f"release recipe is not paused_for_fix: {run.get('status')}")
+        if not resume and run.get("status") == "paused_for_fix":
+            raise SystemExit("release recipe is paused_for_fix; run nilo release resume --project " + project_id)
         run_version = release_version_from_run(run).lstrip("v")
-        requested_version = (args.target_version or "").lstrip("v")
+        requested_version = (getattr(args, "target_version", "") or "").lstrip("v")
         if requested_version and run_version and requested_version != run_version:
             raise SystemExit(f"active release recipe target_version is {run_version}; got {requested_version}")
         return run
+    if resume:
+        raise SystemExit("paused release recipe run not found")
     data = discover_recipes(cwd)
     source = _find_recipe(data["effective_recipes"], "release")
     if not source:
@@ -179,12 +285,188 @@ def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str,
     return create_recipe_run(store, project_id=project_id, task_id=task_id, recipe_name="release", rendered_fields=rendered)
 
 
+def _resolved_db_path(db_path: Path | None, cwd: Path) -> Path:
+    return resolve_project_boundary(cwd, db_path=db_path).db_path
+
+
 def release_managed_files(version: str) -> list[str]:
     return [
         "pyproject.toml",
         "src/nilo/__init__.py",
         f"docs/releases/{version}.md",
     ]
+
+
+def _managed_files_for_run(run: dict[str, Any], version: str) -> list[str]:
+    metadata = run.get("metadata") or {}
+    managed = metadata.get("managed_release_files") or metadata.get("release_prepare_managed_files") or []
+    if managed:
+        return [str(path).replace("\\", "/") for path in managed]
+    return release_managed_files(version)
+
+
+def _store_release_metadata(store: Store, run: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    current = store.get("recipe_runs", run["id"]) or run
+    metadata = {**(current.get("metadata") or {}), **values}
+    store.update("recipe_runs", current["id"], {"metadata": metadata, "updated_at": now_iso()})
+    updated = store.get("recipe_runs", current["id"])
+    return updated or {**current, "metadata": metadata}
+
+
+def _pause_release_for_fix(
+    store: Store,
+    run: dict[str, Any],
+    *,
+    reason: str,
+    failed_verification_id: str = "",
+    managed_release_dirty: list[str] | None = None,
+    unmanaged_dirty: list[str] | None = None,
+) -> dict[str, Any]:
+    current = store.get("recipe_runs", run["id"]) or run
+    metadata = {
+        **(current.get("metadata") or {}),
+        "pause_reason": reason,
+        "failed_verification_id": failed_verification_id,
+        "managed_release_dirty": managed_release_dirty or [],
+        "unmanaged_dirty": unmanaged_dirty or [],
+        "resume_command": f"nilo release resume --project {current['project_id']}",
+    }
+    store.update(
+        "recipe_runs",
+        current["id"],
+        {
+            "status": "paused_for_fix",
+            "current_step": "paused_for_fix",
+            "pending_steps": ["fix_and_resume", "run_required_checks", "commit", "tag", "push_main", "push_tag", "create_github_release", "verify_release", "complete"],
+            "pending_public_operations": [],
+            "metadata": metadata,
+            "updated_at": now_iso(),
+        },
+    )
+    return store.get("recipe_runs", current["id"]) or current
+
+
+def _classify_dirty_files(cwd: Path, managed_files: list[str]) -> dict[str, list[str]]:
+    dirty = _git_changed_files(cwd)
+    managed = set(managed_files)
+    return {
+        "managed_release_dirty": sorted(path for path in dirty if path in managed),
+        "unmanaged_dirty": sorted(path for path in dirty if path not in managed),
+    }
+
+
+def _raise_unmanaged_dirty(classified: dict[str, list[str]], project_id: str) -> None:
+    lines = ["release recipe paused_for_fix: unmanaged dirty files"]
+    lines.append("release-managed dirty files:")
+    for path in classified["managed_release_dirty"] or ["(none)"]:
+        lines.append(f"- {path}")
+    lines.append("unmanaged dirty files:")
+    for path in classified["unmanaged_dirty"] or ["(none)"]:
+        lines.append(f"- {path}")
+    lines.append(f"suggested action: commit or revert unmanaged files, then run nilo release resume --project {project_id}")
+    raise SystemExit("\n".join(lines))
+
+
+def reusable_full_verification_for_release(store: Store, task_id: str, cwd: Path, *, target_version: str) -> dict[str, Any] | None:
+    current = current_git_snapshot(cwd)
+    for verification in store.list_where("verification_runs", "task_id=?", (task_id,)):
+        metadata = verification.get("metadata") or {}
+        if verification.get("timed_out") or verification.get("exit_code") not in (0, "0"):
+            continue
+        if metadata.get("verification_mode") != "full":
+            continue
+        verification_version = str(metadata.get("release_target_version") or "").lstrip("v")
+        if verification_version and verification_version != target_version.lstrip("v"):
+            continue
+        if not _same_release_full_check(verification.get("command", "")):
+            continue
+        if _release_snapshot_matches_verification(verification, current, cwd):
+            return {**verification, "reuse_reason": "current_full_check", "snapshot_relation": "current_snapshot"}
+        relation = _verified_dirty_tree_committed_relation(cwd, verification, current)
+        if relation:
+            return {**verification, **relation}
+    return None
+
+
+def _same_release_full_check(command: str) -> bool:
+    return command.strip() == RELEASE_FULL_CHECK_COMMAND
+
+
+def _verified_dirty_tree_committed_relation(cwd: Path, verification: dict[str, Any], current: dict[str, Any]) -> dict[str, Any] | None:
+    if not verification.get("working_tree_dirty") or current.get("working_tree_dirty"):
+        return None
+    verified_head = verification.get("git_head") or ""
+    if not verified_head:
+        return None
+    parent = _git_value_or_empty(cwd, ["rev-parse", "HEAD^"])
+    if parent != verified_head:
+        return None
+    metadata = verification.get("metadata") or {}
+    verified_hash = metadata.get("release_effective_dirty_hash") or ""
+    if not verified_hash:
+        return None
+    if verified_hash != _release_effective_commit_hash(cwd, "HEAD"):
+        return None
+    return {
+        "reuse_reason": "verified_dirty_tree_matches_current_commit",
+        "commit_sha": current.get("git_head") or "",
+        "snapshot_relation": "verified_dirty_tree_committed",
+    }
+
+
+def _release_snapshot_matches_verification(verification: dict[str, Any], current: dict[str, Any], cwd: Path) -> bool:
+    if compact_snapshot(verification) == compact_snapshot(current):
+        return True
+    if (verification.get("git_head") or "") != (current.get("git_head") or ""):
+        return False
+    if bool(verification.get("working_tree_dirty")) != bool(current.get("working_tree_dirty")):
+        return False
+    metadata = verification.get("metadata") or {}
+    verified_hash = metadata.get("release_effective_dirty_hash") or ""
+    return bool(verified_hash) and verified_hash == _release_effective_worktree_hash(cwd)
+
+
+def _without_release_ignored_paths(paths: list[Any]) -> set[str]:
+    return {str(path).replace("\\", "/") for path in paths if not _release_ignored_dirty_path(str(path).replace("\\", "/"))}
+
+
+def _release_sanitize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    paths = sorted(_without_release_ignored_paths(snapshot.get("observed_paths") or []))
+    if paths:
+        return {**snapshot, "observed_paths": paths}
+    return {**snapshot, "working_tree_dirty": False, "git_diff_hash": "", "git_status_porcelain": "", "observed_paths": []}
+
+
+def _release_effective_worktree_hash(cwd: Path) -> str:
+    return _release_content_hash(cwd, _git_changed_files(cwd), old_ref="HEAD", new_ref=None)
+
+
+def _release_effective_commit_hash(cwd: Path, commit: str) -> str:
+    parent = _git_value_or_empty(cwd, ["rev-parse", f"{commit}^"])
+    if not parent:
+        return ""
+    code, out, _ = _git_output(cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", commit])
+    if code != 0:
+        return ""
+    paths = {path.strip().replace("\\", "/") for path in out.splitlines() if path.strip()}
+    paths = {path for path in paths if not _release_ignored_dirty_path(path)}
+    return _release_content_hash(cwd, paths, old_ref=parent, new_ref=commit)
+
+
+def _release_content_hash(cwd: Path, paths: set[str], *, old_ref: str, new_ref: str | None) -> str:
+    hasher = hashlib.sha256()
+    for path in sorted(paths):
+        hasher.update(f"path:{path}\n".encode())
+        hasher.update(b"old:\0")
+        hasher.update(_git_blob_bytes(cwd, old_ref, path))
+        hasher.update(b"\nnew:\0")
+        if new_ref is None:
+            file_path = cwd / path
+            hasher.update(file_path.read_bytes() if file_path.is_file() else b"__NILO_FILE_MISSING__")
+        else:
+            hasher.update(_git_blob_bytes(cwd, new_ref, path))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
 
 
 def _update_release_managed_files(cwd: Path, version: str) -> list[str]:
@@ -260,8 +542,15 @@ def _git_changed_files(cwd: Path) -> set[str]:
         if " -> " in path:
             path = path.split(" -> ", 1)[1].strip()
         if path:
-            files.add(path.replace("\\", "/"))
+            normalized = path.replace("\\", "/")
+            if _release_ignored_dirty_path(normalized):
+                continue
+            files.add(normalized)
     return files
+
+
+def _release_ignored_dirty_path(path: str) -> bool:
+    return path == ".nilo/nilo.db" or path.startswith(".nilo/nilo.db-")
 
 
 def _git_value(cwd: Path, args: list[str]) -> str:
@@ -276,6 +565,16 @@ def _git_checked(cwd: Path, args: list[str]) -> str:
     if code != 0:
         raise SystemExit(err or f"git {' '.join(args)} failed")
     return out
+
+
+def _git_value_or_empty(cwd: Path, args: list[str]) -> str:
+    code, out, _ = _git_output(cwd, args)
+    return out.strip() if code == 0 else ""
+
+
+def _git_blob_bytes(cwd: Path, ref: str, path: str) -> bytes:
+    completed = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    return completed.stdout if completed.returncode == 0 else b"__NILO_FILE_MISSING__"
 
 
 def _git_output(cwd: Path, args: list[str]) -> tuple[int, str, str]:

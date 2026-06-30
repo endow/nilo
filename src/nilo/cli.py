@@ -497,7 +497,7 @@ from .cli_handlers.quality import (
     cmd_review_withdraw,
 )
 from .cli_handlers.recipe import cmd_recipe_approve_public, cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show
-from .cli_handlers.release import cmd_release_prepare, cmd_release_publish
+from .cli_handlers.release import cmd_release_prepare, cmd_release_publish, cmd_release_resume, cmd_release_run
 from .cli_handlers.roadmap import (
     cmd_roadmap_accept,
     cmd_roadmap_adopt,

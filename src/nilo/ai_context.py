@@ -179,6 +179,9 @@ def _detail_commands(project_id: str, task_id: str | None) -> list[str]:
 
 
 def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
+    workflow = data.get("workflow_context") or {}
+    if workflow.get("type") == "recipe_run" and workflow.get("recipe_name") == "release":
+        return _compact_release_recipe_context(data, workflow)
     current = data.get("current_task")
     task_id = current["task"]["id"] if current else None
     active_task = None
@@ -231,6 +234,65 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_release_recipe_context(data: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
+    status = workflow.get("status", "")
+    target_version = str(workflow.get("target_version") or "").lstrip("v")
+    if not target_version and workflow.get("required_approval_text"):
+        target_version = str(workflow["required_approval_text"]).split(" ", 1)[0].lstrip("v")
+    current = data.get("current_task") or {}
+    task = current.get("task") or {}
+    completion = current.get("completion") or {}
+    evidence = current.get("evidence") or {}
+    review = current.get("review") or {}
+    blockers = completion.get("blocking_reasons") or []
+    action: dict[str, Any] = {
+        "compact": True,
+        "project_id": data["project_id"],
+        "project_name": data["project_name"],
+        "active_recipe": "release",
+        "recipe_status": status,
+        "target_version": target_version,
+        "active_task": {
+            "id": workflow.get("task_id", ""),
+            "title": task.get("title") or "release",
+            "status": task.get("state") or status,
+        },
+        "blockers": {"count": len(blockers), "items": blockers[:3]},
+        "latest_verification": {
+            "status": evidence.get("status", "none"),
+            "verification_run_id": evidence.get("verification_run_id", ""),
+            "exit_code": evidence.get("verification_exit_code"),
+        },
+        "latest_review": {
+            "unresolved_count": review.get("unresolved_count", 0),
+            "unresolved_blocking_count": review.get("unresolved_blocking_count", 0),
+        },
+        "failure_summary": data.get("failure_summary", {}),
+        "detail_commands": [f"nilo status --ai --verbose --project {data['project_id']}"],
+        "required_commands": ["nilo next --project " + data["project_id"]],
+    }
+    if status == "waiting_public_approval":
+        action.update(
+            {
+                "next_action": "await_public_approval",
+                "required_approval_text": workflow.get("required_approval_text", ""),
+                "command_after_approval": workflow.get("release_publish_command", ""),
+            }
+        )
+    elif status == "paused_for_fix":
+        action.update(
+            {
+                "next_action": "fix_and_resume",
+                "reason": workflow.get("reason", ""),
+                "failed_verification_id": workflow.get("failed_verification_id", ""),
+                "resume_command": workflow.get("resume_command", ""),
+            }
+        )
+    else:
+        action.update({"next_action": "run_release_prepare", "command": workflow.get("release_prepare_command", "")})
+    return action
+
+
 def workflow_next_actions(workflow: dict[str, Any]) -> list[str]:
     if workflow.get("status") == "waiting_public_approval":
         operations = workflow.get("pending_public_operations") or []
@@ -239,6 +301,8 @@ def workflow_next_actions(workflow: dict[str, Any]) -> list[str]:
         if workflow.get("public_execution_command"):
             action += f"; after approval run: {workflow['public_execution_command']}"
         return [action]
+    if workflow.get("status") == "paused_for_fix":
+        return [f"release recipe paused for fix; resume with: {workflow.get('resume_command', '')}"]
     return [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
 
 
@@ -428,6 +492,11 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
     required: list[str] = [
         f"project_id: {data['project_id']}",
     ]
+    if data.get("active_recipe"):
+        required.append(f"active_recipe: {data['active_recipe']}")
+        required.append(f"recipe_status: {data.get('recipe_status', '')}")
+        if data.get("target_version"):
+            required.append(f"target_version: {data['target_version']}")
     if active:
         required.append(f"active_task: {active['id']} [{active['status']}] {_shorten(active['title'], 64)}")
     else:
@@ -436,6 +505,9 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
     action = data.get("next_action") or ""
     required.append("next_action:")
     required.append(f"- {_compact_next_action_text(action) if action else 'なし'}")
+    for key in ("reason", "failed_verification_id", "resume_command", "required_approval_text", "command_after_approval", "command"):
+        if data.get(key):
+            required.append(f"{key}: {data[key]}")
 
     required.append("detail_commands:")
     detail_commands = data.get("detail_commands", [])

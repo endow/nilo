@@ -22,7 +22,7 @@ RELEASE_STEPS = [
     "complete",
 ]
 
-ACTIVE_RECIPE_RUN_STATUSES = {"active", "waiting_public_approval"}
+ACTIVE_RECIPE_RUN_STATUSES = {"active", "paused_for_fix", "waiting_public_approval"}
 PUBLIC_OPERATION_APPROVAL_TEXT = '"v{version} を tag/push/release して"'
 
 
@@ -62,7 +62,7 @@ def create_recipe_run(
 def active_recipe_run(store, project_id: str) -> dict[str, Any] | None:
     runs = store.list_where(
         "recipe_runs",
-        "project_id=? AND status IN ('active', 'waiting_public_approval')",
+        "project_id=? AND status IN ('active', 'paused_for_fix', 'waiting_public_approval')",
         (project_id,),
     )
     return runs[0] if runs else None
@@ -485,6 +485,7 @@ def workflow_context(store, project_id: str) -> dict[str, Any]:
         "recipe_name": run["recipe_name"],
         "task_id": run["task_id"],
         "status": run["status"],
+        "target_version": release_version_from_run(run) if run["recipe_name"] == "release" else "",
         "current_step": run["current_step"],
         "next_step": next_step_for_recipe_run(run),
         "completed_steps": run.get("completed_steps") or [],
@@ -496,6 +497,13 @@ def workflow_context(store, project_id: str) -> dict[str, Any]:
         context["public_execution_command"] = public_execution_command(project_id, run)
         context["release_publish_command"] = release_publish_command(project_id, run)
         context["required_approval_text"] = public_approval_text(run).strip('"')
+    elif run["status"] == "paused_for_fix":
+        metadata = run.get("metadata") or {}
+        context["reason"] = metadata.get("pause_reason", "")
+        context["failed_verification_id"] = metadata.get("failed_verification_id", "")
+        context["resume_command"] = release_resume_command(project_id)
+        context["managed_release_dirty"] = metadata.get("managed_release_dirty") or []
+        context["unmanaged_dirty"] = metadata.get("unmanaged_dirty") or []
     elif run["recipe_name"] == "release":
         context["release_prepare_command"] = release_prepare_command(project_id, run)
     return context
@@ -504,6 +512,8 @@ def workflow_context(store, project_id: str) -> dict[str, Any]:
 def next_step_for_recipe_run(run: dict[str, Any]) -> str:
     if run.get("status") == "waiting_public_approval":
         return "await_public_operation_confirmation"
+    if run.get("status") == "paused_for_fix":
+        return "fix_and_resume"
     pending = run.get("pending_steps") or []
     return pending[0] if pending else "complete"
 
@@ -544,6 +554,10 @@ def release_prepare_command(project_id: str, run: dict[str, Any]) -> str:
 def release_publish_command(project_id: str, run: dict[str, Any]) -> str:
     approval = public_approval_text(run).strip('"')
     return " ".join(["nilo", "release", "publish", "--project", shlex.quote(project_id), "--approval", shlex.quote(approval)])
+
+
+def release_resume_command(project_id: str) -> str:
+    return " ".join(["nilo", "release", "resume", "--project", shlex.quote(project_id)])
 
 
 def release_completion_summary(store, run: dict[str, Any]) -> dict[str, Any]:

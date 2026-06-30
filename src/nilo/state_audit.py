@@ -291,7 +291,7 @@ def audit_workflow(store: Store, project_id: str, *, cwd: Path | None = None) ->
     findings: list[dict[str, Any]] = []
     active_runs = store.list_where(
         "recipe_runs",
-        "project_id=? AND status IN ('active', 'waiting_public_approval')",
+        "project_id=? AND status IN ('active', 'paused_for_fix', 'waiting_public_approval')",
         (project_id,),
     )
     for run in active_runs:

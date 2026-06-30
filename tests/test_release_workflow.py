@@ -12,8 +12,10 @@ from unittest.mock import patch
 
 from nilo.ai_context import project_ai_context, render_ai_context_text, task_ai_context
 from nilo.cli import main
+from nilo.cli_handlers import release as release_handler
 from nilo.snapshot import compact_snapshot, current_git_snapshot, snapshot_columns
 from nilo.state_audit import audit_task
+from nilo.state_audit import audit_workflow
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
@@ -75,6 +77,14 @@ def release_verification_result(root: Path) -> dict:
         "finished_at": now,
         "created_at": now,
     }
+
+
+def failed_release_verification_result(root: Path) -> dict:
+    result = release_verification_result(root)
+    result["stdout"] = "failed"
+    result["stderr"] = "shard failed"
+    result["exit_code"] = 1
+    return result
 
 
 def install_fake_release_tools(root: Path) -> Path:
@@ -618,6 +628,187 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     store.close()
             finally:
                 os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_release_prepare_failure_pauses_for_fix_and_next_points_to_resume(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                    with self.assertRaises(SystemExit) as raised:
+                        with redirect_stdout(output):
+                            main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                self.assertIn("release recipe paused_for_fix", str(raised.exception))
+                self.assertIn("recipe_run: paused_for_fix", output.getvalue())
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    self.assertEqual(context["status"], "paused_for_fix")
+                    self.assertEqual(context["reason"], "full_check_failed")
+                    self.assertTrue(context["failed_verification_id"])
+                    rendered = render_ai_context_text(project_ai_context(store, root.name, cwd=root))
+                    self.assertIn("active_recipe: release", rendered)
+                    self.assertIn("recipe_status: paused_for_fix", rendered)
+                    self.assertIn("next_action:", rendered)
+                    self.assertIn("resume_command: nilo release resume --project", rendered)
+                    self.assertIn("latest_verification: status=failed", rendered)
+                    self.assertFalse([item for item in audit_workflow(store, root.name, cwd=root) if item["severity"] == "error"])
+                finally:
+                    store.close()
+
+                next_output = io.StringIO()
+                with redirect_stdout(next_output):
+                    main(["--db", str(db), "next", "--project", root.name])
+                body = next_output.getvalue()
+                self.assertIn("next_action: fix_and_resume", body)
+                self.assertIn("resume_command: nilo release resume --project", body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_resume_reuses_verified_dirty_tree_after_fix_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                    with self.assertRaises(SystemExit):
+                        with redirect_stdout(io.StringIO()):
+                            main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                root.joinpath("tracked.txt").write_text("fix\n", encoding="utf-8")
+                store = Store(db)
+                try:
+                    run = workflow_context(store, root.name)
+                    task_id = run["task_id"]
+                    verified = release_verification_result(root)
+                    verified["metadata"]["verification_mode"] = "full"
+                    verified["metadata"]["release_target_version"] = "0.3.1"
+                    verified["metadata"]["release_effective_dirty_hash"] = release_handler._release_effective_worktree_hash(root)
+                    store.insert("verification_runs", {"id": "verification_reusable", "task_id": task_id, "evidence_check_id": None, **verified})
+                finally:
+                    store.close()
+
+                run_git(root, "add", "tracked.txt", "pyproject.toml", "src/nilo/__init__.py", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Fix release checks")
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification") as full_check, patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "resume", "--project", root.name])
+                full_check.assert_not_called()
+                text = output.getvalue()
+                self.assertIn("verification_reused: verified_dirty_tree_matches_current_commit", text)
+                self.assertIn("recipe_run: waiting_public_approval", text)
+                store = Store(db)
+                try:
+                    self.assertEqual(workflow_context(store, root.name)["status"], "waiting_public_approval")
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_resume_does_not_reuse_when_same_path_changes_after_verification(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                    with self.assertRaises(SystemExit):
+                        with redirect_stdout(io.StringIO()):
+                            main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                root.joinpath("tracked.txt").write_text("verified fix\n", encoding="utf-8")
+                store = Store(db)
+                try:
+                    task_id = workflow_context(store, root.name)["task_id"]
+                    verified = release_verification_result(root)
+                    verified["metadata"]["verification_mode"] = "full"
+                    verified["metadata"]["release_target_version"] = "0.3.1"
+                    verified["metadata"]["release_effective_dirty_hash"] = release_handler._release_effective_worktree_hash(root)
+                    store.insert("verification_runs", {"id": "verification_reusable", "task_id": task_id, "evidence_check_id": None, **verified})
+                finally:
+                    store.close()
+
+                root.joinpath("tracked.txt").write_text("edited after verification\n", encoding="utf-8")
+                run_git(root, "add", "tracked.txt", "pyproject.toml", "src/nilo/__init__.py", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Fix release checks")
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd)) as full_check, patch(
+                    "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
+                ):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "resume", "--project", root.name])
+                full_check.assert_called_once()
+                self.assertNotIn("verification_reused: verified_dirty_tree_matches_current_commit", output.getvalue())
+                self.assertIn("recipe_run: waiting_public_approval", output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_resume_blocks_unmanaged_dirty_separately_from_release_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                    with self.assertRaises(SystemExit):
+                        with redirect_stdout(io.StringIO()):
+                            main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                root.joinpath("src/nilo/snapshot.py").write_text("bugfix\n", encoding="utf-8")
+                with self.assertRaises(SystemExit) as raised:
+                    with redirect_stdout(io.StringIO()):
+                        main(["--db", str(db), "release", "resume", "--project", root.name])
+                body = str(raised.exception)
+                self.assertIn("release-managed dirty files:", body)
+                self.assertIn("pyproject.toml", body)
+                self.assertIn("unmanaged dirty files:", body)
+                self.assertIn("src/nilo/snapshot.py", body)
+                self.assertIn("commit or revert unmanaged files", body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_run_auto_patch_starts_prepare_and_none_db_path_is_not_created(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            run_git(root, "tag", "v0.3.0")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["project", "create", "Nilo", "--id", root.name])
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd)), patch(
+                    "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
+                ) as lightweight_checks:
+                    with redirect_stdout(output):
+                        main(["release", "run", "--project", root.name, "--auto-patch"])
+                self.assertIn("target_version: 0.3.1", output.getvalue())
+                self.assertIn("recipe_run: waiting_public_approval", output.getvalue())
+                self.assertFalse(root.joinpath("None").exists())
+                self.assertEqual(lightweight_checks.call_args.args[2], str(root / ".nilo" / "nilo.db"))
+            finally:
                 os.chdir(previous_cwd)
 
 
