@@ -1379,7 +1379,7 @@ def review_worker_recovery_action(reviewer: str, review_id: str, availability: s
 
 def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     refresh_review_dispatch_state(store, project_id)
-    tasks = project_tasks_in_created_order(store, project_id)
+    tasks = project_tasks_in_work_order(store, project_id)
     current_snapshot = current_git_snapshot(Path.cwd())
     statuses = {task["id"]: projected_task_status(store, task, current_snapshot=current_snapshot) for task in tasks}
     return tasks, statuses
@@ -1387,7 +1387,7 @@ def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict
 
 def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
     """Return project tasks and their latest recorded status without snapshot/audit work."""
-    tasks = project_tasks_in_created_order(store, project_id)
+    tasks = project_tasks_in_work_order(store, project_id)
     if not tasks:
         return tasks, {}
     rows = store.conn.execute(
@@ -1465,13 +1465,24 @@ def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> t
     return tasks, statuses
 
 
-def project_tasks_in_created_order(store: Store, project_id: str) -> list[dict]:
+def project_tasks_in_work_order(store: Store, project_id: str) -> list[dict]:
     rows = store.conn.execute(
         """
         SELECT *
         FROM tasks
         WHERE project_id=?
-        ORDER BY created_at ASC, rowid ASC
+        ORDER BY
+          CASE task_type
+            WHEN 'implementation' THEN 0
+            WHEN 'verification' THEN 1
+            WHEN 'review' THEN 2
+            WHEN 'design' THEN 3
+            WHEN 'research' THEN 4
+            WHEN 'documentation' THEN 5
+            ELSE 6
+          END,
+          created_at ASC,
+          rowid ASC
         """,
         (project_id,),
     ).fetchall()
