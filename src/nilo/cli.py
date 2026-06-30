@@ -574,16 +574,7 @@ TOP_LEVEL_COMMANDS = {
 }
 
 
-UPDATE_NOTICE_EXCLUDED_COMMANDS = {
-    "backup",
-    "backups",
-    "mcp",
-    "restore",
-    "test",
-    "update-check",
-    "upgrade",
-    "verification",
-}
+UPDATE_NOTICE_EXCLUDED_COMMANDS = TOP_LEVEL_COMMANDS - {"doctor", "update-check"}
 
 
 def should_show_update_notice(args: argparse.Namespace) -> bool:

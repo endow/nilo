@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nilo.cli import main
+from nilo.cli import TOP_LEVEL_COMMANDS, main, should_show_update_notice
 from nilo.instruction import build_instruction
 from nilo.update_check import (
     CommandResult,
@@ -202,25 +202,39 @@ class UpdateCheckTests(unittest.TestCase):
 
         self.assertIn("Nilo update available: 0.3.1 -> 0.3.2", output.getvalue())
 
-    def test_human_command_prints_auto_notice_after_command(self) -> None:
+    def test_update_check_command_respects_disabled_env(self) -> None:
+        output = io.StringIO()
+        with patch.dict(os.environ, {"NILO_NO_UPDATE_CHECK": "1"}), patch("nilo.cli_handlers.workflow.check_for_update") as check:
+            with redirect_stdout(output):
+                main(["update-check"])
+
+        check.assert_not_called()
+        self.assertIn("Nilo update check skipped: disabled by NILO_NO_UPDATE_CHECK.", output.getvalue())
+
+    def test_lightweight_agent_workflow_commands_do_not_call_auto_notice(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             output = TtyStringIO()
-            with patch("nilo.cli.auto_update_notice", return_value="Nilo の更新があります: 0.3.1 -> 0.3.2\n更新するには: nilo upgrade"):
+            with patch("nilo.cli.auto_update_notice", return_value="Nilo の更新があります: 0.3.1 -> 0.3.2\n更新するには: nilo upgrade") as notice:
                 with patch("sys.stdout", output):
                     main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    notice.reset_mock()
+                    output.seek(0)
+                    output.truncate(0)
                     main(["--db", str(db), "status", "--project", "project_test"])
+                    main(["--db", str(db), "next", "--project", "project_test"])
+                    main(["--db", str(db), "queue", "--project", "project_test"])
 
-        self.assertIn("Nilo の更新があります: 0.3.1 -> 0.3.2", output.getvalue())
+        notice.assert_not_called()
+        self.assertNotIn("Nilo の更新があります: 0.3.1 -> 0.3.2", output.getvalue())
 
-    def test_workflow_commands_print_auto_notice_after_command(self) -> None:
+    def test_doctor_command_prints_auto_notice_after_command(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
             output = TtyStringIO()
             with patch("nilo.cli.auto_update_notice", return_value="Nilo の更新があります: 0.3.1 -> 0.3.2\n更新するには: nilo upgrade"):
                 with patch("sys.stdout", output):
-                    main(["--db", str(db), "project", "create", "Nilo", "--id", "nilo"])
-                    main(["--db", str(db), "start", "Work", "--project", "nilo"])
+                    main(["--db", str(db), "doctor"])
 
         self.assertIn("Nilo の更新があります: 0.3.1 -> 0.3.2", output.getvalue())
 
@@ -234,8 +248,16 @@ class UpdateCheckTests(unittest.TestCase):
                     main(["--db", str(db), "status", "--project", "nilo", "--json"])
                     main(["--db", str(db), "status", "--project", "nilo", "--ai"])
 
-        self.assertEqual(notice.call_count, 1)
-        self.assertEqual(output.getvalue().count("Nilo の更新があります"), 1)
+        notice.assert_not_called()
+        self.assertNotIn("Nilo の更新があります", output.getvalue())
+
+    def test_update_notice_command_filter_only_allows_doctor_and_update_check(self) -> None:
+        for command in TOP_LEVEL_COMMANDS - {"doctor", "update-check"}:
+            with self.subTest(command=command):
+                self.assertFalse(should_show_update_notice(type("Args", (), {"command": command})()))
+
+        self.assertTrue(should_show_update_notice(type("Args", (), {"command": "doctor"})()))
+        self.assertTrue(should_show_update_notice(type("Args", (), {"command": "update-check"})()))
 
     def test_instruction_note_uses_cached_update_and_forbids_auto_upgrade(self) -> None:
         project = {
