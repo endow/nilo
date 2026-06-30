@@ -1239,42 +1239,43 @@ class McpServerTests(unittest.TestCase):
     def test_mcp_write_fence_does_not_record_failure_to_external_db(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
-            external_db = Path(directory) / "external-nilo.db"
-            previous_cwd = Path.cwd()
-            try:
-                root.mkdir()
-                os.chdir(root)
-                with redirect_stdout(io.StringIO()):
-                    main(["--db", str(external_db), "project", "create", "Nilo", "--id", "project_test"])
-                    main(["--db", str(external_db), "task", "create", "--project", "project_test", "--title", "External DB write"])
+            with TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as external_directory:
+                external_db = Path(external_directory) / "nilo.db"
+                previous_cwd = Path.cwd()
+                try:
+                    root.mkdir()
+                    os.chdir(root)
+                    with redirect_stdout(io.StringIO()):
+                        main(["--db", str(external_db), "project", "create", "Nilo", "--id", "project_test"])
+                        main(["--db", str(external_db), "task", "create", "--project", "project_test", "--title", "External DB write"])
+                    store = Store(external_db)
+                    try:
+                        task = store.list_where("tasks", "project_id=?", ("project_test",))[0]
+                    finally:
+                        store.close()
+
+                    result = call_tool(
+                        "record_verification_run",
+                        {
+                            "task_id": task["id"],
+                            "last_seen_event_id": "task:start",
+                            "command": "python -m unittest",
+                            "cwd": str(root),
+                            "stdout": "",
+                            "stderr": "",
+                            "exit_code": 0,
+                            "timed_out": False,
+                        },
+                        external_db,
+                    )
+                finally:
+                    os.chdir(previous_cwd)
+
                 store = Store(external_db)
                 try:
-                    task = store.list_where("tasks", "project_id=?", ("project_test",))[0]
+                    failures = store.list_where("failure_logs", "task_id=?", (task["id"],))
                 finally:
                     store.close()
-
-                result = call_tool(
-                    "record_verification_run",
-                    {
-                        "task_id": task["id"],
-                        "last_seen_event_id": "task:start",
-                        "command": "python -m unittest",
-                        "cwd": str(root),
-                        "stdout": "",
-                        "stderr": "",
-                        "exit_code": 0,
-                        "timed_out": False,
-                    },
-                    external_db,
-                )
-            finally:
-                os.chdir(previous_cwd)
-
-            store = Store(external_db)
-            try:
-                failures = store.list_where("failure_logs", "task_id=?", (task["id"],))
-            finally:
-                store.close()
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "write_fence_violation")
