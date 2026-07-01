@@ -789,9 +789,12 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("taskize work", task_description)
         self.assertIn("タスク化して", task_description)
         self.assertIn("commitment_id is optional", task_description)
+        self.assertIn("project's primary language", task_description)
         self.assertNotIn("commitment_id", tools["create_task"]["inputSchema"]["required"])
+        self.assertIn("project's primary language", todo_description)
         self.assertIn("Use create_task for new concrete work", from_todo_description)
         self.assertIn("converting an already-created Todo", from_todo_description)
+        self.assertIn("primary language policy", from_todo_description)
 
     def test_ai_context_includes_taskization_vocabulary_rules(self) -> None:
         body = render_ai_context_text(
@@ -1290,7 +1293,7 @@ class McpServerTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test", "--rule", "primary_language: en"])
                 store = Store(db)
                 try:
                     store.insert(
@@ -2289,7 +2292,7 @@ MCP でも承認待ちの計画を人間向けに返す。
             try:
                 os.chdir(root)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test", "--rule", "primary_language: en"])
                 store = Store(db)
                 try:
                     store.insert(
@@ -2330,6 +2333,62 @@ MCP でも承認待ちの計画を人間向けに返す。
             finally:
                 os.chdir(previous_cwd)
 
+    def test_mcp_create_task_rejects_primary_language_mismatch(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "日本語プロジェクト", "--id", "project_test", "--rule", "primary_language: ja"])
+
+                with self.assertRaises(McpToolError) as raised:
+                    call_tool(
+                        "create_task",
+                        {
+                            "project_id": "project_test",
+                            "title": "Fix settings layout",
+                            "type": "implementation",
+                            "risk": "medium",
+                            "description": "Fix the settings screen layout.",
+                            "acceptance": ["Settings screen is readable."],
+                        },
+                        db,
+                    )
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertIn("human-readable field language mismatch", str(raised.exception))
+        self.assertIn("primary_language=ja", str(raised.exception))
+
+    def test_mcp_create_task_allows_technical_token_only_title(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "日本語プロジェクト", "--id", "project_test", "--rule", "primary_language: ja"])
+
+                result = call_tool(
+                    "create_task",
+                    {
+                        "project_id": "project_test",
+                        "title": "`nilo view`",
+                        "type": "implementation",
+                        "risk": "medium",
+                        "description": "表示結果を確認する。",
+                        "acceptance": ["`nilo view` の結果が確認できる。"],
+                    },
+                    db,
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(result["task"]["title"], "`nilo view`")
+
     def test_create_task_records_accepted_commitment_link(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2338,7 +2397,7 @@ MCP でも承認待ちの計画を人間向けに返す。
             try:
                 os.chdir(root)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test", "--rule", "primary_language: en"])
                 store = Store(db)
                 try:
                     store.insert(

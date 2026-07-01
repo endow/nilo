@@ -644,28 +644,38 @@ def render_human_roadmap_markdown(summary: dict, language: str = "en") -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def task_plan_candidates(commitment: dict) -> list[dict]:
+def task_plan_candidates(commitment: dict, primary_language: str = "ja") -> list[dict]:
     implementation_acceptance = list(commitment["success_criteria"])
     if not implementation_acceptance:
         implementation_acceptance = [f"{commitment['title']} の実装方針が満たされている"]
+    if primary_language == "ja":
+        implementation_title = f"{commitment['title']} を実装する"
+        implementation_description = commitment["intent"] or "承認された作業計画を実装する。"
+        verification_title = f"{commitment['title']} を検証する"
+        verification_description = "承認された作業計画の証跡ポリシーを満たすことを確認する。"
+    else:
+        implementation_title = f"Implement {commitment['title']}"
+        implementation_description = commitment["intent"] or "Implement the accepted work plan."
+        verification_title = f"Verify {commitment['title']}"
+        verification_description = "Verify that the accepted work plan's evidence policy is satisfied."
     candidates = [
         {
-            "title": f"Implement {commitment['title']}",
+            "title": implementation_title,
             "task_type": "implementation",
             "risk": "medium",
             "commitment_id": commitment["id"],
-            "description": commitment["intent"] or "承認された作業計画を実装する。",
+            "description": implementation_description,
             "acceptance": implementation_acceptance,
         }
     ]
     evidence_acceptance = list(commitment["evidence_policy"]) or FOCUSED_DEFAULT_EVIDENCE_POLICY
     candidates.append(
         {
-            "title": f"Verify {commitment['title']}",
+            "title": verification_title,
             "task_type": "verification",
             "risk": "medium",
             "commitment_id": commitment["id"],
-            "description": "承認された作業計画の証跡ポリシーを満たすことを確認する。",
+            "description": verification_description,
             "acceptance": evidence_acceptance,
         }
     )
@@ -695,8 +705,8 @@ def task_create_command(project_id: str, candidate: dict) -> str:
     return " ".join(parts)
 
 
-def render_roadmap_task_plan_markdown(commitment: dict) -> str:
-    candidates = task_plan_candidates(commitment)
+def render_roadmap_task_plan_markdown(commitment: dict, primary_language: str = "ja") -> str:
+    candidates = task_plan_candidates(commitment, primary_language)
     lines = [
         "# Roadmap Task Plan",
         "",

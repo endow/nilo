@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from ..cli_support import make_id, read_text_or_exit
+from ..project_language import project_primary_language
 from ..roadmap_render import (
     render_pending_roadmap_plan_lines,
     render_human_roadmap_markdown,
@@ -484,7 +485,8 @@ def cmd_roadmap_task_plan(args: argparse.Namespace) -> None:
             raise SystemExit(f"roadmap commitment not found: {args.commitment}")
         if commitment["status"] != "accepted":
             raise SystemExit(f"roadmap commitment is not accepted: {args.commitment}")
-        body = render_roadmap_task_plan_markdown(commitment)
+        project = store.get("projects", commitment["project_id"])
+        body = render_roadmap_task_plan_markdown(commitment, project_primary_language(project or {}))
         if args.file:
             output = Path(args.file)
             ensure_generated_markdown_output_is_safe(output, "roadmap task-plan", {"# Roadmap Task Plan"})

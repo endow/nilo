@@ -7,6 +7,7 @@ from typing import Any
 from .display_labels import ai_value_label, category_label, field_label, severity_label
 from .failure import compact_failure_message, list_failure_logs, summarize_failure_logs
 from .human_status import human_next_action_text
+from .project_language import project_primary_language
 from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status
 from .store import Store
 from .task_logic import active_task_completion, is_task_completed_status, projected_task_status, unresolved_review_findings
@@ -143,6 +144,7 @@ def project_ai_context(
     verbose_context = {
         "project_id": project_id,
         "project_name": project["name"],
+        "primary_language": project_primary_language(project, cwd),
         "workflow_context": workflow,
         "current_task": current,
         "next_required_actions": next_actions,
@@ -221,6 +223,7 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
         "compact": True,
         "project_id": data["project_id"],
         "project_name": data["project_name"],
+        "primary_language": data.get("primary_language", ""),
         "active_task": active_task,
         "next_action": next_action,
         "blockers": {"count": len(blockers), "items": blockers[:3]},
@@ -461,6 +464,12 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
             "RoadmapProposal を作成して `nilo roadmap import` または `nilo roadmap adopt` する。"
         )
     vocabulary_lines = ["語彙ルール:"]
+    primary_language = data.get("primary_language")
+    if primary_language:
+        vocabulary_lines.append(
+            f"- Niloへ保存する title / description / acceptance criteria / todo / roadmap の人間可読文面は primary_language={primary_language} で書く。"
+        )
+        vocabulary_lines.append("- command / path / enum / status / JSON field は英語や元の表記を維持する。")
     if current:
         vocabulary_lines.append("- タスク化=Task 作成、Todo=受付だけ。")
     else:

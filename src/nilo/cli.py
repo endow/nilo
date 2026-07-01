@@ -299,9 +299,11 @@ def parse_roadmap_proposal(markdown: str) -> dict:
 
 
 def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
+    from .project_language import project_primary_language
     from .project_boundary import project_boundary_prompt, resolve_project_boundary
 
     project_id = project["id"]
+    primary_language = project_primary_language(project)
     boundary = resolve_project_boundary()
     boundary_prompt = project_boundary_prompt(boundary)
     return f"""{NILO_BLOCK_BEGIN}
@@ -315,6 +317,7 @@ Normal work:
 - 作業開始は `nilo status --ai --project {project_id}`。
 - `nilo next --project {project_id}` の先頭 action だけに従う。
 - active recipe 中は recipe のみ。
+- 保存文面は primary_language={primary_language}。command/path/status/enum/JSONは原文
 - release公開操作は明示承認待ち。
 - 検証済み dirty tree 由来の Nilo commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
@@ -323,7 +326,7 @@ Normal work:
 - 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
-- 別エージェントへのレビュー依頼、reviewer worker、MCP 経由の証跡記録だけ Nilo MCP tool を使う。MCP は通常入口ではない。
+- レビュー依頼、reviewer worker、MCP 経由の証跡記録だけ Nilo MCP tool を使う。MCP は通常入口ではない。
 - AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
 - `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は CLI reviewer process fallback/human-launch 専用。
 - review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
@@ -332,7 +335,7 @@ Review handoff:
 MCP identity guard:
 - MCP tool 可でも正しい Nilo 状態とは判断しない。
 - 使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認する。
-- `expected_project` は repository directory name 用。複数 repository では `project_root` または `workspace`。
+- `expected_project` は repository directory name 用。複数 repo では `project_root` または `workspace`。
 - MCP response の repository / db_path 不一致は使わず、CLI fallback。
 - fallback: `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
 
@@ -344,7 +347,7 @@ MCP identity guard:
 
 質問抑制:
 - Nilo 出力や状態から一意推定できる不足値は質問しない。
-- release recipe の `target_version` は現在バージョンと最新 git tag が一致、または SemVer tag が無く一意なら次 patch。
+- release recipe の `target_version` は一意なら次 patch。
 - 質問は候補複数、状態矛盾、公開・破壊的操作の直前確認だけ。
 
 詳細は `nilo help ai` を参照する。

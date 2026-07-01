@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .project_language import human_readable_language_policy, project_primary_language
 from .snapshot import current_git_snapshot, evidence_status as computed_evidence_status
 from .update_check import cached_instruction_note
 
@@ -161,6 +162,8 @@ def build_instruction(
     task: dict,
 ) -> tuple[str, str]:
     degraded = task["degradation_mode"] == "degraded"
+    primary_language = project_primary_language(project)
+    language_policy = human_readable_language_policy(project)
     criteria = "\n".join(f"- {item}" for item in project["default_completion_criteria"])
     description = task.get("description") or "未設定"
     acceptance = "\n".join(f"- {item}" for item in task.get("acceptance_criteria", []))
@@ -200,10 +203,12 @@ def build_instruction(
 ## プロジェクト
 - 名前: {project["name"]}
 - 技術スタック: {", ".join(project["tech_stack"]) or "未設定"}
+- primary_language: {primary_language}
 {update_note}
 
 ## 作業ルール
 {chr(10).join(f"- {rule}" for rule in project["rules"]) or "- 作業ブランチを切り替えない"}
+- {language_policy}
 - 他タスクの変更を混在させない
 - 完了報告前にコミットやステージを行ってもよいが、変更ファイル一覧は作業開始時点からの全差分を記載する
 

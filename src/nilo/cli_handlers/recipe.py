@@ -8,6 +8,7 @@ from typing import Any
 
 from ..cli_support import make_id
 from ..failure import deterministic_id
+from ..project_language import human_readable_language_policy
 from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json
 from ..store import Store
 from ..timeutil import now_iso
@@ -80,6 +81,7 @@ def cmd_recipe_run(args: argparse.Namespace) -> None:
         print("recipe_run: dry-run")
         _print_rendered_task(rendered)
         return
+    rendered = _with_language_policy(args.db, project, rendered)
     task_id = _create_recipe_task(args, project, source, rendered)
     if source.name == "release":
         store = Store(args.db)
@@ -346,6 +348,18 @@ def _print_rendered_task(rendered: dict[str, Any]) -> None:
     print("acceptance:")
     for item in rendered["acceptance"]:
         print(f"- {item}")
+
+
+def _with_language_policy(db_path: str, project_id: str, rendered: dict[str, Any]) -> dict[str, Any]:
+    store = Store(db_path)
+    try:
+        project = store.get("projects", project_id)
+        if not project:
+            raise SystemExit(f"project not found: {project_id}")
+        policy = human_readable_language_policy(project)
+    finally:
+        store.close()
+    return {**rendered, "description": f"{rendered['description']}\n\nLanguage policy:\n{policy}"}
 
 
 def _create_recipe_task(args: argparse.Namespace, project: str, source: RecipeSource, rendered: dict[str, Any]) -> str:

@@ -5,6 +5,7 @@ import io
 from contextlib import redirect_stdout
 
 from ..cli_support import make_id
+from ..project_language import project_primary_language, render_roadmap_proposal_from_todo, roadmap_proposal_texts
 from ..store import Store
 from ..timeutil import now_iso
 from ..transitions import (
@@ -33,13 +34,6 @@ TODO_PRIORITIES = ["low", "normal", "high"]
 TRIAGE_TODO_STATUSES = {"triaged", "ready", "ad_hoc_approved", "requires_roadmap", "blocked", "deferred", "rejected"}
 STARTABLE_TODO_STATUSES = {"ready", "ad_hoc_approved"}
 PROMOTABLE_TODO_STATUSES = {"requires_roadmap"}
-FOCUSED_EVIDENCE_POLICY = (
-    "Record targeted verification for the changed module or focused test group first; "
-    "use full verification only for release, broad-risk, or shared-core changes; "
-    "if full verification is skipped, document the scope reason instead of treating the skip as a failure."
-)
-
-
 def _require_project(store: Store, project_id: str) -> None:
     if not store.get("projects", project_id):
         raise SystemExit(f"project not found: {project_id}")
@@ -222,35 +216,6 @@ def cmd_todo_start(args: argparse.Namespace) -> None:
     print(f"instruct: nilo instruct --task {task_id}")
 
 
-def _roadmap_proposal_from_todo(todo: dict, title: str) -> str:
-    description = todo["description"] or todo["title"]
-    acceptance = todo["acceptance_hint"] or "Human-defined success criteria are required before autonomous execution."
-    return "\n".join(
-        [
-            f"# {title}",
-            "",
-            "## Intent",
-            description,
-            "",
-            "## Success Criteria",
-            f"- {acceptance}",
-            "",
-            "## Non Goals",
-            "- This proposal does not accept or close the roadmap commitment.",
-            "",
-            "## Autonomy Scope",
-            "- Create concrete tasks only after this proposal is accepted.",
-            "",
-            "## Review Gates",
-            "- Human acceptance is required before implementation tasks are created.",
-            "",
-            "## Evidence Policy",
-            f"- {FOCUSED_EVIDENCE_POLICY}",
-            "",
-        ]
-    )
-
-
 def cmd_todo_promote(args: argparse.Namespace) -> None:
     if args.to != "roadmap-proposal":
         raise SystemExit(f"unsupported promotion target: {args.to}")
@@ -265,9 +230,11 @@ def cmd_todo_promote(args: argparse.Namespace) -> None:
         project = store.get("projects", todo["project_id"])
         if not project:
             raise SystemExit(f"project not found: {todo['project_id']}")
+        primary_language = project_primary_language(project)
+        proposal_texts = roadmap_proposal_texts(primary_language)
         created_at = now_iso()
         title = args.title or todo["title"]
-        body = _roadmap_proposal_from_todo(todo, title)
+        body = render_roadmap_proposal_from_todo(title, todo["description"] or todo["title"], todo["acceptance_hint"], primary_language)
         commitment_id = make_id("commitment")
         revision_id = make_id("roadmap_rev")
         commitment = {
@@ -276,10 +243,10 @@ def cmd_todo_promote(args: argparse.Namespace) -> None:
             "title": title,
             "intent": todo["description"] or todo["title"],
             "success_criteria": [todo["acceptance_hint"]] if todo["acceptance_hint"] else [],
-            "non_goals": ["This proposal does not accept or close the roadmap commitment."],
-            "autonomy_scope": ["Create concrete tasks only after this proposal is accepted."],
-            "review_gates": ["Human acceptance is required before implementation tasks are created."],
-            "evidence_policy": [FOCUSED_EVIDENCE_POLICY],
+            "non_goals": [proposal_texts["non_goal"]],
+            "autonomy_scope": [proposal_texts["autonomy_scope"]],
+            "review_gates": [proposal_texts["review_gate"]],
+            "evidence_policy": [proposal_texts["evidence_policy"]],
             "status": "pending",
             "accepted_by": "",
             "accepted_at": "",

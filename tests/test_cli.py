@@ -2284,7 +2284,7 @@ variables:
             try:
                 os.chdir(root)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id, "--rule", "primary_language: en"])
                 store = Store(db)
                 try:
                     store.insert(
@@ -2534,6 +2534,59 @@ variables:
             self.assertNotIn("nilo quality autoscore import", body)
             self.assertNotIn("nilo rules derive import", body)
             self.assertNotIn("--file reports/<task_id>.md", body)
+
+    def test_japanese_project_task_creation_preserves_human_readable_language(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            (root / "README.md").write_text("# 日本語プロジェクト\n\nこのプロジェクトは日本語で運用します。\n", encoding="utf-8")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "日本語プロジェクト", "--id", "project_test"])
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            "project_test",
+                            "--title",
+                            "設定画面の表示崩れを修正する",
+                            "--description",
+                            "`src/settings.py` の layout regression を直す。",
+                            "--acceptance",
+                            "`nilo view` で設定画面のタスクが日本語で表示される。",
+                        ]
+                    )
+                task_id = task_output.getvalue().strip()
+                instruct_output = io.StringIO()
+                with redirect_stdout(instruct_output):
+                    main(["--db", str(db), "instruct", "--task", task_id])
+                view_output = io.StringIO()
+                with redirect_stdout(view_output):
+                    main(["--db", str(db), "view", "--project", "project_test", "--format", "json", "--no-open"])
+            finally:
+                os.chdir(previous_cwd)
+
+            store = Store(db)
+            try:
+                project = store.get("projects", "project_test")
+                task = store.get("tasks", task_id)
+            finally:
+                store.close()
+            view_data = json.loads(view_output.getvalue())
+            self.assertIn("primary_language: ja", project["rules"])
+            self.assertEqual(task["title"], "設定画面の表示崩れを修正する")
+            self.assertEqual(task["description"], "`src/settings.py` の layout regression を直す。")
+            self.assertEqual(task["acceptance_criteria"], ["`nilo view` で設定画面のタスクが日本語で表示される。"])
+            self.assertEqual(view_data["active_task"]["title"], "設定画面の表示崩れを修正する")
+            self.assertIn("primary_language: ja", instruct_output.getvalue())
+            self.assertIn("Niloへ保存する人間可読フィールドは project primary_language=ja で書く", instruct_output.getvalue())
 
     def test_agent_install_block_is_minimal_protocol_not_command_reference(self) -> None:
         verbose_reference_only_commands = [
@@ -5256,15 +5309,15 @@ project status からロードマップ現在地を読めるようにする。
             self.assertIn("## Review Boundaries", body)
             self.assertIn("success criteria の変更", body)
             self.assertIn("## Task Candidates", body)
-            self.assertIn("### 1. Implement Phase 2.5 Roadmap Projection", body)
+            self.assertIn("### 1. Phase 2.5 Roadmap Projection を実装する", body)
             self.assertIn("- type: implementation", body)
             self.assertIn("- risk: medium", body)
             self.assertIn("- description: project status からロードマップ現在地を読めるようにする。", body)
             self.assertIn("roadmap_position が accepted commitment を表示する", body)
-            self.assertIn("### 2. Verify Phase 2.5 Roadmap Projection", body)
+            self.assertIn("### 2. Phase 2.5 Roadmap Projection を検証する", body)
             self.assertIn("- type: verification", body)
             self.assertIn("- VerificationRun を記録する", body)
-            self.assertIn("nilo task create --project \"project_test\" --title \"Implement Phase 2.5 Roadmap Projection\"", body)
+            self.assertIn("nilo task create --project \"project_test\" --title \"Phase 2.5 Roadmap Projection を実装する\"", body)
             self.assertIn(f"--commitment {commitment_id}", body)
             self.assertEqual(output_file.read_text(encoding="utf-8"), body)
             self.assertIn(f"written: {output_file}", file_output.getvalue())

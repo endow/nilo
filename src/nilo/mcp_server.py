@@ -20,6 +20,13 @@ from .project_boundary import (
     require_write_fence,
     resolve_project_boundary,
 )
+from .project_language import (
+    human_readable_language_issues,
+    human_readable_language_policy,
+    project_primary_language,
+    render_roadmap_proposal_from_todo,
+    roadmap_proposal_texts,
+)
 from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
 from .review_dispatcher import DispatchError, dispatch_review
 from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
@@ -565,7 +572,8 @@ TOOLS = [
             'start a concrete implementation/design/research/documentation task, or says phrases like "タスク化して", '
             '"Taskにして", "作業タスクを作って". If the user intent is clear, infer reasonable type, risk, description, '
             "and acceptance criteria instead of creating a Todo. commitment_id is optional reference metadata, not a "
-            "permission requirement."
+            "permission requirement. Human-readable title, description, and acceptance fields must use the project's "
+            "primary language; keep commands, paths, identifiers, status, enum, and JSON field names unchanged."
         ),
         "inputSchema": json_schema(
             {
@@ -625,7 +633,8 @@ TOOLS = [
             "Create a Todo intake item for ideas, deferred requests, discovered issues, follow-ups, or ambiguous work. "
             "A Todo is only intake and does not grant execution permission. Do NOT use this when the user explicitly "
             'asks to taskize work, create a Task, start a concrete task, or says phrases like "タスク化して", '
-            '"Taskにして", "作業タスクを作って".'
+            '"Taskにして", "作業タスクを作って". Human-readable title, description, and acceptance_hint fields must use '
+            "the project's primary language while technical tokens stay unchanged."
         ),
         "inputSchema": json_schema(
             {
@@ -684,7 +693,8 @@ TOOLS = [
         "name": "create_task_from_todo",
         "description": (
             "Create a Task from an existing ready or ad_hoc_approved Todo. Use create_task for new concrete work that "
-            "the user directly asks to taskize; use create_task_from_todo only when converting an already-created Todo."
+            "the user directly asks to taskize; use create_task_from_todo only when converting an already-created Todo. "
+            "The resulting human-readable task fields must preserve the project's primary language policy."
         ),
         "inputSchema": json_schema(
             {
@@ -824,6 +834,17 @@ def optional_string_list(arguments: dict, key: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise McpToolError(f"argument must be a string list: {key}")
     return value
+
+
+def require_mcp_human_readable_language(project: dict, fields: dict[str, str | list[str]]) -> None:
+    language = project_primary_language(project)
+    issues = human_readable_language_issues(language, fields)
+    if issues:
+        details = "; ".join(issues)
+        raise McpToolError(
+            f"human-readable field language mismatch: {details}. "
+            "Keep commands, paths, identifiers, status, enum, and JSON field names unchanged."
+        )
 
 
 def require_bool(arguments: dict, key: str) -> bool:
@@ -1583,6 +1604,11 @@ def mcp_create_task(store: Store, arguments: dict) -> dict:
     project = store.get("projects", project_id)
     if not project:
         raise project_not_found_error(store, project_id)
+    require_mcp_human_readable_language(
+        project,
+        {"title": title, "description": description, "acceptance": acceptance},
+    )
+    language_policy = human_readable_language_policy(project)
     created_at = now_iso()
     row = {
         "id": make_id("task"),
@@ -1604,7 +1630,7 @@ def mcp_create_task(store: Store, arguments: dict) -> dict:
         "created_at": created_at,
     }
     store.insert("tasks", row)
-    return {"task": row, "latest_event": store.latest_task_status_event(row["id"])}
+    return {"task": row, "language_policy": language_policy, "latest_event": store.latest_task_status_event(row["id"])}
 
 
 def mcp_import_agent_report(store: Store, arguments: dict) -> dict:
@@ -1697,35 +1723,6 @@ def require_fresh_todo_context(todo: dict, arguments: dict) -> None:
         raise McpToolError(f"stale todo state: context_token={token}, current_context_token={expected}")
 
 
-def _roadmap_proposal_from_todo(todo: dict, title: str) -> str:
-    description = todo["description"] or todo["title"]
-    acceptance = todo["acceptance_hint"] or "Human-defined success criteria are required before autonomous execution."
-    return "\n".join(
-        [
-            f"# {title}",
-            "",
-            "## Intent",
-            description,
-            "",
-            "## Success Criteria",
-            f"- {acceptance}",
-            "",
-            "## Non Goals",
-            "- This proposal does not accept or close the roadmap commitment.",
-            "",
-            "## Autonomy Scope",
-            "- Create concrete tasks only after this proposal is accepted.",
-            "",
-            "## Review Gates",
-            "- Human acceptance is required before implementation tasks are created.",
-            "",
-            "## Evidence Policy",
-            "- Record verification commands and results on each task created from the accepted commitment.",
-            "",
-        ]
-    )
-
-
 def mcp_create_todo(store: Store, arguments: dict) -> dict:
     project_id = require_string(arguments, "project_id")
     title = require_string(arguments, "title")
@@ -1738,6 +1735,15 @@ def mcp_create_todo(store: Store, arguments: dict) -> dict:
     project = store.get("projects", project_id)
     if not project:
         raise project_not_found_error(store, project_id)
+    require_mcp_human_readable_language(
+        project,
+        {
+            "title": title,
+            "description": optional_string(arguments, "description"),
+            "acceptance_hint": optional_string(arguments, "acceptance_hint"),
+        },
+    )
+    language_policy = human_readable_language_policy(project)
     created_at = now_iso()
     row = {
         "id": make_id("todo"),
@@ -1758,7 +1764,7 @@ def mcp_create_todo(store: Store, arguments: dict) -> dict:
         "triage_reason": "",
     }
     store.insert("todos", row)
-    return {"todo": row, "context_token": todo_context_token(row)}
+    return {"todo": row, "language_policy": language_policy, "context_token": todo_context_token(row)}
 
 
 def mcp_list_todos(store: Store, arguments: dict) -> dict:
@@ -1825,9 +1831,12 @@ def mcp_promote_todo_to_roadmap_proposal(store: Store, arguments: dict) -> dict:
     project = store.get("projects", todo["project_id"])
     if not project:
         raise project_not_found_error(store, todo["project_id"])
+    language_policy = human_readable_language_policy(project)
+    primary_language = project_primary_language(project)
+    proposal_texts = roadmap_proposal_texts(primary_language)
     created_at = now_iso()
     title = optional_string(arguments, "title") or todo["title"]
-    body = _roadmap_proposal_from_todo(todo, title)
+    body = render_roadmap_proposal_from_todo(title, todo["description"] or todo["title"], todo["acceptance_hint"], primary_language)
     commitment_id = make_id("commitment")
     revision_id = make_id("roadmap_rev")
     commitment = {
@@ -1836,10 +1845,10 @@ def mcp_promote_todo_to_roadmap_proposal(store: Store, arguments: dict) -> dict:
         "title": title,
         "intent": todo["description"] or todo["title"],
         "success_criteria": [todo["acceptance_hint"]] if todo["acceptance_hint"] else [],
-        "non_goals": ["This proposal does not accept or close the roadmap commitment."],
-        "autonomy_scope": ["Create concrete tasks only after this proposal is accepted."],
-        "review_gates": ["Human acceptance is required before implementation tasks are created."],
-        "evidence_policy": ["Record verification commands and results on each task created from the accepted commitment."],
+        "non_goals": [proposal_texts["non_goal"]],
+        "autonomy_scope": [proposal_texts["autonomy_scope"]],
+        "review_gates": [proposal_texts["review_gate"]],
+        "evidence_policy": [proposal_texts["evidence_policy"]],
         "status": "pending",
         "accepted_by": "",
         "accepted_at": "",
@@ -1872,6 +1881,7 @@ def mcp_promote_todo_to_roadmap_proposal(store: Store, arguments: dict) -> dict:
         "todo": updated,
         "roadmap_revision": revision,
         "proposed_commitment": commitment,
+        "language_policy": language_policy,
         "context_token": todo_context_token(updated),
     }
 
@@ -1895,6 +1905,7 @@ def mcp_create_task_from_todo(store: Store, arguments: dict) -> dict:
     project = store.get("projects", todo["project_id"])
     if not project:
         raise project_not_found_error(store, todo["project_id"])
+    language_policy = human_readable_language_policy(project)
     created_at = now_iso()
     task_id = make_id("task")
     task = {
@@ -1930,6 +1941,7 @@ def mcp_create_task_from_todo(store: Store, arguments: dict) -> dict:
     return {
         "todo": updated,
         "task": task,
+        "language_policy": language_policy,
         "latest_event": store.latest_task_status_event(task_id),
         "context_token": todo_context_token(updated),
     }
