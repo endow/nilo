@@ -8,6 +8,7 @@ Examples:
 - Write a design note before implementation
 - Make a small implementation change with verification and review expectations
 - Fix a bug with reproduction, cause analysis, regression testing, related checks, and verification evidence
+- Improve performance with before/after measurements, comparison, correctness verification, and side-effect checks
 - Prepare release versioning, Japanese and English release notes, and GitHub release handoff
 
 Humans can ask in natural language:
@@ -21,6 +22,16 @@ Turn the work we just did into a recipe so we can repeat it next time.
 ```
 
 When needed, project recipes are saved under `.nilo/recipes/`.
+
+## Perf Recipe
+
+`perf` is the standard recipe for measuring slow work, identifying the bottleneck, and recording before/after comparison evidence.
+
+```bash
+nilo recipe run perf --project nilo
+```
+
+`performance` and `performance-investigation` are aliases for `perf`. Its completion contract includes the target, measurement conditions, baseline measurement, bottleneck analysis, change summary, after measurement, comparison result, correctness verification, and side-effect check.
 
 ## Release Recipe Version Suggestions
 

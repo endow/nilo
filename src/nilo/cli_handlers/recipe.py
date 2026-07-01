@@ -30,7 +30,9 @@ def cmd_recipe_list(args: argparse.Namespace) -> None:
         suffix = f" [{source.status}]" if args.all and source.status != "valid" else ""
         stability = source.data.get("stability", "")
         stability_text = f" stability={stability}" if stability else ""
-        print(f"- {source.name} ({source.layer}){suffix}: {source.title}{stability_text}")
+        aliases = source.data.get("aliases") or []
+        alias_text = f" aliases={', '.join(str(alias) for alias in aliases)}" if isinstance(aliases, list) and aliases else ""
+        print(f"- {source.name} ({source.layer}){suffix}: {source.title}{stability_text}{alias_text}")
 
 
 def cmd_recipe_show(args: argparse.Namespace) -> None:
@@ -157,7 +159,15 @@ def _find_recipe(sources: list[RecipeSource], name: str, layer: str = "") -> Rec
     for source in sources:
         if source.name == name and (not layer or source.layer == layer):
             return source
+    for source in sources:
+        if _recipe_alias_matches(source, name) and (not layer or source.layer == layer):
+            return source
     return None
+
+
+def _recipe_alias_matches(source: RecipeSource, name: str) -> bool:
+    aliases = source.data.get("aliases") or []
+    return isinstance(aliases, list) and name in aliases
 
 
 def _print_recipe(source: RecipeSource) -> None:
@@ -169,6 +179,10 @@ def _print_recipe(source: RecipeSource) -> None:
     print(f"status: {source.status}")
     if data.get("summary"):
         print(f"summary: {data['summary']}")
+    if data.get("aliases"):
+        print("aliases:")
+        for item in data["aliases"]:
+            print(f"- {item}")
     if data.get("instruction"):
         print("instruction:")
         print(data["instruction"].rstrip())
@@ -176,7 +190,7 @@ def _print_recipe(source: RecipeSource) -> None:
         print("acceptance:")
         for item in data["acceptance"]:
             print(f"- {item}")
-    for field in ["variables", "verification", "review", "completion_contract"]:
+    for field in ["steps", "variables", "verification", "review", "completion_contract", "allowed_actions", "forbidden_actions", "human_gate"]:
         if field in data:
             print(f"{field}:")
             print(_format_value(data[field]))

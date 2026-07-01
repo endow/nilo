@@ -1,0 +1,115 @@
+schema_version: 1
+name: perf
+aliases:
+  - performance
+  - performance-investigation
+title: パフォーマンス調査・改善
+summary: 遅い処理を計測し、ボトルネックを特定し、改善前後の比較証跡を残すための標準レシピ。
+instruction: |
+  Evidence Before Trust に沿って、パフォーマンス改善を「速くなった気がする」ではなく、計測、比較、検証の証跡で完了判定できる作業契約として進める。
+
+  基本フロー:
+  1. 遅いコマンド、画面、API、処理を特定し、環境、遅さの程度、入力データ量、リポジトリ状態、ユーザー体験上の影響を記録する。
+  2. 実行コマンド、作業ディレクトリ、対象プロジェクト、git head、working tree、DBサイズやタスク件数、キャッシュ、環境変数、測定回数を固定する。
+  3. 修正前に debug timing、実行時間、profiler、ログ、手動計測の優先順でベースラインを記録する。可能なら 3 回以上測定し、最小値、最大値、代表値を残す。
+  4. 計測結果と参照コードを根拠に、git 操作、DBクエリ、ファイル探索、テスト収集、重複処理、フルスキャン、キャッシュ可能な計算、外部プロセス起動、表示生成などのどこがボトルネックか分類する。
+  5. 実装前に、改善箇所、削る処理、遅延評価する処理、キャッシュ、並列化、測定対象外にするもの、正しさへの影響を短くまとめる。
+  6. ボトルネックに対応する最小変更だけを実装する。
+  7. 改善前と同じ条件で再計測し、改善前、改善後、差分、改善率、条件差がある場合の理由を記録する。
+  8. 対象テスト、関連テスト、対象コマンド、必要に応じた全体テストの順で正しさを確認する。
+  9. キャッシュ、dirty state、evidence stale/current 判定、debug timing、出力順、類似コマンドへの副作用を確認する。
+  10. 必須証跡を完了報告に記録し、不足や懸念があれば reservations として残す。
+
+  Human gate が必要な場合:
+  - 速度改善のために正確性を下げる必要がある。
+  - 表示内容や CLI 出力の意味、順序を変える必要がある。
+  - stale の可能性があるキャッシュを導入する。
+  - デフォルトで実行する検証を減らす。
+  - DB schema や migration が必要。
+  - 並列化により副作用の扱いが変わる。
+  - 改善範囲が当初の対象を超える。
+acceptance:
+  - 改善対象が明確になっている。
+  - 測定条件が記録されている。
+  - 改善前のベースラインがある。
+  - ボトルネック分析が記録されている。
+  - 修正内容がボトルネックに対応している。
+  - 改善後の再計測がある。
+  - 改善前後の比較がある。
+  - 正しさの検証が実行されている。
+  - 副作用確認が行われている。
+  - 未解決の懸念がある場合は reservations として残っている。
+steps:
+  - performance_target
+  - measurement_conditions
+  - baseline_measurement
+  - bottleneck_analysis
+  - fix_plan
+  - implementation
+  - after_measurement
+  - comparison_result
+  - correctness_verification
+  - side_effect_check
+verification:
+  - command: 'nilo check --task <task_id> "<focused performance verification command>" --project {project_id} --mode targeted --timeout 120'
+    reason: "Record focused evidence for the changed command or benchmark, including before/after measurements where possible."
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm Nilo state before reporting performance work readiness."
+review:
+  required: false
+  focus:
+    - measurement validity
+    - correctness regression risk
+    - stale cache or evidence status risk
+completion_contract:
+  evidence:
+    - performance_target
+    - measurement_conditions
+    - baseline_measurement
+    - bottleneck_analysis
+    - change_summary
+    - after_measurement
+    - comparison_result
+    - correctness_verification
+    - side_effect_check
+  completion_states:
+    - completed
+    - completed_with_reservations
+    - blocked
+allowed_actions:
+  - ファイルを読む
+  - 関連コードを検索する
+  - debug timing を確認する
+  - profiler や計測コマンドを実行する
+  - 対象コマンドを複数回実行する
+  - パフォーマンス改善に必要な実装を変更する
+  - テストを追加・更新する
+  - 検証コマンドを実行する
+  - 改善前後の結果を記録する
+  - 類似箇所を調査する
+forbidden_actions:
+  - 計測なしに修正へ入る
+  - 原因未確認のまま大規模リライトする
+  - 正しさを壊して速度改善とみなす
+  - テストを削除して速くなったことにする
+  - エラー処理を消して速くする
+  - stale な証跡を current として扱う
+  - 不具合修正や機能追加を混ぜる
+  - DB schemaを承認なしに変更する
+  - CLI出力の意味を承認なしに変える
+  - 外部リポジトリを書き換える
+human_gate:
+  - 速度改善のために正確性を下げる必要がある
+  - 表示内容を簡略化する必要がある
+  - stale の可能性があるキャッシュを導入する
+  - デフォルトで実行する検証を減らす
+  - 全体テストを標準フローから外す
+  - CLI出力の意味や順序が変わる
+  - DB schema / migration が必要
+  - 並列化により副作用の扱いが変わる
+  - 改善範囲が当初の対象を超える
+tags:
+  - perf
+  - performance
+  - evidence
+stability: experimental

@@ -16,11 +16,16 @@ VARIABLE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 SEMVER_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 REQUIRED_FIELDS = {"schema_version", "name", "title", "summary", "instruction", "acceptance"}
 KNOWN_FIELDS = REQUIRED_FIELDS | {
+    "aliases",
     "description",
+    "steps",
     "variables",
     "verification",
     "review",
     "completion_contract",
+    "allowed_actions",
+    "forbidden_actions",
+    "human_gate",
     "tags",
     "owner",
     "stability",
@@ -91,6 +96,7 @@ def discover_recipes(project_root: Path | None = None, user_root: Path | None = 
             marked.append(_with_status(source, "duplicate", RecipeDiagnostic("error", "duplicate_name", f"duplicate recipe name in {source.layer} layer: {source.name}")))
         else:
             marked.append(source)
+    marked = _mark_alias_conflicts(marked)
 
     effective: list[RecipeSource] = []
     selected_names: set[str] = set()
@@ -205,6 +211,40 @@ def _with_status(source: RecipeSource, status: str, diagnostic: RecipeDiagnostic
     )
 
 
+def _mark_alias_conflicts(sources: list[RecipeSource]) -> list[RecipeSource]:
+    names = {source.name for source in sources if source.name}
+    alias_owners: dict[str, list[RecipeSource]] = {}
+    for source in sources:
+        aliases = source.data.get("aliases") or []
+        if not isinstance(aliases, list):
+            continue
+        for alias in aliases:
+            if isinstance(alias, str):
+                alias_owners.setdefault(alias, []).append(source)
+
+    marked: list[RecipeSource] = []
+    for source in sources:
+        diagnostics: list[RecipeDiagnostic] = []
+        aliases = source.data.get("aliases") or []
+        if isinstance(aliases, list):
+            for alias in aliases:
+                if not isinstance(alias, str):
+                    continue
+                if alias in names:
+                    diagnostics.append(
+                        RecipeDiagnostic("error", "alias_conflicts_with_name", f"alias conflicts with recipe name: {alias}")
+                    )
+                if len(alias_owners.get(alias, [])) > 1:
+                    diagnostics.append(
+                        RecipeDiagnostic("error", "alias_conflicts_with_alias", f"alias conflicts with another recipe alias: {alias}")
+                    )
+        next_source = source
+        for diagnostic in diagnostics:
+            next_source = _with_status(next_source, "invalid", diagnostic)
+        marked.append(next_source)
+    return marked
+
+
 def validate_recipe(data: dict[str, Any]) -> list[RecipeDiagnostic]:
     diagnostics: list[RecipeDiagnostic] = []
     for field in sorted(REQUIRED_FIELDS - set(data)):
@@ -217,12 +257,27 @@ def validate_recipe(data: dict[str, Any]) -> list[RecipeDiagnostic]:
     name = data.get("name")
     if not isinstance(name, str) or not RECIPE_NAME_PATTERN.match(name):
         diagnostics.append(RecipeDiagnostic("error", "invalid_name", "name must be lowercase kebab-case"))
+    aliases = data.get("aliases")
+    if aliases is not None and (
+        not isinstance(aliases, list) or not all(isinstance(item, str) and RECIPE_NAME_PATTERN.match(item) for item in aliases)
+    ):
+        diagnostics.append(RecipeDiagnostic("error", "invalid_aliases", "aliases must be a list of lowercase kebab-case names"))
+    elif isinstance(aliases, list):
+        if name in aliases:
+            diagnostics.append(RecipeDiagnostic("error", "alias_matches_name", "aliases must not include the recipe name"))
+        duplicate_aliases = sorted({alias for alias in aliases if aliases.count(alias) > 1})
+        for alias in duplicate_aliases:
+            diagnostics.append(RecipeDiagnostic("error", "duplicate_alias", f"duplicate alias: {alias}"))
     for field in ["title", "summary", "instruction"]:
         if field in data and not isinstance(data[field], str):
             diagnostics.append(RecipeDiagnostic("error", "invalid_field_type", f"{field} must be a string"))
     for field in ["description", "owner"]:
         if field in data and not isinstance(data[field], str):
             diagnostics.append(RecipeDiagnostic("error", "invalid_field_type", f"{field} must be a string"))
+    for field in ["steps", "allowed_actions", "forbidden_actions", "human_gate"]:
+        value = data.get(field)
+        if value is not None and (not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value)):
+            diagnostics.append(RecipeDiagnostic("error", "invalid_field_type", f"{field} must be a list of strings"))
     acceptance = data.get("acceptance")
     if "acceptance" in data and (not isinstance(acceptance, list) or not acceptance or not all(isinstance(item, str) and item.strip() for item in acceptance)):
         diagnostics.append(RecipeDiagnostic("error", "invalid_acceptance", "acceptance must be a non-empty list of strings"))

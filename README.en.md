@@ -107,7 +107,7 @@ nilo view
 
 ## Recipes / Roadmaps / Overdrive
 
-Recipes start common work in a consistent way. Documentation updates, bug fixes, and release preparation can become normal Nilo tasks with completion criteria and verification expectations.
+Recipes start common work in a consistent way. Documentation updates, bug fixes, performance investigations, and release preparation can become normal Nilo tasks with completion criteria and verification expectations.
 
 Roadmaps keep large work from becoming one unchecked implementation step. They capture goals, non-goals, and success criteria first, then split accepted plans into executable tasks after human approval.
 

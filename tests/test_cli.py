@@ -383,6 +383,7 @@ instruction: Do work.
             self.assertTrue(any(recipe["name"] == "basic-design" and recipe["layer"] == "builtin" for recipe in recipes))
             self.assertTrue(any(recipe["name"] == "docs-update" and recipe["layer"] == "builtin" for recipe in recipes))
             self.assertTrue(any(recipe["name"] == "focused-implementation" and recipe["layer"] == "builtin" for recipe in recipes))
+            self.assertTrue(any(recipe["name"] == "perf" and recipe["layer"] == "builtin" for recipe in recipes))
 
     def test_bugfix_recipe_exposes_evidence_contract(self) -> None:
         with TemporaryDirectory() as directory:
@@ -456,6 +457,171 @@ instruction: Do work.
             self.assertIn("bugfix (builtin layer)", body)
             self.assertIn("missing completion_contract evidence: bug summary includes expected behavior and actual behavior", body)
             self.assertIn("missing completion_contract evidence: lateral check result is recorded", body)
+
+    def test_perf_recipe_exposes_aliases_steps_and_required_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "show", "performance-investigation", "--project", directory, "--format", "json"])
+
+            recipe = json.loads(output.getvalue())
+            self.assertEqual(recipe["name"], "perf")
+            self.assertEqual(recipe["title"], "パフォーマンス調査・改善")
+            self.assertEqual(recipe["data"]["aliases"], ["performance", "performance-investigation"])
+            self.assertIn("baseline_measurement", recipe["data"]["steps"])
+            self.assertIn("correctness_verification", recipe["data"]["steps"])
+            self.assertEqual(
+                recipe["data"]["completion_contract"]["evidence"],
+                [
+                    "performance_target",
+                    "measurement_conditions",
+                    "baseline_measurement",
+                    "bottleneck_analysis",
+                    "change_summary",
+                    "after_measurement",
+                    "comparison_result",
+                    "correctness_verification",
+                    "side_effect_check",
+                ],
+            )
+
+    def test_perf_recipe_run_alias_records_provenance_and_missing_evidence_warnings(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(["--db", str(db), "recipe", "run", "performance", "--project", root.name, "--type", "implementation", "--risk", "medium"])
+            finally:
+                os.chdir(previous_cwd)
+
+            task_id = task_output.getvalue().strip()
+            store = Store(db)
+            try:
+                task = store.get("tasks", task_id)
+                provenance = store.latest_for_task("recipe_task_provenance", task_id)
+                self.assertEqual(task["title"], "パフォーマンス調査・改善")
+                self.assertIn("Recipe: perf", task["description"])
+                self.assertIn("baseline_measurement", task["description"])
+                self.assertIsNotNone(provenance)
+                self.assertEqual(provenance["recipe_name"], "perf")
+                self.assertEqual(provenance["source_layer"], "builtin")
+                self.assertEqual(provenance["recipe_snapshot"]["data"]["aliases"], ["performance", "performance-investigation"])
+            finally:
+                store.close()
+
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "task", "status", "--task", task_id])
+
+            body = status_output.getvalue()
+            self.assertIn("perf (builtin layer)", body)
+            self.assertIn("missing completion_contract evidence: baseline_measurement", body)
+            self.assertIn("missing completion_contract evidence: after_measurement", body)
+            self.assertIn("missing completion_contract evidence: correctness_verification", body)
+            self.assertIn("missing completion_contract evidence: side_effect_check", body)
+
+    def test_recipe_exact_name_takes_precedence_over_project_alias(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("foo.recipe.yml").write_text(
+                """schema_version: 1
+name: foo
+aliases:
+  - release
+title: Foo
+summary: Should not hijack release.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "show", "release", "--project", str(root), "--format", "json"])
+
+            recipe = json.loads(output.getvalue())
+            self.assertEqual(recipe["name"], "release")
+            self.assertEqual(recipe["layer"], "builtin")
+
+    def test_recipe_doctor_reports_alias_name_and_alias_alias_conflicts(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("foo.recipe.yml").write_text(
+                """schema_version: 1
+name: foo
+aliases:
+  - release
+  - shared
+title: Foo
+summary: Conflicts with release name and shared alias.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+            recipe_dir.joinpath("bar.recipe.yml").write_text(
+                """schema_version: 1
+name: bar
+aliases:
+  - shared
+title: Bar
+summary: Conflicts with shared alias.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit), redirect_stdout(output):
+                main(["recipe", "doctor", "--project", str(root)])
+
+            body = output.getvalue()
+            self.assertIn("alias_conflicts_with_name", body)
+            self.assertIn("alias_conflicts_with_alias", body)
+
+    def test_recipe_doctor_rejects_self_and_duplicate_aliases(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe_dir = root / ".nilo" / "recipes"
+            recipe_dir.mkdir(parents=True)
+            recipe_dir.joinpath("foo.recipe.yml").write_text(
+                """schema_version: 1
+name: foo
+aliases:
+  - foo
+  - same
+  - same
+title: Foo
+summary: Invalid aliases.
+instruction: Do work.
+acceptance:
+  - Done
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit), redirect_stdout(output):
+                main(["recipe", "doctor", "--project", str(root)])
+
+            body = output.getvalue()
+            self.assertIn("alias_matches_name", body)
+            self.assertIn("duplicate_alias", body)
 
     def test_recipe_run_unknown_bugfix_typo_fails_clearly(self) -> None:
         with TemporaryDirectory() as directory:
