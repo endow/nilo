@@ -47,6 +47,16 @@ nilo status
 `nilo status --ai` の既定出力は短い作業カードです。project / active task / next action / blocker summary / latest verification / latest review / required commands / detail commands だけを出し、証跡や roadmap や review findings の本文は毎回展開しません。詳細が必要な場合は `nilo status --ai --verbose`、`nilo task status --task <task_id> --ai`、`nilo evidence show --task <task_id> --ai`、`nilo review status --task <task_id> --format json`、`nilo roadmap status --project <project_id> --ai`、`nilo failure list --project <project_id>` を使います。
 証跡は消さず、completion / audit / evidence show 側で厳密性を維持します。compact AI context の文字数上限は `NILO_AI_CONTEXT_MAX_CHARS` で調整できます。この値は Nilo プロセス起動時に読み込まれます。
 
+## 人間向けビュー
+
+```bash
+nilo view
+```
+
+`nilo view` は、Nilo に残ったタスク、検証、レビュー、失敗ログ、タスク分析をブラウザで確認するための読み取り専用ローカルビューです。
+
+既定では `127.0.0.1:8765` にだけ公開され、DB への書き込みは行いません。ブラウザを自動で開かない場合は `--no-open`、ポートを変える場合は `--port`、概要 JSON だけを見る場合は `--format json` を使います。
+
 このリポジトリ自体のテストを実行する場合:
 
 ```bash

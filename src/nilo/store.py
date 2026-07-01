@@ -581,16 +581,22 @@ def default_db_path() -> Path:
 
 
 class Store:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, read_only: bool = False) -> None:
         self.path = path or default_db_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        backup_before_schema_migration(self.path)
-        self.conn = sqlite3.connect(self.path)
+        if read_only:
+            if not self.path.exists():
+                raise FileNotFoundError(f"Nilo DB not found: {self.path}")
+            self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            backup_before_schema_migration(self.path)
+            self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
         self.direct_write_warnings: list[dict[str, str]] = []
-        self.conn.executescript(SCHEMA)
-        self._migrate()
+        if not read_only:
+            self.conn.executescript(SCHEMA)
+            self._migrate()
 
     def close(self) -> None:
         self.conn.close()
