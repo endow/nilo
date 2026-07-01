@@ -379,9 +379,89 @@ instruction: Do work.
                 main(["recipe", "list", "--project", directory, "--format", "json"])
 
             recipes = json.loads(output.getvalue())
+            self.assertTrue(any(recipe["name"] == "bugfix" and recipe["layer"] == "builtin" for recipe in recipes))
             self.assertTrue(any(recipe["name"] == "basic-design" and recipe["layer"] == "builtin" for recipe in recipes))
             self.assertTrue(any(recipe["name"] == "docs-update" and recipe["layer"] == "builtin" for recipe in recipes))
             self.assertTrue(any(recipe["name"] == "focused-implementation" and recipe["layer"] == "builtin" for recipe in recipes))
+
+    def test_bugfix_recipe_exposes_evidence_contract(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["recipe", "show", "bugfix", "--project", directory, "--format", "json"])
+
+            recipe = json.loads(output.getvalue())
+            contract = recipe["data"]["completion_contract"]
+            evidence = [
+                "bug summary includes expected behavior and actual behavior",
+                "reproduction result or unreproducible reason is recorded",
+                "root cause is explained with referenced code, state, conditions, tests, or logs",
+                "changed files are listed with reasons",
+                "regression test or equivalent reproduction check is recorded",
+                "verification command output is recorded",
+                "lateral check result is recorded",
+            ]
+            self.assertEqual(recipe["name"], "bugfix")
+            self.assertEqual(recipe["title"], "不具合修正")
+            self.assertNotIn("required_evidence", contract)
+            self.assertEqual(contract["evidence"], evidence)
+
+    def test_bugfix_recipe_run_records_provenance_and_missing_evidence_warnings(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(["--db", str(db), "recipe", "run", "bugfix", "--project", root.name, "--type", "implementation", "--risk", "medium"])
+            finally:
+                os.chdir(previous_cwd)
+
+            task_id = task_output.getvalue().strip()
+            store = Store(db)
+            try:
+                task = store.get("tasks", task_id)
+                provenance = store.latest_for_task("recipe_task_provenance", task_id)
+                self.assertEqual(task["title"], "不具合修正")
+                self.assertIn("Recipe: bugfix", task["description"])
+                self.assertIn("bug summary includes expected behavior and actual behavior", task["description"])
+                self.assertIsNotNone(provenance)
+                self.assertEqual(provenance["recipe_name"], "bugfix")
+                self.assertEqual(provenance["source_layer"], "builtin")
+                self.assertEqual(
+                    provenance["recipe_snapshot"]["data"]["completion_contract"]["evidence"],
+                    [
+                        "bug summary includes expected behavior and actual behavior",
+                        "reproduction result or unreproducible reason is recorded",
+                        "root cause is explained with referenced code, state, conditions, tests, or logs",
+                        "changed files are listed with reasons",
+                        "regression test or equivalent reproduction check is recorded",
+                        "verification command output is recorded",
+                        "lateral check result is recorded",
+                    ],
+                )
+                self.assertNotIn("required_evidence", provenance["recipe_snapshot"]["data"]["completion_contract"])
+            finally:
+                store.close()
+
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "task", "status", "--task", task_id])
+
+            body = status_output.getvalue()
+            self.assertIn("bugfix (builtin layer)", body)
+            self.assertIn("missing completion_contract evidence: bug summary includes expected behavior and actual behavior", body)
+            self.assertIn("missing completion_contract evidence: lateral check result is recorded", body)
+
+    def test_recipe_run_unknown_bugfix_typo_fails_clearly(self) -> None:
+        with TemporaryDirectory() as directory:
+            with self.assertRaises(SystemExit) as raised:
+                main(["recipe", "run", "bug-fix", "--project", directory, "--dry-run"])
+            self.assertIn("recipe not found: bug-fix", str(raised.exception))
 
     def test_recipe_doctor_accepts_all_builtin_recipes(self) -> None:
         with TemporaryDirectory() as directory:

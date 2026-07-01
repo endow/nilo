@@ -1,0 +1,62 @@
+schema_version: 1
+name: bugfix
+title: 不具合修正
+summary: 不具合を再現し、原因を特定し、修正と再発防止テストを行うための標準レシピ。
+instruction: |
+  Evidence Before Trust に沿って、不具合修正を自己申告ではなく証跡で完了判定できる作業契約として進める。
+
+  基本フロー:
+  1. 不具合内容を確認し、期待挙動と実際の挙動を短く整理する。
+  2. 再現条件を確認し、再現手順、入力、期待値、実際の結果、exit code、関連ログを記録する。
+  3. 可能なら修正前に失敗する自動テストを追加する。重すぎる場合は最小再現コマンド、最小再現スクリプト、手動再現手順の順に証跡を残す。
+  4. 参照したファイル、関数、テスト、ログを根拠に原因を説明する。
+  5. 修正前に、どこを直すか、何を変えるか、何を変えないか、互換性への影響を整理する。
+  6. 原因に対応する最小変更で実装修正する。
+  7. 再発防止テスト、またはそれに相当する確認手順を追加・更新する。
+  8. 同じ関数、状態遷移、CLI引数処理、DB項目、表示ロジック、類似テストに同種問題がないか横展開確認する。
+  9. 対象テスト、関連テスト、CLIの最小確認、必要に応じた全体テストの順で検証する。
+  10. 必要証跡を完了報告に記録し、不足や懸念があれば reservations として残す。
+
+  Human gate が必要な場合:
+  - DB schema や migration が必要。
+  - 既存コマンドの意味、CLI出力の意味、既存データの解釈が変わる。
+  - 修正が仕様変更や広い設計変更を伴う。
+  - 再現不能のまま実装修正に進む必要がある。
+  - 原因候補が複数あり、判断が必要。
+acceptance:
+  - 不具合の内容が記録されている。
+  - 修正前の再現、または再現不能理由が記録されている。
+  - 原因が説明されている。
+  - 修正内容が原因に対応している。
+  - 再発防止テスト、または代替確認手順がある。
+  - 検証コマンドが実行されている。
+  - 横展開確認が行われている。
+  - 未解決の懸念がある場合は reservations として残っている。
+verification:
+  - command: "nilo check --task <task_id> \"<focused regression or reproduction verification command>\" --project {project_id} --mode targeted --timeout 120"
+    reason: "Record focused evidence that the bug no longer reproduces and the regression test or minimal reproduction now passes."
+  - command: "nilo status --project {project_id}"
+    reason: "Confirm Nilo state before reporting bugfix readiness."
+review:
+  required: false
+  focus:
+    - root cause accuracy
+    - regression test coverage
+    - lateral check scope
+completion_contract:
+  evidence:
+    - bug summary includes expected behavior and actual behavior
+    - reproduction result or unreproducible reason is recorded
+    - root cause is explained with referenced code, state, conditions, tests, or logs
+    - changed files are listed with reasons
+    - regression test or equivalent reproduction check is recorded
+    - verification command output is recorded
+    - lateral check result is recorded
+  completion_states:
+    - completed
+    - completed_with_reservations
+    - blocked
+tags:
+  - bugfix
+  - evidence
+stability: experimental
