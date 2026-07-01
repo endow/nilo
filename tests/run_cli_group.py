@@ -41,7 +41,12 @@ GROUPS = {
         "test_plain_task_*",
         "test_windows_*",
     ],
-    "recipe": ["test_recipe_*", "test_focused_implementation_recipe_*"],
+    "recipe": [
+        "test_recipe_*",
+        "test_bugfix_recipe_*",
+        "test_perf_recipe_*",
+        "test_focused_implementation_recipe_*",
+    ],
     "help": ["test_help_ai_*"],
     "status": [
         "test_daily_facade_*",
