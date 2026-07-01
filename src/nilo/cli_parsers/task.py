@@ -62,6 +62,14 @@ def register_task(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
     task_list.add_argument("--project", required=True)
     task_list.set_defaults(func=handlers.cmd_task_list)
 
+    task_analytics = task_sub.add_parser("analytics")
+    analytics_target = task_analytics.add_mutually_exclusive_group(required=True)
+    analytics_target.add_argument("--project")
+    analytics_target.add_argument("--task")
+    task_analytics.add_argument("--since", default="")
+    task_analytics.add_argument("--format", choices=["text", "json"], default="text")
+    task_analytics.set_defaults(func=handlers.cmd_task_analytics)
+
     task_split = task_sub.add_parser("split")
     task_split.add_argument("--task", required=True)
     task_split.set_defaults(func=handlers.cmd_task_split)

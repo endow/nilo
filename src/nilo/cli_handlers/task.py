@@ -12,6 +12,7 @@ from ..human_status import human_next_action_text
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
+from ..task_analytics import project_task_analytics, task_analytics
 from ..task_logic import active_task_completion, completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
 from ..transitions import TransitionError, complete_task, invalidate_task_completion
@@ -70,6 +71,134 @@ def cmd_task_start(args: argparse.Namespace) -> None:
     from .facade import cmd_facade_start
 
     cmd_facade_start(args)
+
+
+def cmd_task_analytics(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        if args.project:
+            data = project_task_analytics(store, args.project, since=args.since)
+            if args.format == "json":
+                print(json.dumps(data, ensure_ascii=False, indent=2))
+                return
+            print_project_task_analytics(data)
+            return
+        data = task_analytics(store, args.task)
+        if args.format == "json":
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return
+        print_single_task_analytics(data)
+    finally:
+        store.close()
+
+
+def print_project_task_analytics(data: dict) -> None:
+    summary = data["summary"]
+    verification = data["verification"]
+    review = data["review"]
+    failure = data["failure"]
+    task_design = data["task_design"]
+    title = f"Task analytics: {data['project_id']}"
+    if data.get("scope", {}).get("since"):
+        title += f" (since {data['scope']['since']})"
+    print(title)
+    print()
+    print("総評:")
+    print(f"- 完了: {summary['completed_count']} / {summary['task_count']}")
+    print(f"- 未完了: {summary['open_count']}")
+    print(f"- 予約付き完了: {summary['completed_with_reservations_count']}")
+    print(f"- 人間確認済み完了: {summary['human_confirmed_completion_count']}")
+    print(f"- 検証付き完了: {summary['completed_with_verification_count']}")
+    print(f"- レビュー付き完了: {summary['completed_with_review_count']}")
+    print(f"- 未解決レビュー指摘あり: {summary['open_blocking_review_finding_task_count']}")
+    print(f"- 未解決 failure log あり: {summary['open_failure_task_count']}")
+    print(f"- overdrive mode: {summary['overdrive_task_count']}")
+    print()
+    print("検証:")
+    print(f"- run: {verification['run_count']}")
+    print(f"- 成功 / 失敗 / timeout: {verification['passed_count']} / {verification['failed_count']} / {verification['timed_out_count']}")
+    print(f"- 検証なし完了: {len(verification['completed_without_verification_task_ids'])}")
+    print(f"- dirty snapshot: {len(verification['dirty_snapshot_task_ids'])}")
+    print_compact_command_list("timeout が多い command", verification["timeout_commands"], "timed_out_count")
+    print_compact_command_list("exit_code != 0 が多い command", verification["failed_commands"], "failed_count")
+    print()
+    print("レビュー:")
+    print(f"- 依頼 / 結果: {review['request_count']} / {review['result_count']}")
+    print(f"- verdict 分布: {format_counts(review['verdict_counts'])}")
+    print(f"- severity 分布: {format_counts(review['finding_severity_counts'])}")
+    print(f"- blocking / open / resolved findings: {review['blocking_finding_count']} / {review['open_finding_count']} / {review['resolved_finding_count']}")
+    print(f"- レビュー後に修正が発生したタスク: {len(review['tasks_with_post_review_updates'])}")
+    print()
+    print("失敗:")
+    print(f"- failure log: {failure['log_count']}")
+    print(f"- open / resolved: {failure['open_count']} / {failure['resolved_count']}")
+    print(f"- category 分布: {format_counts(failure['category_counts'])}")
+    print(f"- severity 分布: {format_counts(failure['severity_counts'])}")
+    print(f"- 同一 category が多いタスク: {len(failure['tasks_with_repeated_categories'])}")
+    print(f"- 最近の category: {format_counts(failure['recent_category_counts'])}")
+    print()
+    print("作業設計:")
+    print(f"- task_type 分布: {format_counts(task_design['task_type_counts'])}")
+    print(f"- risk_level 分布: {format_counts(task_design['risk_level_counts'])}")
+    print(f"- roadmap / 単発: {task_design['roadmap_task_count']} / {task_design['standalone_task_count']}")
+    print(f"- overdrive mode: {task_design['overdrive_task_count']}")
+    print(f"- requires_understanding_check: {task_design['requires_understanding_check_task_count']}")
+    print(f"- risk 別 failure: {format_counts(task_design['risk_failure_counts'])}")
+    print(f"- risk 別 review finding: {format_counts(task_design['risk_review_finding_counts'])}")
+
+
+def print_single_task_analytics(data: dict) -> None:
+    task = data["task"]
+    summary = data["summary"]
+    print(f"Task analytics: {task['id']} {task['title']}")
+    print()
+    print("総評:")
+    print(f"- 状態: {task['status']}")
+    print(f"- 種別 / リスク / mode: {task['task_type']} / {task['risk_level']} / {task['mode']}")
+    print(f"- roadmap_commitment_id: {task['roadmap_commitment_id'] or 'なし'}")
+    print(f"- 検証 run: {summary['verification_run_count']}")
+    print(f"- レビュー依頼 / 結果 / 指摘: {summary['review_request_count']} / {summary['review_result_count']} / {summary['review_finding_count']}")
+    print(f"- failure log: {summary['failure_log_count']} (open {summary['open_failure_log_count']})")
+    print(f"- completion / transition: {summary['completion_count']} / {summary['transition_count']}")
+    print()
+    print("検証:")
+    verification = data["verification"]
+    print(f"- 成功 / 失敗 / timeout: {verification['passed_count']} / {verification['failed_count']} / {verification['timed_out_count']}")
+    print(f"- dirty snapshot: {len(verification['dirty_snapshot_task_ids'])}")
+    print()
+    print("レビュー:")
+    review = data["review"]
+    print(f"- verdict 分布: {format_counts(review['verdict_counts'])}")
+    print(f"- severity 分布: {format_counts(review['finding_severity_counts'])}")
+    print(f"- blocking / open / resolved findings: {review['blocking_finding_count']} / {review['open_finding_count']} / {review['resolved_finding_count']}")
+    print()
+    print("失敗:")
+    failure = data["failure"]
+    print(f"- open / resolved: {failure['open_count']} / {failure['resolved_count']}")
+    print(f"- category 分布: {format_counts(failure['category_counts'])}")
+    print(f"- severity 分布: {format_counts(failure['severity_counts'])}")
+    print()
+    print("完了/遷移:")
+    for completion in data["completion"]["completions"] or []:
+        reservations = "yes" if completion["completed_with_reservations"] else "no"
+        human_confirmed = "yes" if completion["human_confirmed"] else "no"
+        print(f"- completion {completion['id']}: actor={completion['actor']} reservations={reservations} human_confirmed={human_confirmed}")
+    for transition in data["transitions"][:10]:
+        print(f"- transition {transition['transition']}: {transition['previous_state']} -> {transition['new_state']}")
+
+
+def print_compact_command_list(label: str, commands: list[dict], count_key: str) -> None:
+    if not commands:
+        print(f"- {label}: なし")
+        return
+    rendered = ", ".join(f"{item['command']} ({item[count_key]})" for item in commands[:3])
+    print(f"- {label}: {rendered}")
+
+
+def format_counts(counts: dict) -> str:
+    if not counts:
+        return "なし"
+    return ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
 
 
 def cmd_task_status(args: argparse.Namespace) -> None:

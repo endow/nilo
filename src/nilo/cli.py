@@ -512,6 +512,7 @@ from .cli_handlers.roadmap import (
 from .cli_handlers.task import (
     cmd_evidence_show,
     cmd_review_show,
+    cmd_task_analytics,
     cmd_task_complete,
     cmd_task_completion_invalidate,
     cmd_task_create,
