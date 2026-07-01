@@ -1,32 +1,30 @@
 schema_version: 1
 name: release
-title: Release {target_version}
-summary: Prepare a Nilo release with version updates, verification, and an approval-gated GitHub release.
+title: リリース {target_version}
+summary: バージョン更新、検証、人間承認ゲート付きの GitHub release までを Nilo リリースとして準備する。
 instruction: |
-  Prepare the requested release version in a narrow, auditable scope.
+  指定されたリリースバージョンを、狭く監査しやすい範囲で準備する。
 
-  Update all project-owned version sources for {target_version}. Check for stale
-  references to the previous release number, update release-facing documentation
-  when needed, and keep unrelated implementation changes out of the task.
+  プロジェクトが管理する version source を {target_version} に更新する。前回リリース番号の
+  古い参照が残っていないか確認し、必要に応じてリリース向けドキュメントを更新する。
+  無関係な実装変更はこのタスクに含めない。
 
-  Prepare local release evidence, a suggested tag, GitHub release execution, and a
-  release notes draft. The release notes draft must include a
-  Japanese section first and an English section second, using the headings
-  "リリースノート（日本語）" and "Release Notes (English)" without labeling the
-  sections as proposals. Here, draft means pre-human-gate handoff content, not
-  tentative wording inside the release notes. Treat GitHub publication as a
-  human gate: the agent must not commit, tag, push, create a GitHub release, or
-  use force options unless the human explicitly asks for that exact action. After
-  explicit approval, the agent should use Nilo's release public-operation execution
-  path instead of handing the tag, push, and GitHub release creation steps back to
-  the human.
+  ローカルのリリース証跡、推奨 tag、GitHub release 実行、リリースノート草稿を準備する。
+  リリースノート草稿は、"リリースノート（日本語）" を先に、"Release Notes (English)" を
+  後に置く。各セクションを提案としてラベル付けしない。ここでの草稿は人間承認ゲート前の
+  引き渡し内容を指し、リリースノート本文を暫定表現にするという意味ではない。
+
+  GitHub 公開は human gate として扱う。人間がその操作を明示的に依頼しない限り、
+  agent は commit、tag、push、GitHub release 作成、force option 使用を行わない。
+  明示承認後は、tag、push、GitHub release 作成手順を人間に戻すのではなく、
+  Nilo の release public-operation 実行経路を使う。
 acceptance:
-  - Project version sources are updated to {target_version}.
-  - Builtin recipes and release documentation remain valid after the change.
-  - Verification evidence includes the test suite or a documented reason it was not run.
-  - Release notes draft covers notable changes, verification, and upgrade/install notes when relevant.
-  - Release notes draft is written in Japanese first and English second for GitHub release execution.
-  - GitHub release next steps remain approval-gated, and approved tag, push, and release creation actions can be executed by Nilo.
+  - プロジェクトの version source が {target_version} に更新されている。
+  - 変更後も builtin recipe とリリースドキュメントが有効である。
+  - 検証証跡にテストスイート、または未実行理由が記録されている。
+  - リリースノート草稿に、主な変更、検証、必要な upgrade/install notes が含まれている。
+  - GitHub release 実行用のリリースノート草稿が日本語先、英語後で書かれている。
+  - GitHub release の次手順は承認ゲート付きで、承認済みの tag、push、release 作成を Nilo が実行できる。
 variables:
   target_version:
     type: string
@@ -46,11 +44,11 @@ review:
     - GitHub human gates
 completion_contract:
   evidence:
-    - changed files are listed
-    - version check output is recorded
-    - verification command output is recorded
-    - release notes draft text is included with Japanese first and English second
-    - GitHub release execution notes are included
+    - 変更ファイル一覧が記録されている
+    - version 確認結果が記録されている
+    - 検証コマンド出力が記録されている
+    - 日本語先、英語後のリリースノート草稿本文が含まれている
+    - GitHub release 実行メモが含まれている
 tags:
   - release
   - github

@@ -158,7 +158,7 @@ class CliGitIntegrationTests(unittest.TestCase):
             self.assertIn("現在バージョン: 0.1.9", body)
             self.assertIn("最新タグ: v0.1.9", body)
             self.assertIn("推奨: 0.1.10 (patch)", body)
-            self.assertIn("title: Release 0.1.10", body)
+            self.assertIn("title: リリース 0.1.10", body)
             self.assertNotIn("どの target_version", body)
 
     def test_release_recipe_requires_explicit_target_version_without_semver_tag(self) -> None:
@@ -213,7 +213,7 @@ class CliGitIntegrationTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
             body = output.getvalue()
-            self.assertIn("title: Release 0.2.0", body)
+            self.assertIn("title: リリース 0.2.0", body)
             self.assertNotIn("推奨:", body)
 
     def test_release_recipe_minor_advice_output_does_not_ask_question(self) -> None:

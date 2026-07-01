@@ -206,6 +206,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_release_recipe_run_records_task_content_in_japanese(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                task_id = output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    task = store.get("tasks", task_id)
+                    self.assertEqual(task["title"], "リリース 0.3.1")
+                    self.assertIn("指定されたリリースバージョン", task["description"])
+                    self.assertIn("プロジェクトの version source が 0.3.1 に更新されている。", task["acceptance_criteria"])
+                    self.assertNotIn("Prepare the requested release version", task["description"])
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
     def test_task_complete_commit_keeps_verified_dirty_tree_evidence_current(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
