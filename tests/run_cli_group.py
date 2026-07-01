@@ -78,7 +78,7 @@ GROUPS = {
     "project": ["test_project_*"],
     "report": ["test_report_*", "test_rules_*", "test_successful_reports_*"],
     "store": ["test_store_*"],
-    "task": ["test_task_*", "test_latest_*", "test_base_commit_*", "test_outcome_*"],
+    "task": ["test_task_*", "test_latest_*", "test_base_commit_*", "test_outcome_*", "test_japanese_project_task_creation_*"],
     "quality": ["test_quality_*"],
     "review-core": [
         "test_review_import_*",
