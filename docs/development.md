@@ -1,0 +1,61 @@
+# 開発者向け手順
+
+ここは Nilo 本体を開発する人向けです。通常利用では読む必要はありません。
+
+## CLI help
+
+```bash
+nilo --help
+nilo start --help
+nilo check --help
+nilo review --help
+nilo roadmap --help
+```
+
+## テスト方針
+
+テストは目的に合わせて `quick` / `targeted` / `full` を選びます。Timeout は選んだ範囲の保険であり、全体テストを常用するための前提ではありません。
+
+```bash
+nilo check --task <task_id> "python -m unittest tests.test_verification" --project nilo --mode quick --timeout 60
+nilo check --task <task_id> "python tests/run_cli_group.py verification" --project nilo --mode targeted --timeout 120
+nilo check --task <task_id> "python tests/run_shards.py --all --jobs auto" --project nilo --mode full --timeout 300
+```
+
+`quick` は狭い smoke check、`targeted` は変更領域や `tests.test_cli` の一部、`full` は release や広範囲の変更で使います。
+
+`nilo check` は原則 `--task` を付けて実行します。省略できるのは、安全に一意な未完了 verification target が 1 件だけの場合です。
+
+## 変更中の確認
+
+```bash
+python tests/run_shards.py --changed --jobs auto
+nilo test plan --changed
+nilo test run --changed
+```
+
+## 完了判断前
+
+全テスト相当を shard 並列で実行します。結果は `.nilo/test-runs/<run_id>/summary.json` と shard ごとの stdout / stderr log に保存され、失敗時は failed shard と再実行コマンドが表示されます。
+
+```bash
+python tests/run_shards.py --all --jobs auto
+nilo test run --full
+nilo test rerun-failed <run_id-or-summary-json>
+```
+
+従来の直列実行も互換用に残しています。
+
+```bash
+python -m unittest discover tests
+```
+
+`tests.test_cli` の focused group は helper で実行できます。
+
+```bash
+python tests/run_cli_group.py review
+python tests/run_cli_group.py verification
+python tests/run_cli_group.py roadmap
+```
+
+設計の詳細は [design.md](design.md) を参照してください。
