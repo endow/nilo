@@ -103,7 +103,7 @@ Next step: address that finding.
 nilo view
 ```
 
-`nilo view` opens a read-only local browser view for tasks, verification, reviews, failure logs, and task analysis. By default it binds only to `127.0.0.1:8765` and does not write to the DB.
+`nilo view` opens a read-only local browser view for tasks, verification, reviews, failure logs, and task analysis. 
 
 ## Recipes / Roadmaps / Overdrive
 
