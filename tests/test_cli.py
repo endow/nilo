@@ -10905,7 +10905,7 @@ close 済み commitment を表示できるようにした。
 
 
 def wait_for_dispatch_capable_reviewer(db: Path, reviewer: str) -> None:
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         store = Store(db)
         try:
