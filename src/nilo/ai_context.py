@@ -50,8 +50,8 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snap
     if evidence == "missing" and latest_report:
         evidence = "present"
     unresolved = unresolved_review_findings(store, task_id)
-    status = projected_task_status(store, task, current_snapshot=snapshot)
     latest_event = store.latest_task_status_event(task_id)
+    status = projected_task_status(store, task, current_snapshot=snapshot, latest_event=latest_event)
     latest_event_id = latest_event["event_id"] if latest_event else ""
     unexecuted = p.unexecuted_verifications_for_task(status, verification_run)
     next_actions = p.task_next_actions(task, status, verification_run, unexecuted)
@@ -124,23 +124,25 @@ def project_ai_context(
     project = store.get("projects", project_id)
     if not project:
         raise ValueError(f"project not found: {project_id}")
-    tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
-    active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
-    design_residue = p.project_design_residue()
-    commitments = p.accepted_roadmap_commitments(store, project_id)
-    pending_revisions = p.pending_roadmap_revisions(store, project_id)
-    failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
     workflow = workflow_context(store, project_id)
+    tasks: list[dict] = []
+    statuses: dict[str, str] = {}
     if workflow.get("type") == "recipe_run" and workflow.get("task_id"):
         current = task_ai_context(store, workflow["task_id"], cwd=cwd, snapshot_mode=snapshot_mode)
     else:
+        tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
+        active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
         current = task_ai_context(store, active[0]["id"], cwd=cwd, snapshot_mode=snapshot_mode) if active else None
     if workflow.get("type") == "recipe_run":
         next_actions = workflow_next_actions(workflow)
     elif current:
         next_actions = current["next_required_actions"]
     else:
+        design_residue = p.project_design_residue()
+        commitments = p.accepted_roadmap_commitments(store, project_id)
+        pending_revisions = p.pending_roadmap_revisions(store, project_id)
         next_actions = p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
+    failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
     verbose_context = {
         "project_id": project_id,
         "project_name": project["name"],

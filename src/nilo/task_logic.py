@@ -17,8 +17,8 @@ def outcome_status(decision: str) -> str:
     }.get(decision, "reviewed_by_user")
 
 
-def projected_task_status(store, task: dict, *, current_snapshot: dict | None = None) -> str:
-    latest = store.latest_task_status_event(task["id"])
+def projected_task_status(store, task: dict, *, current_snapshot: dict | None = None, latest_event: dict | None = None) -> str:
+    latest = latest_event if latest_event is not None else store.latest_task_status_event(task["id"])
     if not latest:
         return task["status"]
     if latest["source"] == "completion":

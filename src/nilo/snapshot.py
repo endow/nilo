@@ -68,8 +68,10 @@ class SnapshotHashResult:
 def current_git_snapshot(cwd: Path, mode: str = SNAPSHOT_MODE_FULL) -> dict[str, Any]:
     if mode not in {SNAPSHOT_MODE_FULL, SNAPSHOT_MODE_FAST}:
         raise ValueError(f"unknown git snapshot mode: {mode}")
-    code, inside, _ = git_output(["rev-parse", "--is-inside-work-tree"], cwd)
-    if code != 0 or inside.strip().lower() != "true":
+
+    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "no"
+    status_code, status, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", f"--untracked-files={untracked}"], cwd)
+    if status_code != 0:
         return {
             "git_head": None,
             "git_diff_hash": "",
@@ -81,10 +83,6 @@ def current_git_snapshot(cwd: Path, mode: str = SNAPSHOT_MODE_FULL) -> dict[str,
             "git_diff_hash_computed": False,
         }
 
-    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "no"
-    status_code, status, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", f"--untracked-files={untracked}"], cwd)
-    if status_code != 0:
-        status = ""
     paths = sorted({path for line in status.splitlines() if (path := porcelain_path(line).replace("\\", "/"))})
     if mode == SNAPSHOT_MODE_FAST:
         return {
