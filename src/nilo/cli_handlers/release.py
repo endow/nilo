@@ -134,7 +134,7 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
             raise SystemExit(f"release {verification_mode} check failed; release recipe paused_for_fix")
 
         pre_commit_snapshot = current_git_snapshot(cwd)
-        reuse_after_commit = verification_row.get("snapshot_relation") == "verified_dirty_tree_committed"
+        reuse_after_commit = verification_row.get("snapshot_relation") in {"verified_dirty_tree_committed", "release_metadata_only_changes"}
         if not reuse_after_commit and not _release_snapshot_matches_verification(verification_row, pre_commit_snapshot, cwd):
             raise SystemExit("verification snapshot changed before commit; rerun release prepare")
         dirty_files = _git_changed_files(cwd)
@@ -425,6 +425,9 @@ def reusable_full_verification_for_release(store: Store, task_id: str, cwd: Path
         relation = _verified_dirty_tree_committed_relation(cwd, verification, current)
         if relation:
             return {**verification, **relation}
+        relation = _release_metadata_only_relation(cwd, verification, current, target_version=target_version)
+        if relation:
+            return {**verification, **relation}
     return None
 
 
@@ -452,6 +455,88 @@ def _verified_dirty_tree_committed_relation(cwd: Path, verification: dict[str, A
         "commit_sha": current.get("git_head") or "",
         "snapshot_relation": "verified_dirty_tree_committed",
     }
+
+
+def _release_metadata_only_relation(cwd: Path, verification: dict[str, Any], current: dict[str, Any], *, target_version: str) -> dict[str, Any] | None:
+    verified_head = verification.get("git_head") or ""
+    if not verified_head:
+        return None
+    if not release_only_non_execution_changes(cwd, target_version, verified_head):
+        return None
+    return {
+        "reuse_reason": "release_metadata_only_changes",
+        "snapshot_relation": "release_metadata_only_changes",
+        "release_metadata_only_base": verified_head,
+        "commit_sha": current.get("git_head") or "",
+    }
+
+
+def release_only_non_execution_changes(cwd: Path, target_version: str, base_ref: str, head_ref: str | None = None) -> bool:
+    changed_paths = _release_changed_paths_between(cwd, base_ref, head_ref)
+    if not changed_paths:
+        return False
+    release_note = f"docs/releases/{target_version.lstrip('v')}.md"
+    allowed_paths = {release_note, "pyproject.toml", "src/nilo/__init__.py"}
+    if any(path not in allowed_paths for path in changed_paths):
+        return False
+    for path in changed_paths:
+        if path == release_note:
+            if _release_path_bytes(cwd, head_ref, path) is None:
+                return False
+            continue
+        old_text = _release_path_text(cwd, base_ref, path)
+        new_text = _release_path_text(cwd, head_ref, path)
+        if old_text is None or new_text is None:
+            return False
+        if path == "pyproject.toml" and not _only_matching_lines_changed(old_text, new_text, r"^version\s*="):
+            return False
+        if path == "src/nilo/__init__.py" and not _only_matching_lines_changed(old_text, new_text, r"^__version__\s*="):
+            return False
+    return True
+
+
+def _release_changed_paths_between(cwd: Path, base_ref: str, head_ref: str | None) -> set[str]:
+    args = ["diff", "--name-only", base_ref]
+    if head_ref is not None:
+        args.append(head_ref)
+    code, out, _ = _git_output(cwd, args)
+    if code != 0:
+        return set()
+    paths = {line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()}
+    if head_ref is None:
+        code, out, _ = _git_output(cwd, ["ls-files", "--others", "--exclude-standard"])
+        if code == 0:
+            paths.update(line.strip().replace("\\", "/") for line in out.splitlines() if line.strip())
+    return {path for path in paths if not _release_ignored_dirty_path(path)}
+
+
+def _release_path_text(cwd: Path, ref: str | None, path: str) -> str | None:
+    content = _release_path_bytes(cwd, ref, path)
+    if content is None:
+        return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _release_path_bytes(cwd: Path, ref: str | None, path: str) -> bytes | None:
+    if ref is None:
+        file_path = cwd / path
+        return file_path.read_bytes() if file_path.is_file() else None
+    completed = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def _only_matching_lines_changed(old_text: str, new_text: str, pattern: str) -> bool:
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    if len(old_lines) != len(new_lines):
+        return False
+    changed = [(old, new) for old, new in zip(old_lines, new_lines) if old != new]
+    if not changed:
+        return False
+    return all(re.match(pattern, old) and re.match(pattern, new) for old, new in changed)
 
 
 def _release_snapshot_matches_verification(verification: dict[str, Any], current: dict[str, Any], cwd: Path) -> bool:

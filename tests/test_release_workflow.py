@@ -265,6 +265,91 @@ class ReleaseWorkflowTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_release_prepare_reuses_full_check_for_release_metadata_only_changes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                store = Store(db)
+                try:
+                    task_id = workflow_context(store, root.name)["task_id"]
+                    store.insert("verification_runs", full_release_verification_row(task_id, root))
+                finally:
+                    store.close()
+
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification") as verification_check, patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                text = output.getvalue()
+                verification_check.assert_not_called()
+                self.assertIn("verification_reused: release_metadata_only_changes", text)
+                self.assertIn("full_check: reused", text)
+                self.assertNotIn("changed_check:", text)
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    self.assertEqual(context["status"], "waiting_public_approval")
+                    metadata = store.get("recipe_runs", context["recipe_run_id"])["metadata"]
+                    self.assertTrue(metadata["post_commit_full_check_reused"])
+                    self.assertEqual(metadata["release_prepare_check_mode"], "full")
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_only_non_execution_changes_allows_release_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            base = run_git(root, "rev-parse", "HEAD")
+
+            root.joinpath("docs/releases").mkdir(parents=True)
+            root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+            self.assertTrue(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
+            run_git(root, "add", "docs/releases/0.3.1.md")
+            run_git(root, "commit", "-m", "Add release notes")
+            base = run_git(root, "rev-parse", "HEAD")
+            root.joinpath("pyproject.toml").write_text('[project]\nname = "nilo"\nversion = "0.3.1"\n', encoding="utf-8")
+            self.assertTrue(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
+            run_git(root, "add", "pyproject.toml")
+            run_git(root, "commit", "-m", "Update pyproject version")
+            base = run_git(root, "rev-parse", "HEAD")
+            root.joinpath("src/nilo/__init__.py").write_text('__version__ = "0.3.1"\n', encoding="utf-8")
+            self.assertTrue(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
+    def test_release_only_non_execution_changes_rejects_execution_changes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            base = run_git(root, "rev-parse", "HEAD")
+
+            root.joinpath("pyproject.toml").write_text(
+                '[project]\nname = "nilo"\nversion = "0.3.1"\ndependencies = ["pytest"]\n',
+                encoding="utf-8",
+            )
+            self.assertFalse(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
+            run_git(root, "checkout", "--", "pyproject.toml")
+            root.joinpath("src/nilo/runtime.py").write_text("print('changed')\n", encoding="utf-8")
+            self.assertFalse(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
+            root.joinpath("src/nilo/runtime.py").unlink()
+            root.joinpath("tests").mkdir(exist_ok=True)
+            root.joinpath("tests/test_runtime.py").write_text("def test_runtime():\n    assert True\n", encoding="utf-8")
+            self.assertFalse(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
     def test_release_prepare_rejects_target_version_mismatch_for_active_run(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
