@@ -4628,6 +4628,86 @@ completed criterion を満たした。
             self.assertEqual(summary["roadmap_agent_state"]["work_status"], "task_plan_required")
             self.assertEqual(summary["active_tasks"][0]["id"], "task_unrelated")
 
+    def test_project_next_prioritizes_active_tasks_for_accepted_commitment(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# Current Commitment
+
+## Success Criteria
+- related work is preferred
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_old", "--title", "Old unrelated task"])
+                imported = io.StringIO()
+                with redirect_stdout(imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in imported.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                commitment_id = next(
+                    line.split(": ", 1)[1]
+                    for line in imported.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_related",
+                        "--title",
+                        "Related current commitment task",
+                        "--commitment",
+                        commitment_id,
+                    ]
+                )
+
+            summary_output = io.StringIO()
+            with redirect_stdout(summary_output):
+                main(["--db", str(db), "project", "summary", "--project", "project_test", "--format", "json"])
+            summary = json.loads(summary_output.getvalue())
+            self.assertEqual(summary["roadmap_agent_state"]["commitment_id"], commitment_id)
+            self.assertEqual(summary["active_tasks"][0]["id"], "task_related")
+            self.assertTrue(summary["next_actions"][0].startswith("task_related: "))
+            self.assertNotIn("nilo roadmap import", summary["next_actions"][0])
+            self.assertNotIn("nilo roadmap accept", summary["next_actions"][0])
+
+            status_output = io.StringIO()
+            with redirect_stdout(status_output):
+                main(["--db", str(db), "project", "status", "--project", "project_test", "--verbose"])
+            status_body = status_output.getvalue()
+            self.assertIn("- task_related [planned] implementation medium Related current commitment task", status_body)
+            self.assertLess(status_body.index("- task_related [planned]"), status_body.index("- task_old [planned]"))
+            self.assertIn("task_related: run nilo instruct --task task_related", status_body)
+
+            fast_status_output = io.StringIO()
+            with redirect_stdout(fast_status_output):
+                main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+            fast_status_body = fast_status_output.getvalue()
+            self.assertIn("active_task: task_related [planned] Related current commitment task", fast_status_body)
+            self.assertNotIn("active_task: task_old", fast_status_body)
+
+            next_output = io.StringIO()
+            with redirect_stdout(next_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            next_body = next_output.getvalue()
+            self.assertIn("タスク: task_related", next_body)
+            self.assertNotIn("タスク: task_old", next_body)
+
     def test_roadmap_discuss_warning_uses_revision_source_path_status(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

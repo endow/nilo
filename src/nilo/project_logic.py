@@ -600,6 +600,37 @@ def ordered_roadmap_commitments(store: Store, commitments: list[dict], tasks: li
     return [selected, *[commitment for commitment in commitments if commitment["id"] != selected["id"]]]
 
 
+def active_roadmap_commitment(commitments: list[dict], tasks: list[dict], statuses: dict[str, str]) -> dict | None:
+    for commitment in commitments:
+        related = related_tasks_for_commitment(tasks, commitment)
+        if any(not is_task_completed_status(statuses[task["id"]]) for task in related):
+            return commitment
+    return commitments[0] if commitments else None
+
+
+def roadmap_prioritized_active_tasks(
+    tasks: list[dict],
+    statuses: dict[str, str],
+    commitments: list[dict],
+) -> list[dict]:
+    active_tasks = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    commitment = active_roadmap_commitment(commitments, tasks, statuses)
+    if not commitment:
+        return active_tasks
+
+    related_ids = {task["id"] for task in related_tasks_for_commitment(tasks, commitment)}
+    if not related_ids:
+        return active_tasks
+
+    return [
+        task
+        for _, task in sorted(
+            enumerate(active_tasks),
+            key=lambda item: (0 if item[1]["id"] in related_ids else 1, item[0]),
+        )
+    ]
+
+
 def roadmap_discussion_path_for_project(project_id: str) -> str:
     return f".nilo/roadmap/{project_id}/roadmap_discussion.md"
 
@@ -800,7 +831,7 @@ def project_level_next_actions(
     pending_revisions: list[dict],
     project_id: str,
 ) -> list[str]:
-    active_tasks = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    active_tasks = roadmap_prioritized_active_tasks(tasks, statuses, commitments)
     if active_tasks:
         actions = []
         for task in active_tasks[:3]:
@@ -1747,16 +1778,16 @@ def project_design_residue(cwd: Path | None = None) -> list[dict]:
 
 
 def project_summary_data(store: Store, project: dict, tasks: list[dict], statuses: dict[str, str]) -> dict:
-    active_tasks = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
-    active_summaries = []
-    unexecuted = []
-    design_residue = project_design_residue()
     commitments = ordered_roadmap_commitments(
         store,
         accepted_roadmap_commitments(store, project["id"]),
         tasks,
         statuses,
     )
+    active_tasks = roadmap_prioritized_active_tasks(tasks, statuses, commitments)
+    active_summaries = []
+    unexecuted = []
+    design_residue = project_design_residue()
     closed_commitments = closed_roadmap_commitments(store, project["id"])
     pending_revisions = pending_roadmap_revision_summaries(store, project["id"])
     for task in active_tasks:

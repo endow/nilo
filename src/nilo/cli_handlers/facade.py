@@ -37,16 +37,16 @@ def default_project_id(args: argparse.Namespace) -> str:
 
 
 def active_tasks_for_project(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
+    from .. import project_logic as p
+
     tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
-    return [task for task in tasks if not is_task_completed_status(statuses[task["id"]])], statuses
+    commitments = p.ordered_roadmap_commitments(store, p.accepted_roadmap_commitments(store, project_id), tasks, statuses)
+    return p.roadmap_prioritized_active_tasks(tasks, statuses, commitments), statuses
 
 
 def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
-    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
-    for task in tasks:
-        if not is_task_completed_status(statuses[task["id"]]):
-            return task
-    return None
+    active_tasks, _ = active_tasks_for_project(store, project_id)
+    return active_tasks[0] if active_tasks else None
 
 
 def unresolved_project_state(store: Store, project_id: str, *, verbose: bool = False) -> dict:
@@ -271,6 +271,16 @@ def _fast_active_tasks_and_statuses(store: Store, project_id: str, *, limit: int
                 WHERE c.task_id=t.id AND COALESCE(c.invalidated_at, '')=''
               )
             ORDER BY
+              CASE
+                WHEN EXISTS (
+                  SELECT 1
+                  FROM roadmap_commitments rc
+                  WHERE rc.project_id=t.project_id
+                    AND rc.status='accepted'
+                    AND rc.id=t.roadmap_commitment_id
+                ) THEN -1
+                ELSE 0
+              END,
               CASE t.task_type
                 WHEN 'implementation' THEN 0
                 WHEN 'verification' THEN 1
