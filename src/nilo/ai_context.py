@@ -131,13 +131,7 @@ def project_ai_context(
         current = task_ai_context(store, workflow["task_id"], cwd=cwd, snapshot_mode=snapshot_mode)
     else:
         tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
-        commitments = p.ordered_roadmap_commitments(
-            store,
-            p.accepted_roadmap_commitments(store, project_id),
-            tasks,
-            statuses,
-        )
-        active = p.roadmap_prioritized_active_tasks(tasks, statuses, commitments)
+        active, _ = p.roadmap_prioritized_project_active_tasks(store, project_id, tasks, statuses)
         current = task_ai_context(store, active[0]["id"], cwd=cwd, snapshot_mode=snapshot_mode) if active else None
     if workflow.get("type") == "recipe_run":
         next_actions = workflow_next_actions(workflow)

@@ -32,20 +32,14 @@ def cmd_project_status(args: argparse.Namespace) -> None:
         if not project:
             raise SystemExit(f"project not found: {args.project}")
         tasks, statuses = c.project_tasks_and_statuses(store, args.project)
-        design_residue = c.project_design_residue()
-        commitments = c.ordered_roadmap_commitments(
-            store,
-            c.accepted_roadmap_commitments(store, project["id"]),
-            tasks,
-            statuses,
-        )
-        active_tasks = c.roadmap_prioritized_active_tasks(tasks, statuses, commitments)
+        active_tasks, commitments = c.roadmap_prioritized_project_active_tasks(store, project["id"], tasks, statuses)
         if not getattr(args, "verbose", False):
             c.print_human_project_status(store, project, active_tasks, statuses)
             return
 
         print(f"project_id: {project['id']}")
         print(f"project_name: {project['name']}")
+        design_residue = c.project_design_residue()
         pending_revisions = c.pending_roadmap_revisions(store, project["id"])
         print(f"roadmap_position: {c.project_roadmap_position(tasks, statuses, design_residue, commitments)}")
         print(f"work_state: {c.project_work_state(tasks, statuses)}")

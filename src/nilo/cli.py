@@ -449,7 +449,7 @@ from .project_logic import (
     roadmap_assessments,
     roadmap_commitment_assessment,
     roadmap_proposal_path_for_commitment,
-    roadmap_prioritized_active_tasks,
+    roadmap_prioritized_project_active_tasks,
     roadmap_task_evidence,
     task_next_actions,
     task_status_counts,

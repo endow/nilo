@@ -4708,6 +4708,119 @@ completed criterion を満たした。
             self.assertIn("タスク: task_related", next_body)
             self.assertNotIn("タスク: task_old", next_body)
 
+    def test_active_task_priority_matches_across_surfaces_with_multiple_commitments(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            first_proposal = root / "first.md"
+            second_proposal = root / "second.md"
+            first_proposal.write_text(
+                """# First Accepted Commitment
+
+## Success Criteria
+- first related work is preferred
+""",
+                encoding="utf-8",
+            )
+            second_proposal.write_text(
+                """# Second Accepted Commitment
+
+## Success Criteria
+- second related work exists
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+
+                first_imported = io.StringIO()
+                with redirect_stdout(first_imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(first_proposal)])
+                first_revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in first_imported.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                first_commitment_id = next(
+                    line.split(": ", 1)[1]
+                    for line in first_imported.getvalue().splitlines()
+                    if line.startswith("proposed_commitment: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", first_revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "first"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_first_fk",
+                        "--title",
+                        "First FK task",
+                        "--commitment",
+                        first_commitment_id,
+                    ]
+                )
+
+                second_imported = io.StringIO()
+                with redirect_stdout(second_imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(second_proposal)])
+                second_revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in second_imported.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                main(["--db", str(db), "roadmap", "accept", "--revision", second_revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "second"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_second_text",
+                        "--title",
+                        "Implement Second Accepted Commitment follow-up",
+                    ]
+                )
+
+            for command in (
+                ["project", "summary", "--project", "project_test", "--format", "json"],
+                ["status", "--ai", "--project", "project_test"],
+                ["status", "--project", "project_test"],
+                ["next", "--project", "project_test"],
+            ):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), *command])
+                body = output.getvalue()
+                if command[0] == "project":
+                    summary = json.loads(body)
+                    self.assertEqual(summary["active_tasks"][0]["id"], "task_second_text")
+                    self.assertTrue(summary["next_actions"][0].startswith("task_second_text: "))
+                else:
+                    self.assertIn("task_second_text", body)
+                    self.assertNotIn("active_task: task_first_fk", body)
+
+    def test_project_status_nonverbose_skips_design_residue_read(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_active", "--title", "Active task"])
+
+            output = io.StringIO()
+            with patch("nilo.project_logic.project_design_residue", side_effect=AssertionError("unexpected design residue read")):
+                with redirect_stdout(output):
+                    main(["--db", str(db), "project", "status", "--project", "project_test"])
+
+            self.assertIn("Active task", output.getvalue())
+
     def test_roadmap_discuss_warning_uses_revision_source_path_status(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -622,13 +622,22 @@ def roadmap_prioritized_active_tasks(
     if not related_ids:
         return active_tasks
 
-    return [
-        task
-        for _, task in sorted(
-            enumerate(active_tasks),
-            key=lambda item: (0 if item[1]["id"] in related_ids else 1, item[0]),
-        )
-    ]
+    return sorted(active_tasks, key=lambda task: 0 if task["id"] in related_ids else 1)
+
+
+def roadmap_prioritized_project_active_tasks(
+    store: Store,
+    project_id: str,
+    tasks: list[dict],
+    statuses: dict[str, str],
+) -> tuple[list[dict], list[dict]]:
+    commitments = ordered_roadmap_commitments(
+        store,
+        accepted_roadmap_commitments(store, project_id),
+        tasks,
+        statuses,
+    )
+    return roadmap_prioritized_active_tasks(tasks, statuses, commitments), commitments
 
 
 def roadmap_discussion_path_for_project(project_id: str) -> str:
@@ -1778,13 +1787,7 @@ def project_design_residue(cwd: Path | None = None) -> list[dict]:
 
 
 def project_summary_data(store: Store, project: dict, tasks: list[dict], statuses: dict[str, str]) -> dict:
-    commitments = ordered_roadmap_commitments(
-        store,
-        accepted_roadmap_commitments(store, project["id"]),
-        tasks,
-        statuses,
-    )
-    active_tasks = roadmap_prioritized_active_tasks(tasks, statuses, commitments)
+    active_tasks, commitments = roadmap_prioritized_project_active_tasks(store, project["id"], tasks, statuses)
     active_summaries = []
     unexecuted = []
     design_residue = project_design_residue()

@@ -40,8 +40,8 @@ def active_tasks_for_project(store: Store, project_id: str) -> tuple[list[dict],
     from .. import project_logic as p
 
     tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
-    commitments = p.ordered_roadmap_commitments(store, p.accepted_roadmap_commitments(store, project_id), tasks, statuses)
-    return p.roadmap_prioritized_active_tasks(tasks, statuses, commitments), statuses
+    active_tasks, _ = p.roadmap_prioritized_project_active_tasks(store, project_id, tasks, statuses)
+    return active_tasks, statuses
 
 
 def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
@@ -254,60 +254,10 @@ def _fast_todo_counts(store: Store, project_id: str) -> dict[str, int]:
 
 
 def _fast_active_tasks_and_statuses(store: Store, project_id: str, *, limit: int = 3) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    statuses: dict[str, str] = {}
-    active_tasks = []
-    offset = 0
-    batch_size = max(limit * 4, 12)
-    while len(active_tasks) < limit:
-        rows = store.conn.execute(
-            """
-            SELECT *
-            FROM tasks t
-            WHERE t.project_id=?
-              AND t.status NOT IN ('completed_by_ai', 'completed_by_user')
-              AND NOT EXISTS (
-                SELECT 1
-                FROM task_completions c
-                WHERE c.task_id=t.id AND COALESCE(c.invalidated_at, '')=''
-              )
-            ORDER BY
-              CASE
-                WHEN EXISTS (
-                  SELECT 1
-                  FROM roadmap_commitments rc
-                  WHERE rc.project_id=t.project_id
-                    AND rc.status='accepted'
-                    AND rc.id=t.roadmap_commitment_id
-                ) THEN -1
-                ELSE 0
-              END,
-              CASE t.task_type
-                WHEN 'implementation' THEN 0
-                WHEN 'verification' THEN 1
-                WHEN 'review' THEN 2
-                WHEN 'design' THEN 3
-                WHEN 'research' THEN 4
-                WHEN 'documentation' THEN 5
-                ELSE 6
-              END,
-              t.created_at ASC,
-              t.rowid ASC
-            LIMIT ? OFFSET ?
-            """,
-            (project_id, batch_size, offset),
-        ).fetchall()
-        if not rows:
-            break
-        for row in rows:
-            task = store._decode_row(row, "tasks")
-            latest = store.latest_task_status_event(task["id"])
-            status = latest["status"] if latest else task["status"]
-            if not is_task_completed_status(status):
-                active_tasks.append(task)
-                statuses[task["id"]] = status
-                if len(active_tasks) >= limit:
-                    break
-        offset += len(rows)
+    from .. import project_logic as p
+
+    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    active_tasks, _ = p.roadmap_prioritized_project_active_tasks(store, project_id, tasks, statuses)
     return active_tasks[:limit], statuses
 
 
