@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import json
 import sys
 import unittest
@@ -7,11 +9,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 try:
-    from run_shards import load_failed_shards, parse_jobs, run_shards, selected_shards
+    from run_shards import load_failed_shards, main as run_shards_main, parse_jobs, run_shards, selected_shards
     from test_shards import UNIT_MODULES, TestShard, all_shards, auto_jobs, get_shard, shard_names, shards_for_changed_files
     from run_cli_group import selected_test_names
 except ModuleNotFoundError:
-    from tests.run_shards import load_failed_shards, parse_jobs, run_shards, selected_shards
+    from tests.run_shards import load_failed_shards, main as run_shards_main, parse_jobs, run_shards, selected_shards
     from tests.test_shards import UNIT_MODULES, TestShard, all_shards, auto_jobs, get_shard, shard_names, shards_for_changed_files
     from tests.run_cli_group import selected_test_names
 
@@ -116,6 +118,52 @@ class ShardRunnerTests(unittest.TestCase):
 
             self.assertEqual(load_failed_shards("run_1", root), ["cli:recipe"])
             self.assertEqual(load_failed_shards(str(summary_dir / "summary.json"), root), ["cli:recipe"])
+
+    def test_slowest_from_prints_duration_order(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = root / "summary.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "shards": [
+                            {"name": "fast", "duration_seconds": 0.2},
+                            {"name": "slow", "duration_seconds": 3.4},
+                            {"name": "medium", "duration_seconds": 1.5},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(run_shards_main(["--slowest-from", str(summary)]), 0)
+            lines = output.getvalue().splitlines()
+            self.assertEqual(lines[0], "slowest_shards:")
+            self.assertEqual(lines[1], "- slow: 3.400s")
+            self.assertEqual(lines[2], "- medium: 1.500s")
+            self.assertEqual(lines[3], "- fast: 0.200s")
+
+    def test_last_slowest_uses_latest_summary(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / ".nilo" / "test-runs" / "old"
+            new = root / ".nilo" / "test-runs" / "new"
+            old.mkdir(parents=True)
+            new.mkdir(parents=True)
+            (old / "summary.json").write_text(json.dumps({"shards": [{"name": "old", "duration_seconds": 9.0}]}), encoding="utf-8")
+            (new / "summary.json").write_text(json.dumps({"shards": [{"name": "new", "duration_seconds": 1.0}]}), encoding="utf-8")
+            output = io.StringIO()
+            cwd = Path.cwd()
+            try:
+                import os
+
+                os.chdir(root)
+                with redirect_stdout(output):
+                    self.assertEqual(run_shards_main(["--last-slowest"]), 0)
+            finally:
+                os.chdir(cwd)
+            self.assertIn("- new: 1.000s", output.getvalue())
 
     def test_selectors_are_mutually_exclusive(self) -> None:
         with TemporaryDirectory() as directory:

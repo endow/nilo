@@ -80,6 +80,7 @@ GROUPS = {
         "test_roadmap_agent_state_*",
         "test_human_roadmap_*",
         "test_multiple_accepted_roadmap_commitments_*",
+        "test_active_task_priority_matches_across_surfaces_with_multiple_commitments",
     ],
     "project": ["test_project_*"],
     "report": ["test_report_*", "test_rules_*", "test_successful_reports_*"],

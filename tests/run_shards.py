@@ -137,6 +137,55 @@ def load_failed_shards(path_or_run_id: str, cwd: Path) -> list[str]:
     return [str(name) for name in names]
 
 
+def load_summary(path_or_run_id: str, cwd: Path) -> dict:
+    path = Path(path_or_run_id)
+    if not path.is_absolute():
+        candidates = [
+            cwd / path,
+            cwd / ".nilo" / "test-runs" / path_or_run_id / "summary.json",
+            cwd / ".nilo" / "test-runs" / path_or_run_id,
+        ]
+        path = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
+    if path.is_dir():
+        path = path / "summary.json"
+    if not path.exists():
+        raise SystemExit(f"summary not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"invalid summary JSON: {path}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("shards"), list):
+        raise SystemExit(f"invalid summary: {path}: missing shards list")
+    return data
+
+
+def latest_summary_path(cwd: Path, output_root: Path) -> Path:
+    root = output_root if output_root.is_absolute() else cwd / output_root
+    summaries = sorted(root.glob("*/summary.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if not summaries:
+        raise SystemExit(f"summary not found: {root}/*/summary.json")
+    return summaries[0]
+
+
+def print_slowest_shards(summary: dict) -> None:
+    shards = []
+    for item in summary.get("shards") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            duration = float(item.get("duration_seconds"))
+        except (TypeError, ValueError):
+            continue
+        shards.append((duration, str(item.get("name") or "(unknown)")))
+    shards.sort(key=lambda item: item[0], reverse=True)
+    print("slowest_shards:")
+    if not shards:
+        print("- []")
+        return
+    for duration, name in shards:
+        print(f"- {name}: {duration:.3f}s")
+
+
 def selected_shards(args: argparse.Namespace, cwd: Path) -> list[TestShard]:
     selectors = [
         bool(args.all),
@@ -233,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shard", action="append", help="Run one shard. May be repeated.")
     parser.add_argument("--shards", action="append", help="Comma-separated shard names.")
     parser.add_argument("--failed-from", help="Run failed shards from a summary path, run directory, or run id.")
+    parser.add_argument("--last-slowest", action="store_true", help="Print slowest shards from the latest summary.")
+    parser.add_argument("--slowest-from", help="Print slowest shards from a summary path, run directory, or run id.")
     parser.add_argument("--jobs", default="1", help="'auto' or a positive integer.")
     parser.add_argument("--timeout", type=float, default=300.0, help="Per-shard timeout in seconds.")
     parser.add_argument("--output-root", default=".nilo/test-runs")
@@ -242,8 +293,17 @@ def main(argv: list[str] | None = None) -> int:
         for name in shard_names():
             print(name)
         return 0
+    if args.last_slowest and args.slowest_from:
+        raise SystemExit("choose only one slowest selector: --last-slowest or --slowest-from")
 
     cwd = Path.cwd()
+    if args.last_slowest:
+        print_slowest_shards(load_summary(str(latest_summary_path(cwd, Path(args.output_root))), cwd))
+        return 0
+    if args.slowest_from:
+        print_slowest_shards(load_summary(args.slowest_from, cwd))
+        return 0
+
     shards = selected_shards(args, cwd)
     jobs = parse_jobs(args.jobs, len(shards))
     summary = run_shards(shards, jobs=jobs, timeout=args.timeout, output_root=Path(args.output_root), cwd=cwd)
