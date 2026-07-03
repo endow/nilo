@@ -55,6 +55,7 @@ GROUPS = {
         "test_status_ai_*",
         "test_overdrive_*",
         "test_handson_*",
+        "test_human_next_action_*",
         "test_queue_*",
     ],
     "todo": ["test_todo_*", "test_status_and_next_include_todo_*"],

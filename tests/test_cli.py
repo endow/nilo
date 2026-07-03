@@ -6457,7 +6457,8 @@ close 済み commitment を表示できるようにした。
 
             mappings = json.loads(output.getvalue())["commit_mapping"]
             self.assertEqual({mapping["status"] for mapping in mappings}, {"ambiguous"})
-            self.assertTrue(all(mapping["commits"] == commits for mapping in mappings))
+            self.assertTrue(all(mapping["commits"] == [] for mapping in mappings))
+            self.assertTrue(all(mapping["summary"] == "commit range is shared by multiple tasks and needs human review" for mapping in mappings))
 
     def test_project_export_handson_writes_compatible_markdown(self) -> None:
         with TemporaryDirectory() as directory:
