@@ -1276,22 +1276,22 @@ def next_actions_for_task(
     if status == "needs_human_review":
         return [
             "review evidence issues, changed files, and verification logs",
-            f"accept with nilo task complete --task {task_id} --reason \"...\" --actor ai --commit or request rework",
+            f"ask the human to accept with nilo task complete --task {task_id} --reason \"...\" --actor human --human-acceptance \"...\" or request rework",
         ]
     if verification_run and not verification_run["timed_out"] and verification_run["exit_code"] == 0:
         if clean_verification_task_ready(status, verification_run, unexecuted, task_type):
-            return [f"run nilo task complete --task {task_id} --reason \"verification evidence accepted\" --actor ai"]
+            return [f"verification evidence is ready; ask the human to accept with nilo task complete --task {task_id} --reason \"...\" --actor human --human-acceptance \"...\""]
         if verification_working_tree_state(verification_run)["dirty"]:
             return [
                 "review dirty-tree verification metadata before accepting this task",
                 "confirm the verification covered the intended uncommitted files",
-                f"if accepted, run nilo task complete --task {task_id} --reason \"...\" --actor ai",
-                "add --commit only when you want Nilo to commit the accepted changes",
+                f"if the human accepts, use nilo task complete --task {task_id} --reason \"...\" --actor human --human-acceptance \"...\"",
+                "add --commit only when the human explicitly wants Nilo to commit the accepted changes",
             ]
         return [
             "review the diff, reported changed files, verification output, and unresolved caveats",
-            f"if accepted, run nilo task complete --task {task_id} --reason \"...\" --actor ai",
-            "add --commit only when you want Nilo to commit the accepted changes",
+            f"if the human accepts, use nilo task complete --task {task_id} --reason \"...\" --actor human --human-acceptance \"...\"",
+            "add --commit only when the human explicitly wants Nilo to commit the accepted changes",
         ]
     if verification_run and (verification_run["timed_out"] or verification_run["exit_code"] != 0):
         return ["inspect verification output and fix or create a follow-up task"]
@@ -2140,19 +2140,20 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
             return [f"{task['id']}: instruct を生成する"]
         if task["status"] == "instruction_generated":
             return [f"{task['id']}: 作業を実施して完了報告を取り込む"]
-    if task["status"] == "verification_passed":
-        return [
-            f"{task['id']}: 差分、変更ファイル一覧、検証結果、未解決事項を確認する",
-            f"{task['id']}: AIが完了記録する場合は task complete --actor ai で記録し、コミットも任せる場合だけ --commit を付ける",
-        ]
-    if (
-        task["task_type"] == "verification"
-        and task["status"] == "evidence_submitted"
-        and task["latest_verification_run"] != "none"
-        and task["verification_working_tree"] == "clean"
-    ):
-        return [f"{task['id']}: clean な verification task として task complete --actor ai を実行する"]
-    return []
+        if task["status"] == "verification_passed":
+            return [
+                f"{task['id']}: 差分、変更ファイル一覧、検証結果、未解決事項を確認する",
+                f"{task['id']}: 人間が完了判断する場合は task complete --actor human --human-acceptance で記録し、コミットも任せる場合だけ --commit を付ける",
+            ]
+        if (
+            task["task_type"] == "verification"
+            and task["status"] == "evidence_submitted"
+            and task["latest_verification_run"] != "none"
+            and task["verification_working_tree"] == "clean"
+        ):
+            return [f"{task['id']}: clean な verification task として証跡は揃っています。人間の完了判断を待ってください"]
+        return []
+
     if task["status"] == "planned":
         return [f"{task['id']}: generate instructions"]
     if task["status"] == "instruction_generated":
@@ -2160,7 +2161,7 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
     if task["status"] == "verification_passed":
         return [
             f"{task['id']}: review the diff, changed files, verification output, and unresolved caveats",
-            f"{task['id']}: if accepted by AI, run task complete --actor ai; add --commit only when Nilo should commit too",
+            f"{task['id']}: if the human accepts, run task complete --actor human --human-acceptance; add --commit only when Nilo should commit too",
         ]
     if (
         task["task_type"] == "verification"
@@ -2168,7 +2169,7 @@ def render_handson_active_task_next_steps(task: dict, language: str) -> list[str
         and task["latest_verification_run"] != "none"
         and task["verification_working_tree"] == "clean"
     ):
-        return [f"{task['id']}: run task complete --actor ai for the clean verification task"]
+        return [f"{task['id']}: clean verification evidence is ready; wait for the human completion decision"]
     return []
 
 

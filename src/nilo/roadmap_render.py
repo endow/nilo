@@ -534,8 +534,10 @@ def human_roadmap_action_text(action: str, language: str) -> str:
             return "検証が今回の未コミット差分を対象にしているか確認する"
         if text == "review imported findings and decide whether to address them, accept risk, or complete the task":
             return "レビュー指摘を確認し、対応するか、リスクとして受け入れるか、完了するか判断する"
-        if text.startswith("if accepted, run nilo task complete"):
-            return "内容に問題がなければ、作業を完了扱いにする"
+        if text.startswith("ask the human to accept with nilo task complete") or text.startswith("verification evidence is ready; ask the human to accept with nilo task complete"):
+            return "証跡が揃ったら、人間が内容を確認して完了判断する"
+        if text.startswith("if the human accepts, use nilo task complete"):
+            return "人間が内容に問題ないと判断したら、作業を完了扱いにする"
         if text.startswith("add --commit only when"):
             return "コミットも任せる場合だけ、明示的にコミットを指定する"
     else:

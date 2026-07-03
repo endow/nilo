@@ -31,8 +31,9 @@ if str(REPO_ROOT) not in sys.path:
 from nilo.backup import BackupError
 from nilo.ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_ai_context_text
 from nilo.cli import handson_language, main
-from nilo.project_logic import project_tasks_and_statuses, selected_roadmap_commitment
-from nilo.roadmap_render import render_human_roadmap_markdown
+from nilo.human_status import human_next_action_text
+from nilo.project_logic import project_tasks_and_statuses, render_handson_active_task_next_steps, selected_roadmap_commitment
+from nilo.roadmap_render import human_roadmap_action_text, render_human_roadmap_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.snapshot import UNCOMPUTED_DIFF_HASH
 from nilo.store import Store
@@ -1325,6 +1326,55 @@ variables:
             self.assertEqual(handson_language(), "ja")
         with patch("nilo.project_logic.locale.getlocale", return_value=("en_US", "UTF-8")):
             self.assertEqual(handson_language(), "en")
+
+    def test_handson_active_task_next_steps_respect_language(self) -> None:
+        task = {
+            "id": "task_verified",
+            "status": "verification_passed",
+            "task_type": "implementation",
+            "latest_verification_run": "verification_done",
+            "verification_working_tree": "clean",
+        }
+
+        english_steps = render_handson_active_task_next_steps(task, "en")
+        japanese_steps = render_handson_active_task_next_steps(task, "ja")
+
+        self.assertIn("task_verified: review the diff, changed files, verification output, and unresolved caveats", english_steps)
+        self.assertIn("task_verified: if the human accepts, run task complete --actor human --human-acceptance; add --commit only when Nilo should commit too", english_steps)
+        self.assertNotIn("差分、変更ファイル一覧", "\n".join(english_steps))
+        self.assertIn("task_verified: 差分、変更ファイル一覧、検証結果、未解決事項を確認する", japanese_steps)
+
+    def test_human_roadmap_action_text_translates_human_completion_guidance(self) -> None:
+        self.assertEqual(
+            human_roadmap_action_text('ask the human to accept with nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."', "ja"),
+            "証跡が揃ったら、人間が内容を確認して完了判断する",
+        )
+        self.assertEqual(
+            human_roadmap_action_text('verification evidence is ready; ask the human to accept with nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."', "ja"),
+            "証跡が揃ったら、人間が内容を確認して完了判断する",
+        )
+        self.assertEqual(
+            human_roadmap_action_text('if the human accepts, use nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."', "ja"),
+            "人間が内容に問題ないと判断したら、作業を完了扱いにする",
+        )
+
+    def test_human_next_action_text_translates_human_completion_guidance(self) -> None:
+        self.assertEqual(
+            human_next_action_text('ask the human to accept with nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."'),
+            "証跡が揃っています。人間が内容を確認し、問題なければ完了判断してください。",
+        )
+        self.assertEqual(
+            human_next_action_text('verification evidence is ready; ask the human to accept with nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."'),
+            "検証証跡が揃っています。人間が内容を確認し、問題なければ完了判断してください。",
+        )
+        self.assertEqual(
+            human_next_action_text('if the human accepts, use nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."'),
+            "人間が内容に問題ないと判断した場合だけ、完了として記録してください。",
+        )
+        self.assertEqual(
+            human_next_action_text('task_test: if the human accepts, use nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."'),
+            "task_test: 人間が内容に問題ないと判断した場合だけ、完了として記録してください。",
+        )
 
     def test_daily_facade_start_status_next_check_done_and_reject(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3301,8 +3351,9 @@ variables:
             self.assertIn("latest_verification_run: verification_", body)
             self.assertIn("next_actions:", body)
             self.assertIn("review the diff, reported changed files, verification output, and unresolved caveats", body)
-            self.assertIn("nilo task complete --task task_verified --reason \"...\" --actor ai", body)
-            self.assertIn("add --commit only when you want Nilo to commit the accepted changes", body)
+            self.assertIn("if the human accepts, use nilo task complete --task task_verified --reason \"...\" --actor human --human-acceptance \"...\"", body)
+            self.assertIn("add --commit only when the human explicitly wants Nilo to commit the accepted changes", body)
+            self.assertNotIn("task complete --task task_verified --reason \"...\" --actor ai", body)
             self.assertIn("unexecuted_verifications:", body)
             self.assertIn("task_unverified: verification run not recorded", body)
 
@@ -3626,7 +3677,7 @@ variables:
         self.assertIn("changes DB schema or migrations with broad data or compatibility impact", body)
         self.assertIn("adds or changes CLI commands together with broader workflow behavior", body)
 
-    def test_project_status_allows_clean_verification_task_completion_without_human_prompt(self) -> None:
+    def test_project_status_guides_clean_verification_task_to_human_completion_decision(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -3668,6 +3719,8 @@ variables:
             body = output.getvalue()
             self.assertIn("task_verify [agent_reported] verification medium 検証タスク", body)
             self.assertIn("review the diff, reported changed files, verification output, and unresolved caveats", body)
+            self.assertIn("if the human accepts, use nilo task complete --task task_verify --reason \"...\" --actor human --human-acceptance \"...\"", body)
+            self.assertNotIn("task complete --task task_verify --reason \"...\" --actor ai", body)
 
     def test_project_status_guides_roadmap_setup_when_no_work_is_active(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3840,6 +3893,9 @@ variables:
             self.assertIn("work_state", summary)
             self.assertEqual(summary["work_state"], "人間の完了判断待ちです。")
             self.assertIn("human_next_actions", summary)
+            human_next_actions = "\n".join(summary["human_next_actions"])
+            self.assertIn("task_verified: 未コミット差分を含む検証情報を確認してから完了判断してください。", human_next_actions)
+            self.assertNotIn("review dirty-tree verification metadata", human_next_actions)
             self.assertIn("current_phase", summary)
             self.assertIn("task_status_counts", summary)
             self.assertIn("recent_history", summary)
@@ -6462,7 +6518,8 @@ close 済み commitment を表示できるようにした。
             self.assertIn("task_unverified: verification run not recorded", body)
             self.assertIn("## 次のステップ", body)
             self.assertIn("task_verified: 差分、変更ファイル一覧、検証結果、未解決事項を確認する", body)
-            self.assertIn("task_verified: AIが完了記録する場合は task complete --actor ai で記録し、コミットも任せる場合だけ --commit を付ける", body)
+            self.assertIn("task_verified: 人間が完了判断する場合は task complete --actor human --human-acceptance で記録し、コミットも任せる場合だけ --commit を付ける", body)
+            self.assertNotIn("task complete --actor ai", body)
 
             store = Store(db)
             self.assertIsNone(store.latest_for_task("task_completions", "task_verified"))
@@ -10540,7 +10597,9 @@ close 済み commitment を表示できるようにした。
             self.assertIn("verification_working_tree: dirty (2 files)", summary_output.getvalue())
             self.assertIn("skipped reasons: ignored=1", summary_output.getvalue())
             self.assertIn("review dirty-tree verification metadata before accepting this task", project_output.getvalue())
-            self.assertIn("add --commit only when you want Nilo to commit the accepted changes", project_output.getvalue())
+            self.assertIn("if the human accepts, use nilo task complete --task task_test --reason \"...\" --actor human --human-acceptance \"...\"", project_output.getvalue())
+            self.assertIn("add --commit only when the human explicitly wants Nilo to commit the accepted changes", project_output.getvalue())
+            self.assertNotIn("task complete --task task_test --reason \"...\" --actor ai", project_output.getvalue())
             self.assertTrue(summary["active_tasks"][0]["verification_working_tree_dirty"])
             self.assertEqual(summary["active_tasks"][0]["verification_working_tree_files"], ["src/nilo/cli.py", "tests/test_cli.py"])
             self.assertEqual(summary["active_tasks"][0]["verification_snapshot_policy"]["skipped_reasons"], {"ignored": 1})

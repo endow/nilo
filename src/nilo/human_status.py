@@ -175,6 +175,12 @@ def human_project_work_state(machine_statuses: set[str]) -> str:
 
 
 def human_next_action_text(action: str) -> str:
+    if ": " in action:
+        prefix, detail = action.split(": ", 1)
+        translated = human_next_action_text(detail)
+        if translated != detail:
+            return f"{prefix}: {translated}"
+
     replacements = {
         "review current task state": "最新のタスク状態を確認してください。",
         "no action available": "次に必要な対応を確認してください。",
@@ -197,6 +203,12 @@ def human_next_action_text(action: str) -> str:
         return "検証コマンドを実行して結果を記録してください。"
     if action.startswith("wait for a real MCP reviewer worker to claim review"):
         return "レビュー担当が依頼を受け取り、レビュー結果を取り込むのを待ってください。"
+    if action.startswith("ask the human to accept with nilo task complete"):
+        return "証跡が揃っています。人間が内容を確認し、問題なければ完了判断してください。"
+    if action.startswith("verification evidence is ready; ask the human to accept with nilo task complete"):
+        return "検証証跡が揃っています。人間が内容を確認し、問題なければ完了判断してください。"
+    if action.startswith("if the human accepts, use nilo task complete"):
+        return "人間が内容に問題ないと判断した場合だけ、完了として記録してください。"
     if action.startswith("no active task; create or select a Nilo task before implementation"):
         return "作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。"
     if action.startswith("no active task; ask the user for the next concrete task"):
