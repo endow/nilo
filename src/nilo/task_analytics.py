@@ -140,9 +140,23 @@ def task_analytics(store: Store, task_id: str) -> dict[str, Any]:
 
 def verification_summary(runs: list[dict[str, Any]], completed_task_ids: set[str]) -> dict[str, Any]:
     command_stats: dict[str, Counter] = defaultdict(Counter)
+    command_durations: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    command_timeouts: dict[str, list[float]] = defaultdict(list)
     for run in runs:
         command = run.get("command", "")
         command_stats[command]["run_count"] += 1
+        duration = verification_duration_seconds(run)
+        if duration is not None:
+            command_durations[command].append(
+                {
+                    "seconds": duration,
+                    "created_at": run.get("created_at", ""),
+                    "started_at": run.get("started_at", ""),
+                }
+            )
+        timeout_seconds = run.get("timeout_seconds")
+        if isinstance(timeout_seconds, (int, float)):
+            command_timeouts[command].append(float(timeout_seconds))
         if bool(run.get("timed_out")):
             command_stats[command]["timed_out_count"] += 1
         if run.get("exit_code") not in (0, None):
@@ -165,6 +179,7 @@ def verification_summary(runs: list[dict[str, Any]], completed_task_ids: set[str
         ],
         "timeout_commands": top_commands(command_stats, "timed_out_count"),
         "failed_commands": top_commands(command_stats, "failed_count"),
+        "duration_commands": command_duration_summaries(command_durations, command_timeouts),
         "completed_without_verification_task_ids": completed_without_verification,
         "dirty_snapshot_task_ids": dirty_task_ids,
     }
@@ -307,6 +322,56 @@ def top_commands(command_stats: dict[str, Counter], key: str) -> list[dict[str, 
         for command, counts in sorted(command_stats.items(), key=lambda item: (-item[1][key], item[0]))
         if counts[key] > 0
     ]
+
+
+def verification_duration_seconds(run: dict[str, Any]) -> float | None:
+    try:
+        started = normalize_datetime(datetime.fromisoformat(run.get("started_at", "")))
+        finished = normalize_datetime(datetime.fromisoformat(run.get("finished_at", "")))
+    except ValueError:
+        return None
+    duration = (finished - started).total_seconds()
+    if duration < 0:
+        return None
+    return duration
+
+
+def command_duration_summaries(command_durations: dict[str, list[dict[str, Any]]], command_timeouts: dict[str, list[float]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for command, duration_rows in command_durations.items():
+        if not duration_rows:
+            continue
+        durations = [row["seconds"] for row in duration_rows]
+        sorted_durations = sorted(durations)
+        max_duration = sorted_durations[-1]
+        latest = max(duration_rows, key=duration_sort_key)
+        timeout_seconds = min(command_timeouts.get(command, []), default=None)
+        timeout_may_be_short = timeout_seconds is not None and max_duration >= timeout_seconds * 0.9
+        summaries.append(
+            {
+                "command": command,
+                "run_count": len(durations),
+                "min_seconds": round(sorted_durations[0], 3),
+                "max_seconds": round(max_duration, 3),
+                "latest_seconds": round(latest["seconds"], 3),
+                "timeout_seconds": timeout_seconds,
+                "timeout_may_be_short": timeout_may_be_short,
+            }
+        )
+    return sorted(summaries, key=lambda item: (-item["max_seconds"], item["command"]))
+
+
+def duration_sort_key(row: dict[str, Any]) -> tuple[datetime, datetime]:
+    return (parse_optional_datetime(row.get("created_at", "")), parse_optional_datetime(row.get("started_at", "")))
+
+
+def parse_optional_datetime(value: str) -> datetime:
+    if not value:
+        return datetime.min.replace(tzinfo=datetime.fromisoformat(now_iso()).tzinfo)
+    try:
+        return normalize_datetime(datetime.fromisoformat(value))
+    except ValueError:
+        return datetime.min.replace(tzinfo=datetime.fromisoformat(now_iso()).tzinfo)
 
 
 def most_recent(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

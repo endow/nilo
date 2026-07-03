@@ -121,6 +121,7 @@ def print_project_task_analytics(data: dict) -> None:
     print(f"- dirty snapshot: {len(verification['dirty_snapshot_task_ids'])}")
     print_compact_command_list("timeout が多い command", verification["timeout_commands"], "timed_out_count")
     print_compact_command_list("exit_code != 0 が多い command", verification["failed_commands"], "failed_count")
+    print_compact_duration_list("同一 command の所要時間", verification.get("duration_commands", []))
     print()
     print("レビュー:")
     print(f"- 依頼 / 結果: {review['request_count']} / {review['result_count']}")
@@ -165,6 +166,7 @@ def print_single_task_analytics(data: dict) -> None:
     verification = data["verification"]
     print(f"- 成功 / 失敗 / timeout: {verification['passed_count']} / {verification['failed_count']} / {verification['timed_out_count']}")
     print(f"- dirty snapshot: {len(verification['dirty_snapshot_task_ids'])}")
+    print_compact_duration_list("同一 command の所要時間", verification.get("duration_commands", []))
     print()
     print("レビュー:")
     review = data["review"]
@@ -193,6 +195,19 @@ def print_compact_command_list(label: str, commands: list[dict], count_key: str)
         return
     rendered = ", ".join(f"{item['command']} ({item[count_key]})" for item in commands[:3])
     print(f"- {label}: {rendered}")
+
+
+def print_compact_duration_list(label: str, commands: list[dict]) -> None:
+    if not commands:
+        print(f"- {label}: なし")
+        return
+    rendered_items = []
+    for item in commands[:3]:
+        note = " timeout短すぎ候補" if item.get("timeout_may_be_short") else ""
+        rendered_items.append(
+            f"{item['command']} (latest={item['latest_seconds']}s max={item['max_seconds']}s{note})"
+        )
+    print(f"- {label}: {', '.join(rendered_items)}")
 
 
 def format_counts(counts: dict) -> str:

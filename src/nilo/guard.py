@@ -31,9 +31,17 @@ def evaluate_evidence(markdown: str, reported_files: list[str], base_commit: str
         missing = sorted(actual_files - reported_set)
         extra = sorted(reported_set - actual_files)
         if missing:
-            issues.append(f"changed_files missing actual files: {', '.join(missing)}")
+            issues.append(
+                "changed_files missing actual files: "
+                f"{', '.join(missing)}. "
+                "完了報告の変更ファイル一覧に追加するか、作業前から存在した dirty files なら既存 dirty files として明記してください。"
+            )
         if extra:
-            issues.append(f"changed_files contains non-local changes: {', '.join(extra)}")
+            issues.append(
+                "changed_files contains non-local changes: "
+                f"{', '.join(extra)}. "
+                "このタスクで変更していないファイルは作業前からの dirty files として分けるか、変更ファイル一覧から外してください。"
+            )
 
     if any(issue.startswith("changed_files") or issue.startswith("git metadata") or issue.startswith("secret detected") for issue in issues):
         return "needs_human_review", issues, metadata

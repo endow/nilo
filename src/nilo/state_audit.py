@@ -80,8 +80,25 @@ def audit_task(
     if commit_metadata:
         if not commit_metadata.get("commit_sha"):
             findings.append(_finding("completion_commit_metadata_missing_sha", "completion commit metadata has no commit sha", severity="error", entity_type="task_completion", entity_id=completion["id"]))
-        if commit_metadata.get("verified_diff_hash") != (commit_metadata.get("pre_commit_snapshot") or {}).get("git_diff_hash"):
-            findings.append(_finding("completion_commit_verified_diff_mismatch", "completion commit metadata does not match the verified dirty tree", severity="error", entity_type="task_completion", entity_id=completion["id"]))
+        verified_diff_hash = commit_metadata.get("verified_diff_hash")
+        pre_commit_diff_hash = (commit_metadata.get("pre_commit_snapshot") or {}).get("git_diff_hash")
+        if verified_diff_hash != pre_commit_diff_hash:
+            findings.append(
+                _finding(
+                    "completion_commit_verified_diff_mismatch",
+                    "completion commit metadata mismatch: "
+                    f"verified_diff_hash={verified_diff_hash or '<missing>'} "
+                    f"pre_commit_snapshot.git_diff_hash={pre_commit_diff_hash or '<missing>'}",
+                    severity="error",
+                    entity_type="task_completion",
+                    entity_id=completion["id"],
+                    remediation=(
+                        "完了直前に検証した dirty tree と commit 直前 snapshot が一致していません。"
+                        "検証後に追加変更が入った場合は再検証し、既存 dirty files が混ざっていた場合は "
+                        "changed_files または既存 dirty files の扱いを完了報告に明記してください。"
+                    ),
+                )
+            )
         if evidence == "current":
             completed_snapshot = {}
     if completed_snapshot and completed_snapshot.get("git_diff_hash") != snapshot.get("git_diff_hash"):

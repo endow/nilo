@@ -101,6 +101,15 @@ class GuardTests(unittest.TestCase):
         self.assertTrue(issues)
         self.assertEqual(metadata["reported_changed_files"], ["src/nilo/guard.py"])
 
+    def test_changed_files_mismatch_explains_existing_dirty_files(self) -> None:
+        with patch("nilo.guard.changed_files_since", return_value=({"data/input.json"}, [])):
+            status, issues, metadata = evaluate_evidence(VALID_REPORT, ["src/nilo/guard.py"], "abc123", Path.cwd())
+
+        self.assertEqual(status, "needs_human_review")
+        self.assertEqual(metadata["actual_changed_files"], ["data/input.json"])
+        self.assertTrue(any("既存 dirty files" in issue for issue in issues))
+        self.assertTrue(any(issue.startswith("changed_files missing actual files: data/input.json") for issue in issues))
+
 
 if __name__ == "__main__":
     unittest.main()

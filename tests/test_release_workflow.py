@@ -338,8 +338,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     snapshot = completion["completed_snapshot"]
                     snapshot["commit_transition"]["pre_commit_snapshot"]["git_diff_hash"] = "mismatch"
                     store.update("task_completions", completion["id"], {"completed_snapshot": snapshot})
-                    codes = {item["code"] for item in audit_task(store, "task_release", cwd=root)}
-                    self.assertIn("completion_commit_verified_diff_mismatch", codes)
+                    findings = audit_task(store, "task_release", cwd=root)
+                    mismatch = next(item for item in findings if item["code"] == "completion_commit_verified_diff_mismatch")
+                    self.assertIn("verified_diff_hash=", mismatch["message"])
+                    self.assertIn("pre_commit_snapshot.git_diff_hash=mismatch", mismatch["message"])
+                    self.assertIn("再検証", mismatch["remediation"])
+                    self.assertIn("既存 dirty files", mismatch["remediation"])
                 finally:
                     store.close()
             finally:

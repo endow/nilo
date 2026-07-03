@@ -16,6 +16,7 @@ from .timeutil import iso_age_seconds, now_iso
 
 
 REVIEW_CLAIM_STALE_AFTER_SECONDS = 900
+SQLITE_IN_CHUNK_SIZE = 500
 ROADMAP_GUIDANCE_ACTION = (
     "possible large work; recommend roadmap planning to the human and wait for approval before creating it"
 )
@@ -251,13 +252,13 @@ def diff_aware_verification_summary(report: dict | None, verification_run: dict 
     }
 
 
-def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
+def roadmap_task_evidence(store: Store, task: dict, status: str, *, current_snapshot: dict | None = None) -> dict:
     from .state_audit import task_completion_invalid
 
     report = store.latest_for_task("agent_reports", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
     review_result = store.latest_for_task("review_results", task["id"])
-    current_snapshot = current_git_snapshot(Path.cwd())
+    current_snapshot = current_snapshot or current_git_snapshot(Path.cwd())
     verification_status = "not_recorded"
     if verification_run:
         if verification_run["timed_out"]:
@@ -281,15 +282,16 @@ def roadmap_task_evidence(store: Store, task: dict, status: str) -> dict:
         "latest_review_result_id": review_result["id"] if review_result else "",
         "latest_review_status": review_result_status(review_result, current_snapshot) if review_result else "missing",
         "unresolved_review_findings": len(store.list_where("review_findings", "task_id=? AND status='unresolved'", (task["id"],))),
-        "completion_valid": is_task_completed_status(status) and not task_completion_invalid(store, task["id"]),
+        "completion_valid": is_task_completed_status(status) and not task_completion_invalid(store, task["id"], current_snapshot=current_snapshot),
         "diff_verification": diff_aware_verification_summary(report, verification_run),
         "recipe_provenance": recipe_provenance_summary(store, task["id"]),
     }
 
 
-def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[dict], statuses: dict[str, str]) -> dict:
+def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[dict], statuses: dict[str, str], *, current_snapshot: dict | None = None) -> dict:
     related_tasks = related_tasks_for_commitment(tasks, commitment)
-    task_evidence = [roadmap_task_evidence(store, task, statuses[task["id"]]) for task in related_tasks]
+    current_snapshot = current_snapshot or current_git_snapshot(Path.cwd())
+    task_evidence = [roadmap_task_evidence(store, task, statuses[task["id"]], current_snapshot=current_snapshot) for task in related_tasks]
     has_task = bool(task_evidence)
     has_report = all(item["latest_report_id"] for item in task_evidence) if task_evidence else False
     usable_evidence_statuses = {"current", "recorded", "present"}
@@ -396,7 +398,11 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
 
 
 def roadmap_assessments(store: Store, project_id: str, tasks: list[dict], statuses: dict[str, str]) -> list[dict]:
-    return [roadmap_commitment_assessment(store, commitment, tasks, statuses) for commitment in accepted_roadmap_commitments(store, project_id)]
+    current_snapshot = current_git_snapshot(Path.cwd())
+    return [
+        roadmap_commitment_assessment(store, commitment, tasks, statuses, current_snapshot=current_snapshot)
+        for commitment in accepted_roadmap_commitments(store, project_id)
+    ]
 
 
 def auto_close_ready_roadmap_commitments(
@@ -1381,8 +1387,56 @@ def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict
     refresh_review_dispatch_state(store, project_id)
     tasks = project_tasks_in_work_order(store, project_id)
     current_snapshot = current_git_snapshot(Path.cwd())
-    statuses = {task["id"]: projected_task_status(store, task, current_snapshot=current_snapshot) for task in tasks}
+    latest_events = latest_task_status_events_for_project(store, project_id)
+    statuses = {
+        task["id"]: projected_task_status(
+            store,
+            task,
+            current_snapshot=current_snapshot,
+            latest_event=latest_events.get(task["id"]),
+        )
+        for task in tasks
+    }
     return tasks, statuses
+
+
+def latest_task_status_events_for_project(store: Store, project_id: str) -> dict[str, dict]:
+    rows = store.conn.execute(
+        """
+        WITH events AS (
+          SELECT id AS task_id, id AS event_id, 'task' AS source, status AS status, created_at, rowid AS event_rowid, 10 AS priority FROM tasks WHERE project_id=?
+          UNION ALL
+          SELECT u.task_id, u.id AS event_id, 'understanding' AS source, u.status AS status, u.created_at, u.rowid AS event_rowid, 20 AS priority FROM understanding_checks u JOIN tasks t ON t.id=u.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT i.task_id, i.id AS event_id, 'instruction' AS source, 'instruction_generated' AS status, i.created_at, i.rowid AS event_rowid, 30 AS priority FROM instructions i JOIN tasks t ON t.id=i.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT r.task_id, r.id AS event_id, 'agent_report' AS source, 'agent_reported' AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT rr.task_id, rr.id AS event_id, 'review_request' AS source, CASE
+            WHEN rr.status='requested' THEN 'review_requested'
+            WHEN rr.status='reviewer_unavailable' THEN 'review_reviewer_unavailable'
+            WHEN rr.status='claimed' THEN 'review_claimed'
+            WHEN rr.status='in_progress' THEN 'review_in_progress'
+            WHEN rr.status='stale' THEN 'review_stale'
+            ELSE 'review_requested'
+          END AS status, rr.updated_at AS created_at, rr.rowid AS event_rowid, 45 AS priority FROM review_requests rr JOIN tasks t ON t.id=rr.task_id WHERE t.project_id=? AND rr.status IN ('requested', 'reviewer_unavailable', 'claimed', 'in_progress', 'stale')
+          UNION ALL
+          SELECT v.task_id, v.id AS event_id, 'verification_run' AS source, CASE WHEN v.timed_out=1 THEN 'verification_timed_out' WHEN v.exit_code=0 THEN 'verification_passed' ELSE 'verification_failed' END AS status, v.created_at, v.rowid AS event_rowid, 55 AS priority FROM verification_runs v JOIN tasks t ON t.id=v.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT rv.task_id, rv.id AS event_id, 'review_result' AS source, CASE WHEN rv.verdict='approved' THEN 'review_approved' WHEN rv.verdict='changes_requested' THEN 'review_changes_requested' ELSE 'review_commented' END AS status, rv.created_at, rv.rowid AS event_rowid, 65 AS priority FROM review_results rv JOIN tasks t ON t.id=rv.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT rfu.task_id, rfu.id AS event_id, 'review_finding_update' AS source, 'review_changes_requested' AS status, rfu.created_at, rfu.rowid AS event_rowid, 66 AS priority FROM review_finding_updates rfu JOIN tasks t ON t.id=rfu.task_id WHERE t.project_id=?
+          UNION ALL
+          SELECT c.task_id, c.id AS event_id, 'completion' AS source, CASE WHEN c.actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, c.created_at, c.rowid AS event_rowid, 70 AS priority FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE t.project_id=? AND COALESCE(c.invalidated_at, '')=''
+        ),
+        ranked AS (
+          SELECT task_id, event_id, source, status, created_at, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
+        )
+        SELECT task_id, event_id, source, status, created_at FROM ranked WHERE rank=1
+        """,
+        (project_id,) * 9,
+    ).fetchall()
+    return {row["task_id"]: store._decode_row(row) for row in rows}
 
 
 def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
@@ -1547,6 +1601,7 @@ def task_status_counts(tasks: list[dict], statuses: dict[str, str]) -> dict[str,
 
 def recent_project_history(store: Store, tasks: list[dict], limit: int = 8) -> list[dict]:
     history: list[dict] = []
+    task_ids = [task["id"] for task in tasks]
     event_tables = [
         ("instruction", "instructions"),
         ("agent_report", "agent_reports"),
@@ -1565,25 +1620,28 @@ def recent_project_history(store: Store, tasks: list[dict], limit: int = 8) -> l
                 "created_at": task["created_at"],
             }
         )
+    if task_ids:
         for event_name, table in event_tables:
-            for event in store.list_where(table, "task_id=?", (task["id"],)):
-                summary = (
-                    event.get("status")
-                    or event.get("verdict")
-                    or event.get("decision")
-                    or event.get("command")
-                    or event.get("claimed_status")
-                    or event["id"]
-                )
-                history.append(
-                    {
-                        "event_id": event["id"],
-                        "task_id": task["id"],
-                        "event": event_name,
-                        "summary": str(summary),
-                        "created_at": event["created_at"],
-                    }
-                )
+            for chunk in chunked(task_ids, SQLITE_IN_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                for event in store.list_where(table, f"task_id IN ({placeholders})", tuple(chunk)):
+                    summary = (
+                        event.get("status")
+                        or event.get("verdict")
+                        or event.get("decision")
+                        or event.get("command")
+                        or event.get("claimed_status")
+                        or event["id"]
+                    )
+                    history.append(
+                        {
+                            "event_id": event["id"],
+                            "task_id": event["task_id"],
+                            "event": event_name,
+                            "summary": str(summary),
+                            "created_at": event["created_at"],
+                        }
+                    )
     history.sort(key=lambda item: item["created_at"], reverse=True)
     return history[:limit]
 
@@ -1592,13 +1650,16 @@ def project_commit_mapping(store: Store, tasks: list[dict], cwd: Path | None = N
     cwd = cwd or Path.cwd()
     mappings = []
     range_counts: dict[tuple[str | None, str | None], int] = {}
+    commit_log_cache: dict[tuple[str, str], list[dict]] = {}
+    git_log_budget = 8
+    latest_verifications = latest_rows_for_tasks(store, "verification_runs", [task["id"] for task in tasks])
     for task in tasks:
-        verification_run = store.latest_for_task("verification_runs", task["id"])
+        verification_run = latest_verifications.get(task["id"])
         key = (task.get("base_commit"), verification_run["git_head"] if verification_run else None)
         range_counts[key] = range_counts.get(key, 0) + 1
 
     for task in tasks:
-        verification_run = store.latest_for_task("verification_runs", task["id"])
+        verification_run = latest_verifications.get(task["id"])
         base_commit = task.get("base_commit")
         latest_head = verification_run["git_head"] if verification_run else None
         commits: list[dict] = []
@@ -1612,14 +1673,36 @@ def project_commit_mapping(store: Store, tasks: list[dict], cwd: Path | None = N
             status = "same_head"
             summary = "base_commit matches latest verification git_head"
         else:
-            commits = git_commit_log(cwd, base_commit, latest_head)
             shared_range = range_counts.get((base_commit, latest_head), 0) > 1
-            if len(commits) > 1 or shared_range:
+            if shared_range:
                 status = "ambiguous"
-                summary = "commit range needs human review"
+                summary = "commit range is shared by multiple tasks and needs human review"
             else:
-                status = "mapped_candidate"
-                summary = "base_commit and latest verification git_head are available"
+                key = (base_commit, latest_head)
+                commits = commit_log_cache.get(key)
+                if commits is None:
+                    if len(commit_log_cache) >= git_log_budget:
+                        status = "ambiguous"
+                        summary = "commit range needs human review; git log detail skipped for summary speed"
+                        mappings.append(
+                            {
+                                "task_id": task["id"],
+                                "base_commit": base_commit,
+                                "latest_verification_head": latest_head,
+                                "commits": [],
+                                "status": status,
+                                "summary": summary,
+                            }
+                        )
+                        continue
+                    commits = git_commit_log(cwd, base_commit, latest_head)
+                    commit_log_cache[key] = commits
+                if len(commits) > 1:
+                    status = "ambiguous"
+                    summary = "commit range needs human review"
+                else:
+                    status = "mapped_candidate"
+                    summary = "base_commit and latest verification git_head are available"
         mappings.append(
             {
                 "task_id": task["id"],
@@ -1631,6 +1714,31 @@ def project_commit_mapping(store: Store, tasks: list[dict], cwd: Path | None = N
             }
         )
     return mappings
+
+
+def latest_rows_for_tasks(store: Store, table: str, task_ids: list[str]) -> dict[str, dict]:
+    if not task_ids:
+        return {}
+    latest: dict[str, dict] = {}
+    for chunk in chunked(task_ids, SQLITE_IN_CHUNK_SIZE):
+        placeholders = ",".join("?" for _ in chunk)
+        rows = store.conn.execute(
+            f"""
+            WITH ranked AS (
+              SELECT *, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC, rowid DESC) AS rank
+              FROM {table}
+              WHERE task_id IN ({placeholders})
+            )
+            SELECT * FROM ranked WHERE rank=1
+            """,
+            tuple(chunk),
+        ).fetchall()
+        latest.update({row["task_id"]: store._decode_row(row, table) for row in rows})
+    return latest
+
+
+def chunked(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
 
 
 def project_design_residue(cwd: Path | None = None) -> list[dict]:

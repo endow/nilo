@@ -15,10 +15,24 @@ if str(SRC_ROOT) not in sys.path:
 
 from nilo.cli import main
 from nilo.store import Store
+from nilo.task_analytics import command_duration_summaries
 from nilo.timeutil import now_iso
 
 
 class TaskAnalyticsTests(unittest.TestCase):
+    def test_duration_summary_latest_uses_datetime_order_with_offsets(self) -> None:
+        summaries = command_duration_summaries(
+            {
+                "pytest": [
+                    {"seconds": 1.0, "created_at": "2026-01-01T10:00:00+09:00", "started_at": "2026-01-01T10:00:00+09:00"},
+                    {"seconds": 2.0, "created_at": "2026-01-01T02:00:00+00:00", "started_at": "2026-01-01T02:00:00+00:00"},
+                ],
+            },
+            {"pytest": [10.0]},
+        )
+
+        self.assertEqual(summaries[0]["latest_seconds"], 2.0)
+
     def test_task_analytics_project_json_counts_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
@@ -43,6 +57,11 @@ class TaskAnalyticsTests(unittest.TestCase):
             self.assertEqual(data["verification"]["passed_count"], 1)
             self.assertEqual(data["verification"]["failed_count"], 1)
             self.assertEqual(data["verification"]["timed_out_count"], 1)
+            unittest_command = next(item for item in data["verification"]["duration_commands"] if item["command"] == "python -m unittest")
+            self.assertEqual(unittest_command["run_count"], 2)
+            self.assertEqual(unittest_command["max_seconds"], 9.5)
+            self.assertEqual(unittest_command["latest_seconds"], 9.5)
+            self.assertTrue(unittest_command["timeout_may_be_short"])
             self.assertEqual(data["review"]["request_count"], 1)
             self.assertEqual(data["review"]["result_count"], 1)
             self.assertEqual(data["review"]["verdict_counts"], {"changes_requested": 1})
@@ -84,6 +103,8 @@ class TaskAnalyticsTests(unittest.TestCase):
             self.assertIn("レビュー:", project_body)
             self.assertIn("失敗:", project_body)
             self.assertIn("作業設計:", project_body)
+            self.assertIn("同一 command の所要時間:", project_body)
+            self.assertIn("timeout短すぎ候補", project_body)
 
             task_output = io.StringIO()
             with redirect_stdout(task_output):
@@ -187,8 +208,8 @@ class TaskAnalyticsTests(unittest.TestCase):
                     "created_at": now,
                 },
             )
-            self.insert_verification(store, "verification_passed", "task_completed", "python -m unittest", 0, 0, now)
-            self.insert_verification(store, "verification_failed", "task_open", "python -m unittest", 1, 0, now)
+            self.insert_verification(store, "verification_passed", "task_completed", "python -m unittest", 0, 0, "2099-01-01T00:00:01+00:00")
+            self.insert_verification(store, "verification_failed", "task_open", "python -m unittest", 1, 0, "2099-01-01T00:00:02+00:00")
             self.insert_verification(store, "verification_timeout", "task_open", "pytest", None, 1, now)
             store.insert(
                 "review_requests",
@@ -280,6 +301,11 @@ class TaskAnalyticsTests(unittest.TestCase):
             store.close()
 
     def insert_verification(self, store: Store, row_id: str, task_id: str, command: str, exit_code: int | None, timed_out: int, created_at: str) -> None:
+        finished_at_by_id = {
+            "verification_passed": "2099-01-01T00:00:02.500000+00:00",
+            "verification_failed": "2099-01-01T00:00:09.500000+00:00",
+            "verification_timeout": "2099-01-01T00:00:01+00:00",
+        }
         store.insert(
             "verification_runs",
             {
@@ -300,8 +326,8 @@ class TaskAnalyticsTests(unittest.TestCase):
                 "working_tree_dirty": 1 if row_id == "verification_failed" else 0,
                 "observed_paths": [],
                 "metadata": {"verification_mode": "targeted"},
-                "started_at": created_at,
-                "finished_at": created_at,
+                "started_at": "2099-01-01T00:00:00+00:00",
+                "finished_at": finished_at_by_id.get(row_id, created_at),
                 "created_at": created_at,
             },
         )
