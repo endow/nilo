@@ -24,6 +24,15 @@ nilo check --task <task_id> "python tests/run_shards.py --all --jobs auto" --pro
 
 `quick` は狭い smoke check、`targeted` は変更領域や `tests.test_cli` の一部、`full` は release や広範囲の変更で使います。
 
+検証レベルは「省略」ではなく、作業段階に応じた責務の分離です。
+
+- changed check: `python tests/run_shards.py --changed --jobs auto`。変更ファイルから shard を選び、作業中の高速確認に使います。
+- smoke / compat check: CLI の起動、互換 entry point、基本的な表示が壊れていないことを短時間で見ます。
+- full check: `python tests/run_shards.py --all --jobs auto`。release publish や広範囲変更の最終確認に使います。
+- audit snapshot: 証跡や完了判断が現在の git snapshot と一致するか、strict に確認する用途です。
+
+Release workflow では、`release prepare` は reusable full verification がなければ changed check を実行し、`full_check: deferred` として full check を publish 前へ送れます。`release publish` は public operation の前に有効な full check を必ず確認し、なければ `RELEASE_FULL_CHECK_COMMAND` を実行します。full check が失敗した場合、tag / push / GitHub release などの公開操作には進みません。
+
 `nilo check` は原則 `--task` を付けて実行します。省略できるのは、安全に一意な未完了 verification target が 1 件だけの場合です。
 
 ## 変更中の確認

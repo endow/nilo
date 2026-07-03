@@ -74,6 +74,17 @@ Look at Nilo's evidence and tell me whether this is ready to accept.
 
 The agent reads Nilo, follows the current instruction, handles completion criteria and verification, and reports back. The human decides whether to accept, send back, or ask for more checking.
 
+## Verification Levels
+
+Nilo is not a way to skip verification. It records the level of verification that fits the stage of work.
+
+- `changed check`: a fast in-progress check that selects shards from changed files.
+- `smoke` / `compat`: short checks for basic CLI behavior and compatibility.
+- `full check`: the full-shard equivalent used for releases or broad changes.
+- `audit snapshot`: a stricter check that evidence and completion decisions still match the current git state.
+
+`release prepare` may defer the full check until publish time when it is safe to do so. `release publish` always requires a valid full check before public operations; if one is missing, Nilo runs it first.
+
 ## Natural-Language Prompts
 
 ```text

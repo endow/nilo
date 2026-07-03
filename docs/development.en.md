@@ -24,6 +24,15 @@ nilo check --task <task_id> "python tests/run_shards.py --all --jobs auto" --pro
 
 `quick` is a narrow smoke check, `targeted` covers the changed module or a focused CLI group, and `full` is for releases or broad, high-risk changes.
 
+Verification levels are not skipped verification; they separate responsibilities by stage of work.
+
+- changed check: `python tests/run_shards.py --changed --jobs auto`. It selects shards from changed files for fast in-progress feedback.
+- smoke / compat check: short checks for CLI startup, compatibility entry points, and basic output.
+- full check: `python tests/run_shards.py --all --jobs auto`. Use it before release publication or for broad changes.
+- audit snapshot: a strict check that evidence and completion decisions still match the current git snapshot.
+
+In the release workflow, `release prepare` runs a changed check when no reusable full verification exists and reports `full_check: deferred`. `release publish` always verifies that a valid full check exists before public operations; if one is missing, it runs `RELEASE_FULL_CHECK_COMMAND`. If the full check fails, Nilo does not proceed to tag, push, or create a GitHub release.
+
 Use `nilo check` with `--task` by default. It may be omitted only when there is exactly one safe unfinished verification target.
 
 ## During Changes
