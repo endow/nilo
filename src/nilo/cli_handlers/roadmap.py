@@ -346,6 +346,41 @@ def cmd_roadmap_status(args: argparse.Namespace) -> None:
         commitments = c.accepted_roadmap_commitments(store, project["id"])
         closed_commitments = c.closed_roadmap_commitments(store, project["id"])
         pending_revisions = c.pending_roadmap_revisions(store, project["id"])
+        if not (args.ai or args.raw or args.debug):
+            assessments = c.roadmap_assessments(store, project["id"], tasks, statuses)
+            closed_assessments = [
+                {
+                    **c.roadmap_commitment_assessment(store, commitment, tasks, statuses),
+                    "commitment_status": "closed",
+                }
+                for commitment in closed_commitments
+            ]
+            print(render_human_roadmap_summary_markdown(project, c.human_roadmap_summary([*assessments, *closed_assessments])), end="")
+            related_task_ids = {
+                task["task_id"]
+                for assessment in [*assessments, *closed_assessments]
+                for task in assessment["related_tasks"]
+            }
+            unrelated_active = [
+                task
+                for task in tasks
+                if not c.is_task_completed_status(statuses[task["id"]]) and task["id"] not in related_task_ids
+            ]
+            if unrelated_active:
+                print()
+                print("## 別件の現在タスク")
+                print()
+                for task in unrelated_active:
+                    print(f"- {task['id']} {task['title']}")
+            if pending_revisions:
+                print()
+                print("## 確認待ちのロードマップ案")
+                print()
+                for revision in pending_revisions:
+                    commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
+                    for line in render_pending_roadmap_plan_lines({**revision, "proposed_commitment": commitment or {}}, "ja"):
+                        print(line)
+            return
         print(f"project_id: {project['id']}")
         agent_state = c.roadmap_agent_state(store, project["id"], tasks, statuses)
         c.print_roadmap_agent_state(agent_state)
@@ -391,10 +426,26 @@ def cmd_roadmap_assess(args: argparse.Namespace) -> None:
         if not project:
             raise SystemExit(f"project not found: {args.project}")
         tasks, statuses = c.project_tasks_and_statuses(store, project["id"])
-        body = render_roadmap_assess_markdown(project, c.roadmap_assessments(store, project["id"], tasks, statuses))
+        assessments = c.roadmap_assessments(store, project["id"], tasks, statuses)
+        if args.raw or args.debug:
+            body = render_roadmap_assess_markdown(project, assessments)
+            allowed_headings = {"# Roadmap Assessment"}
+        else:
+            closed_assessments = [
+                {
+                    **c.roadmap_commitment_assessment(store, commitment, tasks, statuses),
+                    "commitment_status": "closed",
+                }
+                for commitment in c.closed_roadmap_commitments(store, project["id"])
+            ]
+            body = render_human_roadmap_summary_markdown(
+                project,
+                c.human_roadmap_summary([*assessments, *closed_assessments]),
+            )
+            allowed_headings = {"# 現在の状態"}
         if args.file:
             output = Path(args.file)
-            ensure_generated_markdown_output_is_safe(output, "roadmap assess", {"# Roadmap Assessment"})
+            ensure_generated_markdown_output_is_safe(output, "roadmap assess", allowed_headings)
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(body, encoding="utf-8")
             print(f"written: {output}")

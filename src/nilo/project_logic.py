@@ -451,7 +451,7 @@ def human_roadmap_assessment_status(status: str) -> dict:
             "next_decisions": ["対応する実装タスクを作成する", "ロードマップ項目を見直す"],
         },
         "needs_verification": {
-            "state": "検証記録待ちです。",
+            "state": "検証記録の確認が必要です。",
             "reason": "関連タスクに成功した検証記録がまだありません。",
             "next_decisions": ["必要なテストを実行して記録する", "検証方針を見直す"],
         },
@@ -465,13 +465,23 @@ def human_roadmap_assessment_status(status: str) -> dict:
             "reason": "関連タスクの検証が失敗またはタイムアウトしています。",
             "next_decisions": ["失敗した検証を確認して修正する", "検証を再実行して記録する"],
         },
+        "needs_review": {
+            "state": "レビュー確認が必要です。",
+            "reason": "関連タスクのレビュー結果または未解決指摘を確認する必要があります。",
+            "next_decisions": ["レビュー指摘を確認する", "必要な対応を記録する"],
+        },
+        "needs_completion_audit": {
+            "state": "完了記録の確認が必要です。",
+            "reason": "関連タスクの完了記録が不足しているか、現在の証跡と一致していません。",
+            "next_decisions": ["完了記録を確認する", "必要ならタスクの完了判断をやり直す"],
+        },
         "needs_human_review": {
-            "state": "人間確認待ちです。",
-            "reason": "Nilo が、変更ファイルとテストコマンドの対応を自動確認しきれませんでした。これはテスト失敗ではありません。",
+            "state": "人間の確認が必要です。",
+            "reason": "変更ファイルに対して、どのテストで確認済みかをNiloが自動判定できませんでした。",
             "next_decisions": ["記録済みテストで十分としてロードマップ項目を閉じる", "追加で targeted test を記録してから閉じる"],
         },
         "evidence_present": {
-            "state": "完了候補です。",
+            "state": "閉じられる状態です。",
             "reason": "実装タスクの報告と成功した検証記録がそろっています。",
             "next_decisions": ["記録済み証跡で十分としてロードマップ項目を閉じる", "追加確認が必要なら対象を指定する"],
         },
@@ -519,13 +529,38 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
             for path in task["diff_verification"].get("unknown_files", [])
         }
     )
+    commitment_status = assessment.get("commitment_status", "accepted")
+    if commitment_status == "closed":
+        roadmap_state_label = "クローズ済み"
+    elif assessment["closure_ready"]:
+        roadmap_state_label = "クローズ可能"
+    elif diff_review_tasks:
+        roadmap_state_label = "人間確認待ち"
+    elif assessment["status"] in {"needs_human_review", "needs_review", "needs_completion_audit", "needs_report", "task_plan_required"}:
+        roadmap_state_label = "人間確認待ち"
+    else:
+        roadmap_state_label = "追加検証待ち"
+    if active_tasks:
+        implementation_task_label = "残あり"
+    elif related_tasks:
+        implementation_task_label = "すべて完了"
+    else:
+        implementation_task_label = "未作成"
+    reason = status_text["reason"]
+    if commitment_status == "closed":
+        reason = "ロードマップ項目はすでにクローズされています。"
+    elif not assessment["closure_ready"] and assessment["status"] == "evidence_present":
+        reason = "自動クローズできる状態ではありません。"
     return {
         "commitment_id": assessment["commitment_id"],
         "title": assessment["title"],
         "status": assessment["status"],
+        "commitment_status": commitment_status,
         "closure_ready": assessment["closure_ready"],
         "state_label": status_text["state"],
-        "reason": status_text["reason"],
+        "implementation_task_label": implementation_task_label,
+        "roadmap_state_label": roadmap_state_label,
+        "reason": reason,
         "next_decisions": status_text["next_decisions"],
         "has_related_tasks": bool(related_tasks),
         "active_task_count": len(active_tasks),
@@ -544,6 +579,25 @@ def human_roadmap_summary(assessments: list[dict]) -> dict:
     if not items:
         conclusion = "現在、受理済みロードマップ項目はありません。"
         next_judgement = "次に扱う方向性を人間が決めます。"
+    elif items and all(item["implementation_task_label"] == "未作成" for item in items):
+        conclusion = "実装タスクはまだ作成されていません。"
+        next_judgement = "ロードマップ項目から実装タスクを作成するかを人間が判断します。"
+    elif items and all(item["implementation_task_label"] != "残あり" for item in items):
+        if any(item["status"] == "needs_reassessment" for item in items):
+            conclusion = "実装タスクは残っていません。検証の再確認が必要なロードマップ項目があります。"
+            next_judgement = "失敗またはタイムアウトした検証を確認します。"
+        elif any(item["roadmap_state_label"] == "人間確認待ち" for item in items):
+            conclusion = "実装タスクは残っていません。"
+            next_judgement = "ロードマップ項目を閉じてよいか、不足している確認があるかを人間が判断します。"
+        elif any(item["roadmap_state_label"] == "クローズ可能" for item in items):
+            conclusion = "実装タスクは残っていません。"
+            next_judgement = "ロードマップ項目を閉じてよいかを人間が判断します。"
+        elif any(item["roadmap_state_label"] == "追加検証待ち" for item in items):
+            conclusion = "実装タスクは残っていません。"
+            next_judgement = "追加検証が必要か、現在の証跡で十分かを人間が判断します。"
+        else:
+            conclusion = "実装タスクは残っていません。"
+            next_judgement = "次に扱う方向性を人間が決めます。"
     elif any(item["status"] == "needs_reassessment" for item in items):
         conclusion = "再確認が必要なロードマップ項目があります。"
         next_judgement = "失敗またはタイムアウトした検証を確認します。"
@@ -1931,10 +1985,12 @@ def print_project_summary_text(summary: dict) -> None:
     print("roadmap_assessments:")
     if summary["roadmap_assessments"]:
         for assessment in summary["roadmap_assessments"]:
-            print(f"- {assessment['commitment_id']} [{assessment['status']}] {assessment['title']}")
-            print(f"  closure_ready: {str(assessment['closure_ready']).lower()}")
-            if assessment["unresolved_reason"]:
-                print(f"  unresolved_reason: {assessment['unresolved_reason']}")
+            item = human_roadmap_assessment_summary(assessment)
+            print(f"- {assessment['commitment_id']} {assessment['title']}")
+            print(f"  実装タスク: {item['implementation_task_label']}")
+            print(f"  ロードマップ状態: {item['roadmap_state_label']}")
+            print(f"  確認状況: {item['state_label']}")
+            print(f"  止まっている理由: {item['reason']}")
     else:
         print("- none")
 

@@ -494,6 +494,10 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
         roadmap_lines.append("- 「これで進めてよければ承認してください」と明示する。")
         roadmap_lines.append("- 承認後は「この計画をもとに Task 化します」と説明する。")
         roadmap_lines.append("- 修正したい場合は「どこを変えるか指示してください」と案内する。")
+    roadmap_lines.append("- ロードマップ状態を聞かれたら、まず実装タスクが残っているかを答える。")
+    roadmap_lines.append("- 次に roadmap commitment がクローズ済みか、クローズ可能か、人間確認待ちかを説明する。")
+    roadmap_lines.append("- 内部状態名は原則出さず、人間向けの日本語ラベルで説明する。")
+    roadmap_lines.append("- 最後に、次に人間が判断することを示す。")
     optional_sections.append(roadmap_lines)
     return _render_with_budget(required, optional_sections, max_chars)
 
@@ -516,6 +520,10 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
     action = data.get("next_action") or ""
     required.append("next_action:")
     required.append(f"- {_compact_next_action_text(action) if action else 'なし'}")
+    required.append("roadmap_response_rules:")
+    required.append("- まず実装タスクが残っているかを答える。")
+    required.append("- 次に roadmap commitment のクローズ状態を説明する。")
+    required.append("- 内部状態名は原則出さず、最後に次の人間判断を示す。")
     for key in ("reason", "failed_verification_id", "resume_command", "required_approval_text", "command_after_approval", "command"):
         if data.get(key):
             required.append(f"{key}: {data[key]}")

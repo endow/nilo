@@ -11,6 +11,8 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     roadmap_status = roadmap_sub.add_parser("status")
     roadmap_status.add_argument("--project", required=True)
     roadmap_status.add_argument("--ai", action="store_true", help="Accepted for AI detail-command compatibility.")
+    roadmap_status.add_argument("--raw", action="store_true", help="print the raw roadmap status details")
+    roadmap_status.add_argument("--debug", action="store_true", help="print the raw roadmap status details")
     roadmap_status.set_defaults(func=handlers.cmd_roadmap_status)
 
     roadmap_assess = roadmap_sub.add_parser("assess")
@@ -21,6 +23,8 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
         dest="file",
         help="write generated roadmap assessment to this output file",
     )
+    roadmap_assess.add_argument("--raw", action="store_true", help="print the raw roadmap assessment details")
+    roadmap_assess.add_argument("--debug", action="store_true", help="print the raw roadmap assessment details")
     roadmap_assess.set_defaults(func=handlers.cmd_roadmap_assess)
 
     roadmap_summary = roadmap_sub.add_parser("summary")

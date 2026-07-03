@@ -118,24 +118,20 @@ def render_human_roadmap_summary_markdown(project: dict, summary: dict) -> str:
     for item in summary["items"]:
         lines.append(f"## {item['title']}")
         lines.append("")
-        lines.append(f"{item['title']} は{item['state_label']}")
-        if item["active_task_count"]:
-            lines.append(f"実装タスクが {item['active_task_count']} 件残っています。")
-        elif item["has_related_tasks"]:
-            lines.append("実装タスクは残っていません。")
-        else:
-            lines.append("対応する実装タスクがまだありません。")
+        lines.append(f"- 実装タスク: {item['implementation_task_label']}")
+        lines.append(f"- ロードマップ状態: {item['roadmap_state_label']}")
+        lines.append(f"- 確認状況: {item['state_label']}")
         if item["failed_verification_count"]:
-            lines.append("テストまたは検証に失敗した記録があります。")
+            lines.append("- 検証: テストまたは検証に失敗した記録があります。")
         elif item["passed_verification_count"]:
-            lines.append("テストは通っています。")
+            lines.append("- 検証: テストは通っています。")
         else:
-            lines.append("成功したテスト記録はまだありません。")
+            lines.append("- 検証: 成功したテスト記録はまだありません。")
         lines.append("")
         lines.append("止まっている理由:")
         lines.append(item["reason"])
         if item["needs_diff_human_review"]:
-            lines.append("変更ファイルとテストコマンドの対応を人間確認待ちです。")
+            lines.append("変更ファイルに対して、どのテストで確認済みかをNiloが自動判定できませんでした。")
         lines.append("")
         lines.append("人間が判断すること:")
         for decision in item["next_decisions"]:
@@ -151,15 +147,15 @@ def render_human_roadmap_summary_markdown(project: dict, summary: dict) -> str:
             lines.append("")
             lines.append("証跡紐づけの確認材料:")
             if item["changed_files"]:
-                lines.append("- 変更ファイル:")
+                lines.append("- changed_files:")
                 for path in item["changed_files"]:
                     lines.append(f"  - {path}")
             if item["missing_tests"]:
-                lines.append("- 自動判定できなかった関連テスト:")
+                lines.append("- missing_tests:")
                 for path in item["missing_tests"]:
                     lines.append(f"  - {path}")
             if item["unknown_files"]:
-                lines.append("- 対応するテスト候補を推定できなかったファイル:")
+                lines.append("- unknown_files:")
                 for path in item["unknown_files"]:
                     lines.append(f"  - {path}")
         lines.append("")

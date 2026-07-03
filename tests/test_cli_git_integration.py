@@ -629,14 +629,27 @@ class CliGitIntegrationTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("# Roadmap Assessment", body)
-            self.assertIn(f"### {commitment_id} Phase 2.5 Roadmap Projection", body)
-            self.assertIn("- status: needs_verification", body)
-            self.assertIn("- closure_ready: false", body)
-            self.assertIn("- [needs_verification] accepted commitment の達成状況を確認できる", body)
-            self.assertIn("related_tasks: task_assess", body)
-            self.assertIn("latest_verification:", body)
-            self.assertIn("(passed)", body)
+            self.assertIn("# 現在の状態", body)
+            self.assertIn(f"## Phase 2.5 Roadmap Projection", body)
+            self.assertIn("- 実装タスク: 残あり", body)
+            self.assertIn("- ロードマップ状態: 追加検証待ち", body)
+            self.assertIn("検証記録の確認が必要です", body)
+            self.assertIn("task_assess", body)
+            self.assertNotIn("needs_verification", body)
+            self.assertNotIn("closure_ready", body)
+
+            raw_output = io.StringIO()
+            with redirect_stdout(raw_output):
+                main(["--db", str(db), "roadmap", "assess", "--project", "project_test", "--raw"])
+            raw_body = raw_output.getvalue()
+            self.assertIn("# Roadmap Assessment", raw_body)
+            self.assertIn(f"### {commitment_id} Phase 2.5 Roadmap Projection", raw_body)
+            self.assertIn("- status: needs_verification", raw_body)
+            self.assertIn("- closure_ready: false", raw_body)
+            self.assertIn("- [needs_verification] accepted commitment の達成状況を確認できる", raw_body)
+            self.assertIn("related_tasks: task_assess", raw_body)
+            self.assertIn("latest_verification:", raw_body)
+            self.assertIn("(passed)", raw_body)
 
             summary_output = io.StringIO()
             with redirect_stdout(summary_output):
@@ -676,7 +689,8 @@ class CliGitIntegrationTests(unittest.TestCase):
             with redirect_stdout(text_summary_output):
                 main(["--db", str(db), "project", "summary", "--project", "project_test"])
             text_summary_body = text_summary_output.getvalue()
-            self.assertIn("closure_ready: false", text_summary_body)
+            self.assertIn("ロードマップ状態: 追加検証待ち", text_summary_body)
+            self.assertNotIn("closure_ready: false", text_summary_body)
             self.assertNotIn("roadmap_agent_state:", text_summary_body)
             self.assertNotIn("roadmap_agent_next_actions:", text_summary_body)
             self.assertNotIn("action_id: close_roadmap_commitment", text_summary_body)
@@ -701,7 +715,7 @@ class CliGitIntegrationTests(unittest.TestCase):
 
             roadmap_status_output = io.StringIO()
             with redirect_stdout(roadmap_status_output):
-                main(["--db", str(db), "roadmap", "status", "--project", "project_test"])
+                main(["--db", str(db), "roadmap", "status", "--project", "project_test", "--ai"])
             roadmap_status_body = roadmap_status_output.getvalue()
             self.assertIn("roadmap_agent_state:", roadmap_status_body)
             self.assertIn("roadmap_agent_next_actions:", roadmap_status_body)
