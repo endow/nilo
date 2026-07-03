@@ -59,12 +59,12 @@ def verification_row(task_id: str, root: Path) -> dict:
     }
 
 
-def release_verification_result(root: Path) -> dict:
+def release_verification_result(root: Path, *, command: str = release_handler.RELEASE_FULL_CHECK_COMMAND, snapshot_mode: str = "full") -> dict:
     snapshot = current_git_snapshot(root)
     now = now_iso()
     return {
         "source": "nilo_executed",
-        "command": "PYTHONPATH=src python tests/run_shards.py --all --jobs auto",
+        "command": command,
         "cwd": str(root),
         "stdout": "ok",
         "stderr": "",
@@ -72,19 +72,30 @@ def release_verification_result(root: Path) -> dict:
         "timed_out": False,
         "timeout_seconds": 600,
         **snapshot_columns(snapshot),
-        "metadata": {},
+        "metadata": {"snapshot_mode": snapshot_mode, "requested_snapshot_mode": snapshot_mode},
         "started_at": now,
         "finished_at": now,
         "created_at": now,
     }
 
 
-def failed_release_verification_result(root: Path) -> dict:
-    result = release_verification_result(root)
+def failed_release_verification_result(
+    root: Path, *, command: str = release_handler.RELEASE_FULL_CHECK_COMMAND, snapshot_mode: str = "full"
+) -> dict:
+    result = release_verification_result(root, command=command, snapshot_mode=snapshot_mode)
     result["stdout"] = "failed"
     result["stderr"] = "shard failed"
     result["exit_code"] = 1
     return result
+
+
+def full_release_verification_row(task_id: str, root: Path, *, target_version: str = "0.3.1") -> dict:
+    verified = release_verification_result(root, command=release_handler.RELEASE_FULL_CHECK_COMMAND, snapshot_mode="full")
+    verified["metadata"]["verification_mode"] = "full"
+    verified["metadata"]["release_prepare"] = True
+    verified["metadata"]["release_target_version"] = target_version
+    verified["metadata"]["release_effective_dirty_hash"] = release_handler._release_effective_worktree_hash(root)
+    return {"id": f"verification_full_{task_id}", "task_id": task_id, "evidence_check_id": None, **verified}
 
 
 def install_fake_release_tools(root: Path) -> Path:
@@ -141,7 +152,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         run_git(root, "add", "pyproject.toml", "src/nilo/__init__.py")
         run_git(root, "commit", "-m", "project files")
 
-    def test_release_prepare_updates_verifies_commits_and_opens_public_gate(self) -> None:
+    def test_release_prepare_runs_changed_check_commits_and_defers_public_gate(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             init_repo(root)
@@ -152,17 +163,30 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 os.chdir(root)
                 self.create_project(db, root.name)
                 output = io.StringIO()
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd)), patch(
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ) as verification_check, patch(
                     "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
                 ) as lightweight_checks:
                     with redirect_stdout(output):
                         main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
                 text = output.getvalue()
-                self.assertIn("full_check: PYTHONPATH=src python tests/run_shards.py --all --jobs auto", text)
+                self.assertIn("changed_check: PYTHONPATH=src python tests/run_shards.py --changed --jobs auto", text)
+                self.assertIn("changed_check_exit_code: 0", text)
+                self.assertIn("full_check: deferred", text)
                 self.assertNotIn("python -m unittest discover tests", text)
-                self.assertIn("recipe_run: waiting_public_approval", text)
-                self.assertIn("pending_public_operations: created", text)
-                self.assertIn("publish: nilo release publish --project", text)
+                self.assertIn("recipe_run: active", text)
+                self.assertIn("required_checks: full_check_deferred", text)
+                self.assertIn("pending_public_operations: none", text)
+                self.assertNotIn("pending_public_operations: created", text)
+                self.assertNotIn("publish: nilo release publish --project", text)
+                verification_check.assert_called_once_with(
+                    release_handler.RELEASE_CHANGED_CHECK_COMMAND,
+                    root,
+                    600,
+                    snapshot_mode="fast",
+                )
                 lightweight_checks.assert_called_once_with(root.name, root, str(db))
                 self.assertEqual(root.joinpath("pyproject.toml").read_text(encoding="utf-8").count('version = "0.3.1"'), 1)
                 self.assertIn('__version__ = "0.3.1"', root.joinpath("src/nilo/__init__.py").read_text(encoding="utf-8"))
@@ -171,15 +195,71 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 store = Store(db)
                 try:
                     context = workflow_context(store, root.name)
-                    self.assertEqual(context["status"], "waiting_public_approval")
-                    self.assertEqual([item["operation"] for item in context["pending_public_operations"]], ["create_tag", "push_branch", "push_tag", "create_github_release"])
+                    self.assertEqual(context["status"], "active")
+                    self.assertEqual(context["pending_public_operations"], [])
                     run = store.get("recipe_runs", context["recipe_run_id"])
                     metadata = run["metadata"]
                     self.assertTrue(metadata["commit_sha"])
                     self.assertEqual(metadata["committed_files"], ["docs/releases/0.3.1.md", "pyproject.toml", "src/nilo/__init__.py"])
-                    self.assertTrue(metadata["post_commit_full_check_reused"])
+                    self.assertFalse(metadata["post_commit_full_check_reused"])
+                    self.assertEqual(metadata["release_prepare_check_mode"], "changed")
+                    self.assertFalse(metadata["required_checks_passed"])
                     verification = store.latest_for_task("verification_runs", context["task_id"])
-                    self.assertEqual(verification["command"], "PYTHONPATH=src python tests/run_shards.py --all --jobs auto")
+                    self.assertEqual(verification["command"], "PYTHONPATH=src python tests/run_shards.py --changed --jobs auto")
+                    verification_metadata = verification["metadata"]
+                    self.assertEqual(verification_metadata["verification_mode"], "changed")
+                    self.assertTrue(verification_metadata["release_prepare"])
+                    self.assertEqual(verification_metadata["release_target_version"], "0.3.1")
+                    self.assertEqual(verification_metadata["requested_snapshot_mode"], "fast")
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_prepare_reuses_full_check_instead_of_changed_check(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+
+                def reusable_full_check(store: Store, task_id: str, cwd: Path, *, target_version: str) -> dict:
+                    verified = release_verification_result(cwd, command=release_handler.RELEASE_FULL_CHECK_COMMAND, snapshot_mode="full")
+                    verified["metadata"]["verification_mode"] = "full"
+                    verified["metadata"]["release_prepare"] = True
+                    verified["metadata"]["release_target_version"] = target_version
+                    verified["metadata"]["release_effective_dirty_hash"] = release_handler._release_effective_worktree_hash(cwd)
+                    row = {
+                        "id": "verification_reused_full",
+                        "task_id": task_id,
+                        "evidence_check_id": None,
+                        **verified,
+                    }
+                    store.insert("verification_runs", row)
+                    return {**row, "reuse_reason": "current_full_check", "snapshot_relation": "current_snapshot"}
+
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.reusable_full_verification_for_release", side_effect=reusable_full_check), patch(
+                    "nilo.cli_handlers.release.run_local_verification"
+                ) as verification_check, patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                text = output.getvalue()
+                verification_check.assert_not_called()
+                self.assertIn("verification_run: verification_reused_full", text)
+                self.assertIn("verification_reused: current_full_check", text)
+                self.assertIn("full_check: reused", text)
+                self.assertNotIn("changed_check:", text)
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    metadata = store.get("recipe_runs", context["recipe_run_id"])["metadata"]
+                    self.assertTrue(metadata["post_commit_full_check_reused"])
+                    self.assertEqual(metadata["release_prepare_check_mode"], "full")
                 finally:
                     store.close()
             finally:
@@ -379,7 +459,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
                 store = Store(db)
                 try:
-                    store.insert("verification_runs", verification_row(release_task_id, root))
+                    store.insert("verification_runs", full_release_verification_row(release_task_id, root))
                     mark_release_commit_recorded(
                         store,
                         task_id=release_task_id,
@@ -493,7 +573,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
                 store = Store(db)
                 try:
-                    store.insert("verification_runs", verification_row(release_task_id, root))
+                    store.insert("verification_runs", full_release_verification_row(release_task_id, root))
                     run = mark_release_commit_recorded(
                         store,
                         task_id=release_task_id,
@@ -563,7 +643,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
                 store = Store(db)
                 try:
-                    store.insert("verification_runs", verification_row(release_task_id, root))
+                    store.insert("verification_runs", full_release_verification_row(release_task_id, root))
                     mark_release_commit_recorded(
                         store,
                         task_id=release_task_id,
@@ -622,7 +702,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 run_git(root, "commit", "-m", "Release 0.3.1")
                 store = Store(db)
                 try:
-                    store.insert("verification_runs", verification_row(release_task_id, root))
+                    store.insert("verification_runs", full_release_verification_row(release_task_id, root))
                     context = workflow_context(store, root.name)
                     self.assertEqual(context["pending_public_operations"], [])
                 finally:
@@ -670,7 +750,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 os.chdir(root)
                 self.create_project(db, root.name)
                 output = io.StringIO()
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")
+                    ),
+                ):
                     with self.assertRaises(SystemExit) as raised:
                         with redirect_stdout(output):
                             main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
@@ -680,7 +765,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 try:
                     context = workflow_context(store, root.name)
                     self.assertEqual(context["status"], "paused_for_fix")
-                    self.assertEqual(context["reason"], "full_check_failed")
+                    self.assertEqual(context["reason"], "changed_check_failed")
                     self.assertTrue(context["failed_verification_id"])
                     rendered = render_ai_context_text(project_ai_context(store, root.name, cwd=root))
                     self.assertIn("active_recipe: release", rendered)
@@ -711,7 +796,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 self.create_project(db, root.name)
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")
+                    ),
+                ):
                     with self.assertRaises(SystemExit):
                         with redirect_stdout(io.StringIO()):
                             main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
@@ -757,7 +847,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 self.create_project(db, root.name)
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")
+                    ),
+                ):
                     with self.assertRaises(SystemExit):
                         with redirect_stdout(io.StringIO()):
                             main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
@@ -778,14 +873,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 run_git(root, "add", "tracked.txt", "pyproject.toml", "src/nilo/__init__.py", "docs/releases/0.3.1.md")
                 run_git(root, "commit", "-m", "Fix release checks")
                 output = io.StringIO()
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd)) as full_check, patch(
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ) as full_check, patch(
                     "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
                 ):
                     with redirect_stdout(output):
                         main(["--db", str(db), "release", "resume", "--project", root.name])
                 full_check.assert_called_once()
-                self.assertNotIn("verification_reused: verified_dirty_tree_matches_current_commit", output.getvalue())
-                self.assertIn("recipe_run: waiting_public_approval", output.getvalue())
+                body = output.getvalue()
+                self.assertNotIn("verification_reused: verified_dirty_tree_matches_current_commit", body)
+                self.assertIn("recipe_run: active", body)
+                self.assertIn("required_checks: full_check_deferred", body)
             finally:
                 os.chdir(previous_cwd)
 
@@ -799,7 +899,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 self.create_project(db, root.name)
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(cwd)):
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")
+                    ),
+                ):
                     with self.assertRaises(SystemExit):
                         with redirect_stdout(io.StringIO()):
                             main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
@@ -828,13 +933,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 with redirect_stdout(io.StringIO()):
                     main(["project", "create", "Nilo", "--id", root.name])
                 output = io.StringIO()
-                with patch("nilo.cli_handlers.release.run_local_verification", side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd)), patch(
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ), patch(
                     "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
                 ) as lightweight_checks:
                     with redirect_stdout(output):
                         main(["release", "run", "--project", root.name, "--auto-patch"])
                 self.assertIn("target_version: 0.3.1", output.getvalue())
-                self.assertIn("recipe_run: waiting_public_approval", output.getvalue())
+                self.assertIn("recipe_run: active", output.getvalue())
+                self.assertIn("required_checks: full_check_deferred", output.getvalue())
                 self.assertFalse(root.joinpath("None").exists())
                 self.assertEqual(lightweight_checks.call_args.args[2], str(root / ".nilo" / "nilo.db"))
             finally:

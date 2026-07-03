@@ -153,7 +153,12 @@ def release_required_checks_passed(store, task_id: str) -> bool:
     verification = store.latest_for_task("verification_runs", task_id)
     if not verification:
         return False
-    return not verification.get("timed_out") and verification.get("exit_code") in (0, "0")
+    metadata = verification.get("metadata") or {}
+    return (
+        not verification.get("timed_out")
+        and verification.get("exit_code") in (0, "0")
+        and metadata.get("verification_mode") == "full"
+    )
 
 
 def approve_pending_public_operations(

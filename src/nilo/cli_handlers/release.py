@@ -29,6 +29,7 @@ from .recipe import _create_recipe_task, _find_recipe, _render_task_fields
 
 
 RELEASE_FULL_CHECK_COMMAND = "PYTHONPATH=src python tests/run_shards.py --all --jobs auto"
+RELEASE_CHANGED_CHECK_COMMAND = "PYTHONPATH=src python tests/run_shards.py --changed --jobs auto"
 
 
 def cmd_release_prepare(args: argparse.Namespace) -> None:
@@ -103,28 +104,34 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
             print(f"- updated: {path}")
 
         verification_row = reusable_full_verification_for_release(store, run["task_id"], cwd, target_version=target_version)
+        verification_mode = "full"
         if verification_row:
             print(f"- verification_run: {verification_row['id']}")
             print(f"- verification_reused: {verification_row.get('reuse_reason', 'current_full_check')}")
+            print("- full_check: reused")
         else:
-            verification_row = _run_release_full_check(store, run, cwd, args.timeout)
+            verification_row = _run_release_changed_check(store, run, cwd, args.timeout)
+            verification_mode = "changed"
             print(f"- verification_run: {verification_row['id']}")
-        print(f"- full_check: {RELEASE_FULL_CHECK_COMMAND}")
+            print(f"- changed_check: {RELEASE_CHANGED_CHECK_COMMAND}")
+            print(f"- changed_check_exit_code: {verification_row['exit_code']}")
+            print("- full_check: deferred")
         print(f"- exit_code: {verification_row['exit_code']}")
         if verification_row.get("timed_out") or verification_row.get("exit_code") != 0:
+            failure_reason = "full_check_failed" if verification_mode == "full" else "changed_check_failed"
             _pause_release_for_fix(
                 store,
                 run,
-                reason="full_check_failed",
+                reason=failure_reason,
                 failed_verification_id=verification_row["id"],
                 managed_release_dirty=sorted(_git_changed_files(cwd).intersection(managed_files)),
                 unmanaged_dirty=sorted(_git_changed_files(cwd).difference(managed_files)),
             )
             print("- recipe_run: paused_for_fix")
-            print("- reason: full_check_failed")
+            print(f"- reason: {failure_reason}")
             print(f"- failed_verification_id: {verification_row['id']}")
             print(f"resume: nilo release resume --project {shlex.quote(project_id)}")
-            raise SystemExit("release full check failed; release recipe paused_for_fix")
+            raise SystemExit(f"release {verification_mode} check failed; release recipe paused_for_fix")
 
         pre_commit_snapshot = current_git_snapshot(cwd)
         reuse_after_commit = verification_row.get("snapshot_relation") == "verified_dirty_tree_committed"
@@ -154,6 +161,12 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
                 print(f"approval: {public_approval_text(recovered)}")
                 print(f"publish: {_release_publish_command(project_id, recovered)}")
                 return
+            if recovered and recovered.get("status") == "active" and not (recovered.get("metadata") or {}).get("required_checks_passed"):
+                print(f"- commit: {_git_value(cwd, ['rev-parse', 'HEAD'])}")
+                print("- recipe_run: active")
+                print("- required_checks: full_check_deferred")
+                print("- pending_public_operations: none")
+                return
             raise SystemExit("no release managed file changes to commit")
 
         _git_checked(cwd, ["add", *managed_files])
@@ -177,8 +190,8 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
             commit_message=commit_message,
             post_commit_snapshot=compact_snapshot(post_commit_snapshot),
         )
-        if not updated_run or updated_run.get("status") != "waiting_public_approval":
-            raise SystemExit("release commit was recorded but public approval gate did not open")
+        if not updated_run:
+            raise SystemExit("release commit was recorded but release run was not found")
         metadata = updated_run.get("metadata") or {}
         metadata.update(
             {
@@ -189,10 +202,21 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
                 "committed_tree_hash": committed_tree_hash,
                 "committed_files": committed_files,
                 "release_prepare_managed_files": managed_files,
-                "post_commit_full_check_reused": True,
+                "post_commit_full_check_reused": verification_mode == "full",
+                "release_prepare_check_mode": verification_mode,
             }
         )
         store.update("recipe_runs", updated_run["id"], {"metadata": metadata, "updated_at": now_iso()})
+        updated_run = store.get("recipe_runs", updated_run["id"]) or updated_run
+        if updated_run.get("status") != "waiting_public_approval":
+            if updated_run.get("status") == "active" and not (updated_run.get("metadata") or {}).get("required_checks_passed"):
+                _run_lightweight_post_commit_checks(project_id, cwd, str(db_path))
+                print(f"- commit: {commit_sha}")
+                print("- recipe_run: active")
+                print("- required_checks: full_check_deferred")
+                print("- pending_public_operations: none")
+                return
+            raise SystemExit("release commit was recorded but public approval gate did not open")
 
         _run_lightweight_post_commit_checks(project_id, cwd, str(db_path))
         final_run = store.get("recipe_runs", updated_run["id"])
@@ -210,6 +234,22 @@ def _run_release_full_check(store: Store, run: dict[str, Any], cwd: Path, timeou
     verification.setdefault("metadata", {})["verification_mode"] = "full"
     verification["metadata"]["release_prepare"] = True
     verification["metadata"]["release_full_check_command"] = RELEASE_FULL_CHECK_COMMAND
+    verification["metadata"]["release_target_version"] = release_version_from_run(run).lstrip("v")
+    verification["metadata"]["release_effective_dirty_hash"] = _release_effective_worktree_hash(cwd)
+    verification_row = {"id": make_id("verification"), "task_id": run["task_id"], "evidence_check_id": None, **verification}
+    try:
+        record_verification_run(store, run["task_id"], row=verification_row, actor="nilo")
+    except TransitionError as exc:
+        raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
+    return verification_row
+
+
+def _run_release_changed_check(store: Store, run: dict[str, Any], cwd: Path, timeout: float) -> dict[str, Any]:
+    verification = run_local_verification(RELEASE_CHANGED_CHECK_COMMAND, cwd, timeout, snapshot_mode="fast")
+    verification.setdefault("metadata", {})["verification_mode"] = "changed"
+    verification["metadata"]["release_prepare"] = True
+    verification["metadata"]["release_changed_check_command"] = RELEASE_CHANGED_CHECK_COMMAND
+    verification["metadata"]["release_full_check_deferred"] = True
     verification["metadata"]["release_target_version"] = release_version_from_run(run).lstrip("v")
     verification["metadata"]["release_effective_dirty_hash"] = _release_effective_worktree_hash(cwd)
     verification_row = {"id": make_id("verification"), "task_id": run["task_id"], "evidence_check_id": None, **verification}
