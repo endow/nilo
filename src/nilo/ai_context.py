@@ -499,6 +499,13 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
     roadmap_lines.append("- 内部状態名は原則出さず、人間向けの日本語ラベルで説明する。")
     roadmap_lines.append("- 最後に、次に人間が判断することを示す。")
     optional_sections.append(roadmap_lines)
+    overdrive_lines = [
+        "Overdrive 応答ルール:",
+        "- 「全部オーバードライブ」は既定では現在の依頼対象に限定する。",
+        "- `nilo next` で unrelated な別 task に進む前に止まり、`--scope queue` または明示承認が必要だと報告する。",
+        "- 人間に報告するときは、実装ファイル、テスト、Nilo 帳票 md、docs md を分けて説明する。",
+    ]
+    optional_sections.append(overdrive_lines)
     return _render_with_budget(required, optional_sections, max_chars)
 
 
@@ -524,6 +531,7 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
     required.append("- まず実装タスクが残っているかを答える。")
     required.append("- 次に roadmap commitment のクローズ状態を説明する。")
     required.append("- 内部状態名は原則出さず、最後に次の人間判断を示す。")
+    required.append("overdrive_rules: 既定は現在依頼対象。unrelated task 前で停止し、報告は実装/テスト/Nilo帳票md/docs mdを分ける。")
     for key in ("reason", "failed_verification_id", "resume_command", "required_approval_text", "command_after_approval", "command"):
         if data.get(key):
             required.append(f"{key}: {data[key]}")

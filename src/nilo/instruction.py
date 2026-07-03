@@ -179,6 +179,15 @@ def build_instruction(
             "- 自動完了を宣言しない\n"
             "- 判断が必要な点は human_review_required として報告する\n"
         )
+    elif task.get("mode") == "overdrive":
+        mode_note = (
+            "\n## Overdrive モード\n"
+            "- 「全部オーバードライブ」と言われても、既定では現在の依頼対象だけを進める\n"
+            "- 実装、検証、完了報告、completion までは現在 task の範囲で進めてよい\n"
+            "- `nilo next` で unrelated な別 task に進む前に止まり、人間に区切りを報告する\n"
+            "- 同一 roadmap commitment や全キューへ広げる場合は `--scope commitment` / `--scope project` / `--scope queue` または明示承認を必要とする\n"
+            "- 人間への報告では、実装ファイル、テスト、Nilo 帳票 md、docs md を分けて説明する\n"
+        )
     update_note = cached_instruction_note()
     if update_note:
         update_note = "\n" + update_note

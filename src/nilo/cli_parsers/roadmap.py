@@ -64,6 +64,7 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     roadmap_execute.add_argument("--project", required=True)
     roadmap_execute.add_argument("--overdrive", action="store_true")
     roadmap_execute.add_argument("--commitment", default="")
+    roadmap_execute.add_argument("--scope", choices=["task", "commitment", "project", "queue"], default="task")
     roadmap_execute.add_argument("--max-failures", type=int, default=3)
     roadmap_execute.set_defaults(func=handlers.cmd_roadmap_execute)
 

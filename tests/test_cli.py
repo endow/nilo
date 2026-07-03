@@ -2195,9 +2195,11 @@ variables:
                     main(["--db", str(db), "run", "--project", project_id, "--overdrive"])
                 body = run_output.getvalue()
                 self.assertIn("mode: overdrive", body)
+                self.assertIn("scope: task", body)
                 self.assertIn(f"cursor_task_id: {task_id}", body)
                 self.assertIn("approval_gates: bypassed", body)
                 self.assertIn("safety_gates: retained", body)
+                self.assertIn("scope_boundary: stop before unrelated next task", body)
                 self.assertIn("final_human_review_checkpoint: required", body)
 
                 store = Store(db)
@@ -2205,7 +2207,8 @@ variables:
                     runs = store.list_where("overdrive_runs", "project_id=?", (project_id,))
                     self.assertEqual(len(runs), 1)
                     self.assertEqual(runs[0]["cursor_task_id"], task_id)
-                    self.assertEqual(runs[0]["summary_json"]["human_review_points"][0], "Review the final Overdrive report before closing the roadmap commitment.")
+                    self.assertEqual(runs[0]["scope"], "task")
+                    self.assertEqual(runs[0]["summary_json"]["human_review_points"][0], "Review the final Overdrive report before continuing outside the selected overdrive scope.")
                     events = store.list_where("overdrive_events", "run_id=?", (runs[0]["id"],))
                     event_types = {event["event_type"] for event in events}
                     self.assertIn("approval_gate_bypassed", event_types)
@@ -2213,6 +2216,124 @@ variables:
                     self.assertIn("cursor_selected", event_types)
                 finally:
                     store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_overdrive_default_scope_is_current_task_and_stops_before_unrelated_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = "project_test"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                first_output = io.StringIO()
+                with redirect_stdout(first_output):
+                    main(["--db", str(db), "task", "start", "Current overdrive task", "--project", project_id, "--mode", "overdrive"])
+                first_task_id = next(line.split(": ", 1)[1] for line in first_output.getvalue().splitlines() if line.startswith("task: "))
+                second_output = io.StringIO()
+                with redirect_stdout(second_output):
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_unrelated", "--title", "Unrelated next task"])
+
+                run_output = io.StringIO()
+                with redirect_stdout(run_output):
+                    main(["--db", str(db), "run", "--project", project_id, "--overdrive"])
+                body = run_output.getvalue()
+                self.assertIn("scope: task", body)
+                self.assertIn(f"cursor_task_id: {first_task_id}", body)
+                self.assertIn("roadmap_commitment_id: none", body)
+                self.assertIn("next_task_after_scope: task_unrelated", body)
+                self.assertIn("next_scope_requirement: use --scope queue or explicit approval before continuing unrelated tasks", body)
+
+                store = Store(db)
+                try:
+                    runs = store.list_where("overdrive_runs", "project_id=?", (project_id,))
+                    self.assertEqual(runs[0]["scope"], "task")
+                    self.assertEqual(runs[0]["summary_json"]["next_after_scope_task_id"], "task_unrelated")
+                    events = store.list_where("overdrive_events", "run_id=?", (runs[0]["id"],))
+                    self.assertIn("scope_boundary_required", {event["event_type"] for event in events})
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_overdrive_boundary_uses_same_prioritized_order_as_cursor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = "project_test"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                store = Store(db)
+                try:
+                    store.insert(
+                        "roadmap_commitments",
+                        {
+                            "id": "commitment_test",
+                            "project_id": project_id,
+                            "title": "Commitment",
+                            "intent": "test prioritized overdrive order",
+                            "success_criteria": ["commitment tasks are prioritized"],
+                            "non_goals": [],
+                            "autonomy_scope": [],
+                            "review_gates": [],
+                            "evidence_policy": [],
+                            "status": "accepted",
+                            "accepted_by": "human",
+                            "accepted_at": "2026-06-20T00:00:00+09:00",
+                            "created_at": "2026-06-20T00:00:00+09:00",
+                        },
+                    )
+                finally:
+                    store.close()
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_a", "--title", "Standalone A"])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_b", "--title", "Commitment B", "--commitment", "commitment_test"])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_c", "--title", "Commitment C", "--commitment", "commitment_test"])
+
+                run_output = io.StringIO()
+                with redirect_stdout(run_output):
+                    main(["--db", str(db), "run", "--project", project_id, "--overdrive"])
+                body = run_output.getvalue()
+                self.assertIn("cursor_task_id: task_b", body)
+                self.assertIn("next_task_after_scope: task_c", body)
+
+                store = Store(db)
+                try:
+                    runs = store.list_where("overdrive_runs", "project_id=?", (project_id,))
+                    self.assertEqual(runs[0]["summary_json"]["next_after_scope_task_id"], "task_c")
+                    events = store.list_where("overdrive_events", "run_id=?", (runs[0]["id"],))
+                    boundary = next(event for event in events if event["event_type"] == "scope_boundary_required")
+                    self.assertEqual(boundary["metadata"]["next_task_id"], "task_c")
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_overdrive_project_scope_does_not_print_task_boundary(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = "project_test"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_one", "--title", "Task one"])
+
+                run_output = io.StringIO()
+                with redirect_stdout(run_output):
+                    main(["--db", str(db), "run", "--project", project_id, "--overdrive", "--scope", "project"])
+                body = run_output.getvalue()
+                self.assertIn("scope: project", body)
+                self.assertNotIn("scope_boundary: stop before unrelated next task", body)
+                self.assertNotIn("next_scope_requirement: use --scope queue", body)
             finally:
                 os.chdir(previous_cwd)
 
