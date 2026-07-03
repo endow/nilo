@@ -24,6 +24,7 @@ from ..workflow_context import (
     mark_release_commit_recorded,
     public_approval_text,
     release_version_from_run,
+    validate_public_operation_approval,
 )
 from .recipe import _create_recipe_task, _find_recipe, _render_task_fields
 
@@ -229,10 +230,11 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
         store.close()
 
 
-def _run_release_full_check(store: Store, run: dict[str, Any], cwd: Path, timeout: float) -> dict[str, Any]:
+def _run_release_full_check(store: Store, run: dict[str, Any], cwd: Path, timeout: float, *, context: str = "prepare") -> dict[str, Any]:
     verification = run_local_verification(RELEASE_FULL_CHECK_COMMAND, cwd, timeout, snapshot_mode="full")
     verification.setdefault("metadata", {})["verification_mode"] = "full"
-    verification["metadata"]["release_prepare"] = True
+    verification["metadata"]["release_prepare"] = context == "prepare"
+    verification["metadata"]["release_publish"] = context == "publish"
     verification["metadata"]["release_full_check_command"] = RELEASE_FULL_CHECK_COMMAND
     verification["metadata"]["release_target_version"] = release_version_from_run(run).lstrip("v")
     verification["metadata"]["release_effective_dirty_hash"] = _release_effective_worktree_hash(cwd)
@@ -261,17 +263,23 @@ def _run_release_changed_check(store: Store, run: dict[str, Any], cwd: Path, tim
 
 
 def cmd_release_publish(args: argparse.Namespace) -> None:
-    store = Store(_resolved_db_path(args.db, Path.cwd()))
+    cwd = Path.cwd()
+    store = Store(_resolved_db_path(args.db, cwd))
     try:
         if not store.get("projects", args.project):
             raise SystemExit(f"project not found: {args.project}")
+        run = active_recipe_run(store, args.project)
+        if not run or run.get("recipe_name") != "release":
+            raise SystemExit("active release recipe run not found")
+        validate_public_operation_approval(args.approval, release_version_from_run(run))
+        _ensure_release_publish_full_check(store, run, cwd, getattr(args, "timeout", 600.0))
         try:
             run, logs = execute_pending_public_operations(
                 store,
                 project_id=args.project,
                 approval=args.approval,
                 release_url=args.release_url,
-                cwd=Path.cwd(),
+                cwd=cwd,
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
@@ -287,6 +295,44 @@ def cmd_release_publish(args: argparse.Namespace) -> None:
             print(f"github_release: {metadata['github_release_url']}")
     finally:
         store.close()
+
+
+def _ensure_release_publish_full_check(store: Store, run: dict[str, Any], cwd: Path, timeout: float) -> dict[str, Any]:
+    target_version = release_version_from_run(run).lstrip("v")
+    verification_row = reusable_full_verification_for_release(store, run["task_id"], cwd, target_version=target_version)
+    if verification_row:
+        _record_release_publish_full_check(store, run, verification_row, reused=True)
+        print("- full_check: reused")
+        print(f"- verification_run: {verification_row['id']}")
+        print(f"- verification_reused: {verification_row.get('reuse_reason', 'current_full_check')}")
+        return verification_row
+
+    verification_row = _run_release_full_check(store, run, cwd, timeout, context="publish")
+    _record_release_publish_full_check(store, run, verification_row, reused=False)
+    print(f"- full_check: {RELEASE_FULL_CHECK_COMMAND}")
+    print(f"- full_check_exit_code: {verification_row['exit_code']}")
+    print(f"- verification_run: {verification_row['id']}")
+    if verification_row.get("timed_out") or verification_row.get("exit_code") != 0:
+        raise SystemExit("release publish full check failed; public operations not executed")
+    return verification_row
+
+
+def _record_release_publish_full_check(store: Store, run: dict[str, Any], verification_row: dict[str, Any], *, reused: bool) -> None:
+    current = store.get("recipe_runs", run["id"]) or run
+    metadata = {**(current.get("metadata") or {})}
+    passed = not verification_row.get("timed_out") and verification_row.get("exit_code") in (0, "0")
+    metadata.update(
+        {
+            "release_publish_full_check_id": verification_row["id"],
+            "release_publish_full_check_command": verification_row.get("command") or RELEASE_FULL_CHECK_COMMAND,
+            "release_publish_full_check_required": True,
+            "release_publish_full_check_passed": passed,
+            "release_publish_full_check_reused": reused,
+        }
+    )
+    if reused:
+        metadata["release_publish_full_check_reuse_reason"] = verification_row.get("reuse_reason", "current_full_check")
+    store.update("recipe_runs", current["id"], {"metadata": metadata, "updated_at": now_iso()})
 
 
 def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str, cwd: Path, *, resume: bool = False) -> dict[str, Any]:

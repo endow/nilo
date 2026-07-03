@@ -19,7 +19,7 @@ from nilo.state_audit import audit_workflow
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
-from nilo.workflow_context import approve_pending_public_operations, mark_release_commit_recorded, workflow_context
+from nilo.workflow_context import approve_pending_public_operations, mark_release_commit_recorded, public_operations_for_release, workflow_context
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -96,6 +96,26 @@ def full_release_verification_row(task_id: str, root: Path, *, target_version: s
     verified["metadata"]["release_target_version"] = target_version
     verified["metadata"]["release_effective_dirty_hash"] = release_handler._release_effective_worktree_hash(root)
     return {"id": f"verification_full_{task_id}", "task_id": task_id, "evidence_check_id": None, **verified}
+
+
+def force_waiting_public_approval(store: Store, root: Path, project_id: str, task_id: str, *, target_version: str = "0.3.1") -> str:
+    context = workflow_context(store, project_id)
+    run = store.get("recipe_runs", context["recipe_run_id"])
+    metadata = {**(run["metadata"] or {}), "target_version": target_version, "commit_sha": run_git(root, "rev-parse", "HEAD")}
+    store.update(
+        "recipe_runs",
+        run["id"],
+        {
+            "status": "waiting_public_approval",
+            "current_step": "public_release",
+            "completed_steps": ["prepare_version", "run_required_checks", "commit"],
+            "pending_steps": ["tag", "push_main", "push_tag", "create_github_release", "verify_release", "complete"],
+            "pending_public_operations": public_operations_for_release(target_version),
+            "metadata": metadata,
+            "updated_at": now_iso(),
+        },
+    )
+    return run["id"]
 
 
 def install_fake_release_tools(root: Path) -> Path:
@@ -707,6 +727,111 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     events = store.list_where("transition_events", "entity_id=? AND transition='complete_task'", (release_task_id,))
                     self.assertTrue(completion)
                     self.assertEqual(events[-1]["related_ids"]["completion"], completion["id"])
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_release_publish_runs_full_check_before_public_operations_when_missing(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                root.joinpath("docs/releases").mkdir(parents=True)
+                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Release 0.3.1")
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    run_id = force_waiting_public_approval(store, root, root.name, release_task_id)
+                finally:
+                    store.close()
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                output = io.StringIO()
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "full")),
+                ) as full_check:
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "publish", "--project", root.name, "--approval", "v0.3.1 を tag/push/release して"])
+                text = output.getvalue()
+                full_check.assert_called_once_with(release_handler.RELEASE_FULL_CHECK_COMMAND, root, 600.0, snapshot_mode="full")
+                self.assertIn("full_check: PYTHONPATH=src python tests/run_shards.py --all --jobs auto", text)
+                self.assertIn("full_check_exit_code: 0", text)
+                self.assertIn("release_recipe: completed", text)
+                store = Store(db)
+                try:
+                    run = store.get("recipe_runs", run_id)
+                    run_metadata = run["metadata"]
+                    self.assertTrue(run_metadata["release_publish_full_check_required"])
+                    self.assertTrue(run_metadata["release_publish_full_check_passed"])
+                    self.assertFalse(run_metadata["release_publish_full_check_reused"])
+                    self.assertEqual(run_metadata["release_publish_full_check_command"], release_handler.RELEASE_FULL_CHECK_COMMAND)
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_release_publish_stops_public_operations_when_full_check_fails(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                root.joinpath("docs/releases").mkdir(parents=True)
+                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Release 0.3.1")
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    force_waiting_public_approval(store, root, root.name, release_task_id)
+                finally:
+                    store.close()
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                output = io.StringIO()
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: failed_release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "full")
+                    ),
+                ):
+                    with self.assertRaises(SystemExit) as raised:
+                        with redirect_stdout(output):
+                            main(["--db", str(db), "release", "publish", "--project", root.name, "--approval", "v0.3.1 を tag/push/release して"])
+                self.assertIn("release publish full check failed", str(raised.exception))
+                self.assertIn("full_check_exit_code: 1", output.getvalue())
+                self.assertFalse(root.joinpath(".git/release-tools.log").exists())
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    self.assertEqual(context["status"], "waiting_public_approval")
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    metadata = run["metadata"]
+                    self.assertTrue(metadata["release_publish_full_check_required"])
+                    self.assertFalse(metadata["release_publish_full_check_passed"])
                 finally:
                     store.close()
             finally:
