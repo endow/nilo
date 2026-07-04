@@ -64,6 +64,71 @@ def first_next_todo_for_project(store: Store, project_id: str) -> dict | None:
     return sorted(todos, key=lambda item: (NEXT_TODO_STATUS_PRIORITY[item["status"]], item["created_at"], item["id"]))[0]
 
 
+def roadmap_attention_summary_for_project(store: Store, project_id: str) -> dict:
+    from .. import project_logic as p
+
+    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    commitments = [
+        *p.accepted_roadmap_commitments(store, project_id),
+        *p.closed_roadmap_commitments(store, project_id),
+    ]
+    related_by_commitment = [
+        (commitment, p.related_tasks_for_commitment(tasks, commitment))
+        for commitment in commitments
+    ]
+    task_ids = sorted(
+        {
+            task["id"]
+            for _, related_tasks in related_by_commitment
+            for task in related_tasks
+        }
+    )
+    latest_reports = p.latest_rows_for_tasks(store, "agent_reports", task_ids)
+    latest_verifications = p.latest_rows_for_tasks(store, "verification_runs", task_ids)
+
+    items = []
+    for commitment, related_tasks in related_by_commitment:
+        if not related_tasks:
+            continue
+        if any(not p.is_task_completed_status(statuses[task["id"]]) for task in related_tasks):
+            continue
+        diff_review_tasks = []
+        for task in related_tasks:
+            diff = p.diff_aware_verification_summary(
+                latest_reports.get(task["id"]),
+                latest_verifications.get(task["id"]),
+            )
+            if diff["status"] == "needs_human_review":
+                diff_review_tasks.append(task)
+        if not diff_review_tasks:
+            continue
+        items.append(
+            {
+                "title": commitment["title"],
+                "implementation_task_label": "すべて完了",
+                "work_task_label": "すべて完了",
+                "evidence_attention_items": ["変更ファイルとテストの対応が人間確認待ちです"],
+            }
+        )
+    return {"items": items}
+
+
+def print_roadmap_attention_summary(summary: dict) -> None:
+    items = [item for item in summary.get("items", []) if item.get("evidence_attention_items")]
+    if not items:
+        return
+    print()
+    print("完了済みロードマップに証跡注意があります。")
+    for item in items:
+        print(f"- {item['title']}")
+        print(f"  - 作業タスク: {item.get('work_task_label', item['implementation_task_label'])}")
+        print(f"  - 注意: {'、'.join(item['evidence_attention_items'])}")
+    print()
+    print("次に判断すること:")
+    print("- 証跡を確認して閉じる")
+    print("- 追加検証を実行する")
+
+
 def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbose: bool = False) -> dict:
     from .. import cli as c
 
@@ -257,7 +322,11 @@ def _fast_active_tasks_and_statuses(store: Store, project_id: str, *, limit: int
     from .. import project_logic as p
 
     tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
-    active_tasks, _ = p.roadmap_prioritized_project_active_tasks(store, project_id, tasks, statuses)
+    active_tasks = p.roadmap_prioritized_active_tasks(
+        tasks,
+        statuses,
+        p.accepted_roadmap_commitments(store, project_id),
+    )
     return active_tasks[:limit], statuses
 
 
@@ -508,7 +577,10 @@ def cmd_facade_status(args: argparse.Namespace) -> None:
             for warning in boundary_warning_lines(boundary):
                 print(warning)
         if not getattr(args, "verbose", False) and not getattr(args, "audit", False):
-            print_fast_status(fast_status_data(store, project_id), debug_timing=bool(getattr(args, "debug_timing", False)))
+            data = fast_status_data(store, project_id)
+            print_fast_status(data, debug_timing=bool(getattr(args, "debug_timing", False)))
+            if not data["active_tasks"]:
+                print_roadmap_attention_summary(roadmap_attention_summary_for_project(store, project_id))
             return
         if getattr(args, "audit", False):
             print_audit_status(audit_status_data(store, project_id))
@@ -617,7 +689,14 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             else:
                 print(f"- 実行できる依頼を具体的な Task にします。{todo['id']}: {todo['title']}")
         else:
-            print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
+            roadmap_summary = roadmap_attention_summary_for_project(store, project_id)
+            attention_items = [item for item in roadmap_summary.get("items", []) if item.get("evidence_attention_items")]
+            if attention_items:
+                print("- 完了済みロードマップに証跡注意があります。証跡を確認して閉じるか、追加検証を実行するか判断してください。")
+                for item in attention_items[:3]:
+                    print(f"  - {item['title']}: {'、'.join(item['evidence_attention_items'])}")
+            else:
+                print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
     finally:
         store.close()
 

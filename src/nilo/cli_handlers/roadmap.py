@@ -14,6 +14,7 @@ from ..roadmap_render import (
     render_roadmap_discuss_markdown,
     render_roadmap_task_plan_markdown,
 )
+from ..snapshot import current_git_snapshot
 from ..store import Store
 from ..timeutil import now_iso
 from ..transitions import (
@@ -347,13 +348,18 @@ def cmd_roadmap_status(args: argparse.Namespace) -> None:
         closed_commitments = c.closed_roadmap_commitments(store, project["id"])
         pending_revisions = c.pending_roadmap_revisions(store, project["id"])
         if not (args.ai or args.raw or args.debug):
-            assessments = c.roadmap_assessments(store, project["id"], tasks, statuses)
+            current_snapshot = current_git_snapshot(Path.cwd())
+            assessments = c.roadmap_assessments(store, project["id"], tasks, statuses, current_snapshot=current_snapshot)
             closed_assessments = [
-                {
-                    **c.roadmap_commitment_assessment(store, commitment, tasks, statuses),
-                    "commitment_status": "closed",
-                }
-                for commitment in closed_commitments
+                {**assessment, "commitment_status": "closed"}
+                for assessment in c.roadmap_assessments(
+                    store,
+                    project["id"],
+                    tasks,
+                    statuses,
+                    commitments=closed_commitments,
+                    current_snapshot=current_snapshot,
+                )
             ]
             print(render_human_roadmap_summary_markdown(project, c.human_roadmap_summary([*assessments, *closed_assessments])), end="")
             related_task_ids = {
@@ -426,23 +432,29 @@ def cmd_roadmap_assess(args: argparse.Namespace) -> None:
         if not project:
             raise SystemExit(f"project not found: {args.project}")
         tasks, statuses = c.project_tasks_and_statuses(store, project["id"])
-        assessments = c.roadmap_assessments(store, project["id"], tasks, statuses)
         if args.raw or args.debug:
+            assessments = c.roadmap_assessments(store, project["id"], tasks, statuses)
             body = render_roadmap_assess_markdown(project, assessments)
             allowed_headings = {"# Roadmap Assessment"}
         else:
+            current_snapshot = current_git_snapshot(Path.cwd())
+            assessments = c.roadmap_assessments(store, project["id"], tasks, statuses, current_snapshot=current_snapshot)
             closed_assessments = [
-                {
-                    **c.roadmap_commitment_assessment(store, commitment, tasks, statuses),
-                    "commitment_status": "closed",
-                }
-                for commitment in c.closed_roadmap_commitments(store, project["id"])
+                {**assessment, "commitment_status": "closed"}
+                for assessment in c.roadmap_assessments(
+                    store,
+                    project["id"],
+                    tasks,
+                    statuses,
+                    commitments=c.closed_roadmap_commitments(store, project["id"]),
+                    current_snapshot=current_snapshot,
+                )
             ]
             body = render_human_roadmap_summary_markdown(
                 project,
                 c.human_roadmap_summary([*assessments, *closed_assessments]),
             )
-            allowed_headings = {"# 現在の状態"}
+            allowed_headings = {"# ロードマップ状態"}
         if args.file:
             output = Path(args.file)
             ensure_generated_markdown_output_is_safe(output, "roadmap assess", allowed_headings)
@@ -468,7 +480,7 @@ def cmd_roadmap_summary(args: argparse.Namespace) -> None:
         body = render_human_roadmap_summary_markdown(project, c.human_roadmap_summary(assessments))
         if args.file:
             output = Path(args.file)
-            ensure_generated_markdown_output_is_safe(output, "roadmap summary", {"# 現在の状態"})
+            ensure_generated_markdown_output_is_safe(output, "roadmap summary", {"# ロードマップ状態"})
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(body, encoding="utf-8")
             print(f"written: {output}")

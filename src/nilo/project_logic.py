@@ -397,11 +397,20 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
     }
 
 
-def roadmap_assessments(store: Store, project_id: str, tasks: list[dict], statuses: dict[str, str]) -> list[dict]:
-    current_snapshot = current_git_snapshot(Path.cwd())
+def roadmap_assessments(
+    store: Store,
+    project_id: str,
+    tasks: list[dict],
+    statuses: dict[str, str],
+    *,
+    commitments: list[dict] | None = None,
+    current_snapshot: dict | None = None,
+) -> list[dict]:
+    current_snapshot = current_snapshot or current_git_snapshot(Path.cwd())
+    selected_commitments = commitments if commitments is not None else accepted_roadmap_commitments(store, project_id)
     return [
         roadmap_commitment_assessment(store, commitment, tasks, statuses, current_snapshot=current_snapshot)
-        for commitment in accepted_roadmap_commitments(store, project_id)
+        for commitment in selected_commitments
     ]
 
 
@@ -529,6 +538,16 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
             for path in task["diff_verification"].get("unknown_files", [])
         }
     )
+    stale_evidence_tasks = [
+        task
+        for task in related_tasks
+        if task["latest_evidence_status"] == "stale"
+    ]
+    failed_evidence_tasks = [
+        task
+        for task in related_tasks
+        if task["latest_evidence_status"] in {"failed", "timed_out"}
+    ]
     commitment_status = assessment.get("commitment_status", "accepted")
     if commitment_status == "closed":
         roadmap_state_label = "クローズ済み"
@@ -542,15 +561,26 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
         roadmap_state_label = "追加検証待ち"
     if active_tasks:
         implementation_task_label = "残あり"
+        work_task_label = "残作業あり"
     elif related_tasks:
         implementation_task_label = "すべて完了"
+        work_task_label = "すべて完了"
     else:
         implementation_task_label = "未作成"
+        work_task_label = "未作成"
     reason = status_text["reason"]
     if commitment_status == "closed":
         reason = "ロードマップ項目はすでにクローズされています。"
     elif not assessment["closure_ready"] and assessment["status"] == "evidence_present":
         reason = "自動クローズできる状態ではありません。"
+    evidence_attention_items = []
+    if stale_evidence_tasks:
+        evidence_attention_items.append("古い証跡があります")
+    if failed_evidence_tasks:
+        evidence_attention_items.append("失敗した検証記録があります")
+    if diff_review_tasks:
+        evidence_attention_items.append("変更ファイルとテストの対応が人間確認待ちです")
+    evidence_attention_label = "あり" if evidence_attention_items else "なし"
     return {
         "commitment_id": assessment["commitment_id"],
         "title": assessment["title"],
@@ -559,6 +589,7 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
         "closure_ready": assessment["closure_ready"],
         "state_label": status_text["state"],
         "implementation_task_label": implementation_task_label,
+        "work_task_label": work_task_label,
         "roadmap_state_label": roadmap_state_label,
         "reason": reason,
         "next_decisions": status_text["next_decisions"],
@@ -567,6 +598,8 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
         "passed_verification_count": len(passed_verifications),
         "failed_verification_count": len(failed_verifications),
         "needs_diff_human_review": bool(diff_review_tasks),
+        "evidence_attention_label": evidence_attention_label,
+        "evidence_attention_items": evidence_attention_items,
         "related_task_ids": [task["task_id"] for task in related_tasks],
         "changed_files": changed_files,
         "missing_tests": missing_tests,
@@ -576,6 +609,7 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
 
 def human_roadmap_summary(assessments: list[dict]) -> dict:
     items = [human_roadmap_assessment_summary(assessment) for assessment in assessments]
+    has_evidence_attention = any(item["evidence_attention_items"] for item in items)
     if not items:
         conclusion = "現在、受理済みロードマップ項目はありません。"
         next_judgement = "次に扱う方向性を人間が決めます。"
@@ -610,7 +644,23 @@ def human_roadmap_summary(assessments: list[dict]) -> dict:
     else:
         conclusion = "まだ完了候補ではないロードマップ項目があります。"
         next_judgement = "不足しているタスク、報告、検証を確認します。"
-    return {"conclusion": conclusion, "next_judgement": next_judgement, "items": items}
+    if items and all(item["implementation_task_label"] != "残あり" for item in items) and has_evidence_attention:
+        evidence_attention = "あり"
+    else:
+        evidence_attention = "なし"
+    if not items:
+        work_tasks = "なし"
+    elif all(item["implementation_task_label"] != "残あり" for item in items):
+        work_tasks = "すべて完了"
+    else:
+        work_tasks = "残作業あり"
+    return {
+        "conclusion": conclusion,
+        "next_judgement": next_judgement,
+        "work_tasks": work_tasks,
+        "evidence_attention": evidence_attention,
+        "items": items,
+    }
 
 
 def roadmap_proposal_path_for_commitment(store: Store, project_id: str, commitment_id: str | None = None) -> str:

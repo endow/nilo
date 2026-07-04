@@ -33,7 +33,7 @@ from nilo.ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, rende
 from nilo.cli import handson_language, main
 from nilo.human_status import human_next_action_text
 from nilo.project_logic import human_roadmap_summary, project_tasks_and_statuses, render_handson_active_task_next_steps, selected_roadmap_commitment
-from nilo.roadmap_render import human_roadmap_action_text, render_human_roadmap_markdown
+from nilo.roadmap_render import human_roadmap_action_text, render_human_roadmap_markdown, render_human_roadmap_summary_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.snapshot import UNCOMPUTED_DIFF_HASH
 from nilo.store import Store
@@ -6114,8 +6114,8 @@ close 済み commitment を表示できるようにした。
             with redirect_stdout(roadmap_output):
                 main(["--db", str(db), "roadmap", "status", "--project", "project_test"])
             roadmap_body = roadmap_output.getvalue()
-            self.assertIn("# 現在の状態", roadmap_body)
-            self.assertIn("- ロードマップ状態: クローズ済み", roadmap_body)
+            self.assertIn("# ロードマップ状態", roadmap_body)
+            self.assertIn("- ロードマップ: クローズ済み", roadmap_body)
             self.assertNotIn("closure_ready", roadmap_body)
 
             raw_roadmap_output = io.StringIO()
@@ -6362,9 +6362,9 @@ close 済み commitment を表示できるようにした。
             ):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             human_body = human_output.getvalue()
-            self.assertIn("# 現在の状態", human_body)
-            self.assertIn("- 実装タスク: 残あり", human_body)
-            self.assertIn("- ロードマップ状態: 人間確認待ち", human_body)
+            self.assertIn("# ロードマップ状態", human_body)
+            self.assertIn("- 作業タスク: 残作業あり", human_body)
+            self.assertIn("- ロードマップ: 人間確認待ち", human_body)
             self.assertIn("changed_files:", human_body)
             self.assertIn("missing_tests:", human_body)
             self.assertNotIn("needs_human_review", human_body)
@@ -6452,7 +6452,7 @@ close 済み commitment を表示できるようにした。
             with redirect_stdout(output):
                 main(["--db", str(db), "roadmap", "summary", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("# 現在の状態", body)
+            self.assertIn("# ロードマップ状態", body)
             self.assertIn("次に判断すること", body)
             self.assertIn("テストは通っています", body)
             self.assertIn("人間確認待ち", body)
@@ -6508,8 +6508,9 @@ close 済み commitment を表示できるようにした。
             with redirect_stdout(output):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("# 現在の状態\n\n実装タスクは残っていません。", body)
-            self.assertIn("- 実装タスク: すべて完了", body)
+            self.assertIn("# ロードマップ状態", body)
+            self.assertIn("作業タスク: すべて完了", body)
+            self.assertIn("- 作業タスク: すべて完了", body)
             self.assertNotIn("needs_verification", body)
             self.assertNotIn("closure_ready", body)
 
@@ -6526,6 +6527,7 @@ close 済み commitment を表示できるようにした。
                         {
                             "task_id": "task_failed",
                             "status": "completed_by_user",
+                            "latest_evidence_status": "failed",
                             "latest_verification_status": "failed",
                             "diff_verification": {
                                 "status": "not_applicable",
@@ -6545,6 +6547,77 @@ close 済み commitment を表示できるようにした。
         self.assertEqual(summary["next_judgement"], "失敗またはタイムアウトした検証を確認します。")
         self.assertEqual(summary["items"][0]["implementation_task_label"], "すべて完了")
         self.assertEqual(summary["items"][0]["roadmap_state_label"], "追加検証待ち")
+        self.assertEqual(summary["items"][0]["evidence_attention_items"], ["失敗した検証記録があります"])
+
+    def test_human_roadmap_summary_separates_completed_work_from_evidence_attention(self) -> None:
+        summary = human_roadmap_summary(
+            [
+                {
+                    "commitment_id": "commitment_attention",
+                    "title": "Evidence Attention Roadmap",
+                    "status": "needs_human_review",
+                    "closure_ready": False,
+                    "unresolved_reason": "diff-aware verification needs human review",
+                    "related_tasks": [
+                        {
+                            "task_id": "task_attention",
+                            "status": "completed_by_user",
+                            "latest_evidence_status": "current",
+                            "latest_verification_status": "passed",
+                            "diff_verification": {
+                                "status": "needs_human_review",
+                                "changed_files": ["src/nilo/example.py"],
+                                "missing_tests": {"src/nilo/example.py": ["tests/test_example.py"]},
+                                "unknown_files": [],
+                            },
+                        }
+                    ],
+                    "success_criteria": [],
+                    "evidence_policy": [],
+                }
+            ]
+        )
+        body = render_human_roadmap_summary_markdown({"id": "project_test", "name": "Nilo"}, summary)
+
+        self.assertEqual(summary["work_tasks"], "すべて完了")
+        self.assertEqual(summary["evidence_attention"], "あり")
+        self.assertIn("作業タスク: すべて完了", body)
+        self.assertIn("証跡注意: あり", body)
+        self.assertIn("変更ファイルとテストの対応が人間確認待ちです", body)
+        self.assertNotIn("needs_human_review", body)
+        self.assertNotIn("diff-aware verification", body)
+
+    def test_status_fast_path_does_not_run_full_roadmap_snapshot_when_idle(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# Idle Roadmap
+
+## Success Criteria
+- idle status remains fast
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                imported = io.StringIO()
+                with redirect_stdout(imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(line.split(": ", 1)[1] for line in imported.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+            output = io.StringIO()
+            with redirect_stdout(output), patch(
+                "nilo.project_logic.current_git_snapshot",
+                side_effect=AssertionError("full snapshot should not run in fast status"),
+            ):
+                main(["--db", str(db), "status", "--project", "project_test"])
+
+            body = output.getvalue()
+            self.assertIn("作業中のタスクはありません", body)
 
     def test_roadmap_assess_treats_unittest_discover_start_dir_as_broad_suite(self) -> None:
         with TemporaryDirectory() as directory:

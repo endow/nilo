@@ -106,20 +106,27 @@ def render_roadmap_assess_markdown(project: dict, assessments: list[dict]) -> st
 
 def render_human_roadmap_summary_markdown(project: dict, summary: dict) -> str:
     lines = [
-        "# 現在の状態",
+        "# ロードマップ状態",
+        "",
+        project["name"],
+        "",
+        f"作業タスク: {summary.get('work_tasks', '確認が必要です')}",
+        f"証跡注意: {summary.get('evidence_attention', 'なし')}",
         "",
         summary["conclusion"],
-        f"次に判断すること: {summary['next_judgement']}",
         "",
     ]
+    lines.append("次に判断すること:")
+    lines.append(f"- {summary['next_judgement']}")
+    lines.append("")
     if not summary["items"]:
         return "\n".join(lines).rstrip() + "\n"
 
     for item in summary["items"]:
         lines.append(f"## {item['title']}")
         lines.append("")
-        lines.append(f"- 実装タスク: {item['implementation_task_label']}")
-        lines.append(f"- ロードマップ状態: {item['roadmap_state_label']}")
+        lines.append(f"- 作業タスク: {item.get('work_task_label', item['implementation_task_label'])}")
+        lines.append(f"- ロードマップ: {item['roadmap_state_label']}")
         lines.append(f"- 確認状況: {item['state_label']}")
         if item["failed_verification_count"]:
             lines.append("- 検証: テストまたは検証に失敗した記録があります。")
@@ -127,12 +134,19 @@ def render_human_roadmap_summary_markdown(project: dict, summary: dict) -> str:
             lines.append("- 検証: テストは通っています。")
         else:
             lines.append("- 検証: 成功したテスト記録はまだありません。")
+        lines.append(f"- 証跡注意: {item.get('evidence_attention_label', 'なし')}")
         lines.append("")
-        lines.append("止まっている理由:")
-        lines.append(item["reason"])
-        if item["needs_diff_human_review"]:
-            lines.append("変更ファイルに対して、どのテストで確認済みかをNiloが自動判定できませんでした。")
-        lines.append("")
+        if item.get("evidence_attention_items"):
+            lines.append("注意:")
+            for attention in item["evidence_attention_items"]:
+                lines.append(f"- {attention}")
+            lines.append("")
+        if item["reason"]:
+            lines.append("止まっている理由:")
+            lines.append(item["reason"])
+            if item["needs_diff_human_review"]:
+                lines.append("変更ファイルに対して、どのテストで確認済みかをNiloが自動判定できませんでした。")
+            lines.append("")
         lines.append("人間が判断すること:")
         for decision in item["next_decisions"]:
             lines.append(f"- {decision}")
