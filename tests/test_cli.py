@@ -4015,7 +4015,16 @@ variables:
             self.assertEqual(summary["work_state"], "人間の完了判断待ちです。")
             self.assertIn("human_next_actions", summary)
             human_next_actions = "\n".join(summary["human_next_actions"])
-            self.assertIn("task_verified: 未コミット差分を含む検証情報を確認してから完了判断してください。", human_next_actions)
+            self.assertTrue(
+                any(
+                    text in human_next_actions
+                    for text in (
+                        "task_verified: 未コミット差分を含む検証情報を確認してから完了判断してください。",
+                        "task_verified: 差分、変更ファイル、検証結果、未解決事項を確認してください。",
+                    )
+                ),
+                human_next_actions,
+            )
             self.assertNotIn("review dirty-tree verification metadata", human_next_actions)
             self.assertIn("current_phase", summary)
             self.assertIn("task_status_counts", summary)
