@@ -586,7 +586,7 @@ def cmd_instruct(args: argparse.Namespace) -> None:
         task = store.get("tasks", task["id"])
 
         boundary = resolve_project_boundary(db_path=args.db)
-        body, report_format = build_instruction(project, task)
+        body, report_format = build_instruction(project, task, plan=args.plan)
         body = f"{project_boundary_prompt(boundary)}\n\n{body}"
         created_at = now_iso()
         instruction = {

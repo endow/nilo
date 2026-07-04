@@ -163,3 +163,12 @@ def split_task_specs(task: dict) -> list[tuple[str, str]]:
         ("implementation", title),
         ("verification", f"{title} の検証結果を記録する"),
     ]
+
+
+def custom_split_task_specs(task: dict, child_titles: list[str]) -> list[tuple[str, str]]:
+    specs: list[tuple[str, str]] = []
+    for title in child_titles:
+        stripped = title.strip()
+        if stripped:
+            specs.append((task.get("task_type", "implementation"), stripped))
+    return specs

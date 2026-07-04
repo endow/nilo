@@ -454,7 +454,11 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
     work_size_lines = [
         "作業規模の判定:",
         "- 小さく明確な修正は通常 task として進める。",
+        "- 小〜中規模の作業は Light plan または通常 task として進める。",
         "- 複数ファイルだけでは roadmap 扱いにせず、ひとまとまりの明確なバグ修正は通常 task として進める。",
+        "- 複数タスク・複数コミット・実装と検証の分離が必要な作業は Roadmap を推奨する。",
+        "- DB schema、状態遷移、リリース基盤、複数サブシステムにまたがる大改修だけ Epic 扱いを提案する。",
+        "- Epic 扱いが必要な場合は理由を示して停止し、明示承認まで roadmap revision / acceptance / task plan を進めない。",
     ]
     if current:
         work_size_lines.append("- CLI等の複数機能・複数実装トラックは roadmap 推奨。自動作成せず承認後に作る。")

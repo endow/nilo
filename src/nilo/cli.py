@@ -341,8 +341,11 @@ MCP identity guard:
 
 大きな作業の扱い:
 - 実装前に小さい作業か大きい作業かを判定する。
-- 小さく明確なら task。
+- 小さく明確なら task。小〜中規模は Light plan または通常 task で進める。
 - 複数ファイルだけでは roadmap 扱いしない。明確な一まとまりの修正は通常 task。
+- 複数タスク・複数コミット・実装と検証の分離が必要な作業は Roadmap を推奨する。
+- DB schema、状態遷移、リリース基盤、複数サブシステムにまたがる大改修だけ Epic 扱いを提案する。
+- Epic 扱いが必要な場合は理由を示して停止し、明示承認まで roadmap revision / acceptance / task plan を進めない。
 - 大作業は自動 roadmap 化しない。承認後だけ `nilo roadmap discuss` -> `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
 
 質問抑制:

@@ -68,10 +68,7 @@ def roadmap_attention_summary_for_project(store: Store, project_id: str) -> dict
     from .. import project_logic as p
 
     tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
-    commitments = [
-        *p.accepted_roadmap_commitments(store, project_id),
-        *p.closed_roadmap_commitments(store, project_id),
-    ]
+    commitments = p.accepted_roadmap_commitments(store, project_id)
     related_by_commitment = [
         (commitment, p.related_tasks_for_commitment(tasks, commitment))
         for commitment in commitments

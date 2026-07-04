@@ -16,6 +16,7 @@ def register_agent(sub: argparse._SubParsersAction, handlers: ModuleType) -> Non
 def register_instruct(sub: argparse._SubParsersAction, handlers: ModuleType) -> None:
     instruct = sub.add_parser("instruct")
     instruct.add_argument("--task", required=True)
+    instruct.add_argument("--plan", choices=["light"], default="")
     instruct.set_defaults(func=handlers.cmd_instruct)
 
 

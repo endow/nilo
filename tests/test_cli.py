@@ -6619,6 +6619,119 @@ close 済み commitment を表示できるようにした。
             body = output.getvalue()
             self.assertIn("作業中のタスクはありません", body)
 
+    def test_next_hides_diff_attention_after_human_roadmap_close(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# Diff Attention Roadmap
+
+## Success Criteria
+- diff warning can be accepted by human close
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(line.split(": ", 1)[1] for line in import_output.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                store = Store(db)
+                revision = store.get("roadmap_revisions", revision_id)
+                commitment_id = revision["proposed_commitment_id"]
+                store.close()
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_diff_attention",
+                        "--title",
+                        "Implement diff attention roadmap",
+                        "--type",
+                        "documentation",
+                        "--commitment",
+                        commitment_id,
+                    ]
+                )
+
+            store = Store(db)
+            store.insert(
+                "agent_reports",
+                {
+                    "id": "report_diff_attention",
+                    "task_id": "task_diff_attention",
+                    "agent": "codex",
+                    "claimed_status": "done",
+                    "changed_files": ["src/nilo/example.py"],
+                    "body_md": "report",
+                    "created_at": "2026-01-01T00:00:01+00:00",
+                },
+            )
+            store.insert(
+                "verification_runs",
+                {
+                    "id": "verification_diff_attention",
+                    "task_id": "task_diff_attention",
+                    "evidence_check_id": None,
+                    "command": f'"{sys.executable}" -m unittest tests.test_cli.CliTests.test_success_pattern_is_not_injected_into_instruction',
+                    "cwd": str(root),
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "timeout_seconds": 10.0,
+                    "git_head": "abc",
+                    "metadata": {"working_tree_available": True, "working_tree_dirty": False, "working_tree_files": []},
+                    "started_at": "2026-01-01T00:00:02+00:00",
+                    "finished_at": "2026-01-01T00:00:03+00:00",
+                    "created_at": "2026-01-01T00:00:03+00:00",
+                },
+            )
+            store.close()
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "task", "complete", "--task", "task_diff_attention", "--reason", "done", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+            accepted_output = io.StringIO()
+            with redirect_stdout(accepted_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            self.assertIn("完了済みロードマップに証跡注意があります", accepted_output.getvalue())
+            self.assertIn("Diff Attention Roadmap", accepted_output.getvalue())
+
+            with redirect_stdout(io.StringIO()):
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "roadmap",
+                        "close",
+                        "--commitment",
+                        commitment_id,
+                        "--reason",
+                        "human accepted diff-aware evidence warning",
+                        "--actor",
+                        "human",
+                        "--human-confirm",
+                        "--force",
+                        "--decision-note",
+                        "test human decision",
+                    ]
+                )
+
+            closed_output = io.StringIO()
+            with redirect_stdout(closed_output):
+                main(["--db", str(db), "next", "--project", "project_test"])
+            self.assertNotIn("完了済みロードマップに証跡注意があります", closed_output.getvalue())
+            self.assertNotIn("Diff Attention Roadmap", closed_output.getvalue())
+
     def test_roadmap_assess_treats_unittest_discover_start_dir_as_broad_suite(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -8232,6 +8345,72 @@ close 済み commitment を表示できるようにした。
             self.assertNotIn("## 参考にする成功パターン", output.getvalue())
             self.assertNotIn("影響範囲が不明な修正では先にresearchタスクを作る", output.getvalue())
 
+    def test_instruct_plan_light_includes_light_plan_and_epic_rules(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "CLIフローを改善する",
+                        "--description",
+                        "ロードマップUXを軽くする",
+                        "--acceptance",
+                        "Light plan が出力される",
+                    ]
+                )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "instruct", "--task", "task_test", "--plan", "light"])
+
+            body = output.getvalue()
+            self.assertIn("## Light plan", body)
+            self.assertIn("目的:", body)
+            self.assertIn("やること:", body)
+            self.assertIn("触るファイル:", body)
+            self.assertIn("検証:", body)
+            self.assertIn("完了条件:", body)
+            self.assertIn("Light plan が出力される", body)
+            self.assertIn("Epic 扱いが必要な場合は理由を示し", body)
+            self.assertIn("明示承認があるまで roadmap revision / acceptance / task plan を進めない", body)
+
+    def test_instruct_without_plan_does_not_include_light_plan_rules(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "CLIフローを改善する",
+                    ]
+                )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "instruct", "--task", "task_test"])
+
+            body = output.getvalue()
+            self.assertNotIn("## Light plan", body)
+            self.assertNotIn("## ロードマップ/overdrive の人間向け説明ルール", body)
+            self.assertNotIn("Epic 扱いが必要な場合は理由を示し", body)
+
     def test_task_split_creates_subtasks(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
@@ -8265,6 +8444,66 @@ close 済み commitment を表示できるようにした。
             self.assertEqual(task_types, {"research", "design", "implementation", "verification"})
             implementation = next(task for task in subtasks if task["task_type"] == "implementation")
             self.assertEqual(implementation["requires_understanding_check"], 1)
+            self.assertIn("Generated subtasks:", output.getvalue())
+
+    def test_task_split_accepts_custom_child_tasks_and_inherits_scope(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "CLIフローを改善する",
+                        "--description",
+                        "親タスクの説明",
+                        "--acceptance",
+                        "親タスクの完了条件",
+                        "--commitment",
+                        "commitment_test",
+                        "--roadmap-item",
+                        "roadmap_item_test",
+                        "--risk",
+                        "high",
+                    ]
+                )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "split",
+                        "--task",
+                        "task_test",
+                        "--child",
+                        "実装",
+                        "--child",
+                        "検証",
+                    ]
+                )
+
+            store = Store(db)
+            subtasks = store.list_where("tasks", "parent_task_id=?", ("task_test",))
+            store.close()
+            subtasks = sorted(subtasks, key=lambda task: task["split_index"])
+            self.assertEqual([task["title"] for task in subtasks], ["実装", "検証"])
+            self.assertTrue(all(task["task_type"] == "implementation" for task in subtasks))
+            self.assertTrue(all(task["risk_level"] == "high" for task in subtasks))
+            self.assertTrue(all(task["requires_understanding_check"] == 1 for task in subtasks))
+            self.assertTrue(all(task["description"] == "親タスクの説明" for task in subtasks))
+            self.assertTrue(all(task["acceptance_criteria"] == ["親タスクの完了条件"] for task in subtasks))
+            self.assertTrue(all(task["roadmap_commitment_id"] == "commitment_test" for task in subtasks))
+            self.assertTrue(all(task["roadmap_item_id"] == "roadmap_item_test" for task in subtasks))
             self.assertIn("Generated subtasks:", output.getvalue())
 
     def test_task_complete_records_final_human_completion(self) -> None:

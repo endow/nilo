@@ -160,6 +160,8 @@ status: {evidence_status}
 def build_instruction(
     project: dict,
     task: dict,
+    *,
+    plan: str = "",
 ) -> tuple[str, str]:
     degraded = task["degradation_mode"] == "degraded"
     primary_language = project_primary_language(project)
@@ -191,6 +193,11 @@ def build_instruction(
     update_note = cached_instruction_note()
     if update_note:
         update_note = "\n" + update_note
+    light_plan_note = ""
+    roadmap_progress_note = ""
+    if plan == "light":
+        light_plan_note = "\n" + build_light_plan_section(task)
+        roadmap_progress_note = "\n" + roadmap_progress_guidance()
 
     body = f"""# 作業指示
 
@@ -224,6 +231,10 @@ def build_instruction(
 ## 完了条件
 {criteria or "- 変更内容と検証結果を完了報告に記載する"}
 
+{light_plan_note}
+
+{roadmap_progress_note}
+
 ## 完了報告一時ファイル
 - 完了報告 markdown は `.nilo/reports/{task["id"]}.md` に一時作成する
 - 取り込みは `nilo report import --task {task["id"]} --file .nilo/reports/{task["id"]}.md` で行う
@@ -236,6 +247,49 @@ def build_instruction(
 {REPORT_FORMAT}
 """
     return body, REPORT_FORMAT
+
+
+def build_light_plan_section(task: dict) -> str:
+    description = task.get("description") or task["title"]
+    acceptance = task.get("acceptance_criteria") or []
+    acceptance_lines = "\n".join(f"- {item}" for item in acceptance) or "- 変更内容と検証結果を完了報告に記載する"
+    return f"""## Light plan
+
+目的:
+{description}
+
+やること:
+- 現状の該当箇所を確認する
+- 受け入れ条件を満たす最小変更を実装する
+- 関連する focused tests を追加または更新する
+- 検証結果を Nilo に記録する
+
+触るファイル:
+- 実装時に特定する
+
+検証:
+- 変更範囲に対応する focused tests
+- 必要に応じて関連 CLI tests
+
+完了条件:
+{acceptance_lines}
+"""
+
+
+def roadmap_progress_guidance() -> str:
+    return """## ロードマップ/overdrive の人間向け説明ルール
+- 最初に実装タスクが残っているかを答える。
+- 作業完了と証跡注意を分けて説明する。
+- 内部状態名は、明示的に求められない限りそのまま出さない。
+- 小〜中規模の作業は Light plan または通常 task で進める。
+- 複数タスク・複数コミット・実装と検証の分離が必要な作業は Roadmap を推奨する。
+- DB schema、状態遷移、リリース基盤、複数サブシステムにまたがる大改修だけ Epic 扱いを提案する。
+- Epic 扱いが必要な場合は理由を示し、明示承認があるまで roadmap revision / acceptance / task plan を進めない。
+- overdrive を、キュー全体を空にする許可として扱わない。
+- overdrive の既定スコープは現在 task とする。
+- 無関係な次 task に移る前に停止する。
+- 最終報告では、コード変更・テスト・ドキュメント・Nilo帳票を分けて説明する。
+"""
 
 
 def task_type_guidance(task: dict) -> str:

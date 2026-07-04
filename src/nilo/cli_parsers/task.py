@@ -72,6 +72,7 @@ def register_task(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
 
     task_split = task_sub.add_parser("split")
     task_split.add_argument("--task", required=True)
+    task_split.add_argument("--child", action="append", default=[])
     task_split.set_defaults(func=handlers.cmd_task_split)
 
     task_complete = task_sub.add_parser("complete")

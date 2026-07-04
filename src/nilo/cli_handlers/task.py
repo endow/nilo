@@ -13,7 +13,7 @@ from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task,
 from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, evidence_status, review_result_status
 from ..store import Store
 from ..task_analytics import project_task_analytics, task_analytics
-from ..task_logic import active_task_completion, completion_status, projected_task_status, require_ai_completion_evidence, split_task_specs
+from ..task_logic import active_task_completion, completion_status, custom_split_task_specs, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
 from ..transitions import TransitionError, complete_task, invalidate_task_completion
 from ..workflow_context import mark_release_commit_recorded
@@ -568,20 +568,24 @@ def cmd_task_split(args: argparse.Namespace) -> None:
         task = store.get("tasks", args.task)
         if not task:
             raise SystemExit(f"task not found: {args.task}")
-        specs = split_task_specs(task)
+        specs = custom_split_task_specs(task, args.child) if args.child else split_task_specs(task)
+        if not specs:
+            raise SystemExit("at least one non-empty --child value is required")
         print("Generated subtasks:")
         for index, (task_type, title) in enumerate(specs, start=1):
             row = {
                 "id": make_id("task"),
                 "project_id": task["project_id"],
                 "title": title,
-                "description": "",
-                "acceptance_criteria": [],
+                "description": task["description"] if args.child else "",
+                "acceptance_criteria": task["acceptance_criteria"] if args.child else [],
                 "parent_task_id": task["id"],
                 "split_index": index,
                 "task_type": task_type,
                 "risk_level": task["risk_level"],
                 "requires_understanding_check": task_type == "implementation" and task["risk_level"] == "high",
+                "roadmap_commitment_id": task.get("roadmap_commitment_id", ""),
+                "roadmap_item_id": task.get("roadmap_item_id", ""),
                 "status": "planned",
                 "assigned_model_profile": task["assigned_model_profile"],
                 "degradation_mode": task["degradation_mode"],
