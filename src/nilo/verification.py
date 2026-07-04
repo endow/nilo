@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 from pathlib import Path
@@ -40,6 +41,49 @@ def _is_env_assignment(token: str) -> bool:
     import re
 
     return bool(re.match(ENV_ASSIGNMENT_PATTERN, token))
+
+
+def _shard_summary_metadata(stdout: str, cwd: Path) -> dict:
+    summary_path = ""
+    failed_shards: list[str] = []
+    lines = stdout.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("summary_json:"):
+            summary_path = stripped.split(":", 1)[1].strip()
+        if stripped == "failed_shards:":
+            for item in lines[index + 1 :]:
+                item = item.strip()
+                if not item.startswith("- "):
+                    break
+                failed_shards.append(item[2:].strip())
+        elif stripped.startswith("failed_shards:") and stripped != "failed_shards:":
+            value = stripped.split(":", 1)[1].strip()
+            if value and value != "[]":
+                failed_shards.append(value)
+
+    if summary_path:
+        path = Path(summary_path)
+        if not path.is_absolute():
+            path = cwd / path
+        if path.exists():
+            try:
+                summary = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                summary = {}
+            if isinstance(summary, dict):
+                failed = summary.get("failed_shards")
+                if isinstance(failed, list):
+                    failed_shards = [str(item) for item in failed]
+                summary_path = str(summary.get("summary_path") or summary_path)
+
+    result = {}
+    if summary_path:
+        result["summary_path"] = summary_path
+        result["failed_summary_path"] = summary_path
+    if failed_shards:
+        result["failed_shards"] = failed_shards
+    return result
 
 
 SNAPSHOT_MODES = {"fast", "full", "none", "audit"}
@@ -101,6 +145,7 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, s
     snapshot = verification_snapshot(cwd, snapshot_mode)
     snapshot_mode_recorded = snapshot_mode if snapshot_mode == "audit" else snapshot.get("snapshot_mode", snapshot_mode)
     git_diff_hash_computed = bool(snapshot.get("git_diff_hash_computed", snapshot.get("git_diff_hash") not in {"", UNCOMPUTED_DIFF_HASH}))
+    shard_metadata = _shard_summary_metadata(stdout, cwd)
     return {
         "source": "nilo_executed",
         "command": command,
@@ -129,6 +174,7 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, s
             "snapshot_hashed_paths": snapshot.get("snapshot_hashed_paths", []),
             "snapshot_large_paths": snapshot.get("snapshot_large_paths", []),
             "snapshot_binary_paths": snapshot.get("snapshot_binary_paths", []),
+            **shard_metadata,
         },
         "started_at": started_at,
         "finished_at": finished_at,

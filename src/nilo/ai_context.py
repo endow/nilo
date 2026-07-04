@@ -285,11 +285,17 @@ def _compact_release_recipe_context(data: dict[str, Any], workflow: dict[str, An
             }
         )
     elif status == "paused_for_fix":
+        failed = bool(workflow.get("failed_verification_id"))
         action.update(
             {
-                "next_action": "fix_and_resume",
+                "next_action": "create_separate_bugfix_task" if failed else "fix_and_resume",
+                "blocked_recipe": workflow.get("recipe_name", ""),
+                "blocked_reason": workflow.get("blocked_reason", workflow.get("reason", "")),
+                "must_not_fix_inside_recipe": failed,
                 "reason": workflow.get("reason", ""),
                 "failed_verification_id": workflow.get("failed_verification_id", ""),
+                "failed_summary_path": workflow.get("failed_summary_path", ""),
+                "failed_shards": workflow.get("failed_shards", []),
                 "resume_command": workflow.get("resume_command", ""),
             }
         )
@@ -307,6 +313,8 @@ def workflow_next_actions(workflow: dict[str, Any]) -> list[str]:
             action += f"; after approval run: {workflow['public_execution_command']}"
         return [action]
     if workflow.get("status") == "paused_for_fix":
+        if workflow.get("failed_verification_id"):
+            return [f"release recipe blocked by failed verification; create a separate bugfix task, then resume with: {workflow.get('resume_command', '')}"]
         return [f"release recipe paused for fix; resume with: {workflow.get('resume_command', '')}"]
     return [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
 

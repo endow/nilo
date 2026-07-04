@@ -629,6 +629,38 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             raise SystemExit(f"project not found: {project_id}")
         workflow = workflow_context(store, project_id)
         if workflow.get("type") == "recipe_run":
+            if getattr(args, "ai", False):
+                action: dict[str, Any] = {
+                    "project_id": project_id,
+                    "active_recipe": workflow.get("recipe_name", ""),
+                    "recipe_status": workflow.get("status", ""),
+                    "next_action": "run_release_prepare",
+                    "command": workflow.get("release_prepare_command", ""),
+                }
+                if workflow.get("status") == "waiting_public_approval":
+                    action.update(
+                        {
+                            "next_action": "await_public_approval",
+                            "required_approval_text": workflow.get("required_approval_text", ""),
+                            "command_after_approval": workflow.get("release_publish_command", ""),
+                        }
+                    )
+                elif workflow.get("status") == "paused_for_fix":
+                    failed = bool(workflow.get("failed_verification_id"))
+                    action.update(
+                        {
+                            "next_action": "create_separate_bugfix_task" if failed else "resolve_recipe_blocker",
+                            "blocked_recipe": workflow.get("recipe_name", ""),
+                            "blocked_reason": workflow.get("blocked_reason", workflow.get("reason", "")),
+                            "must_not_fix_inside_recipe": failed,
+                            "failed_verification_id": workflow.get("failed_verification_id", ""),
+                            "failed_summary_path": workflow.get("failed_summary_path", ""),
+                            "failed_shards": workflow.get("failed_shards", []),
+                            "resume_command": workflow.get("resume_command", ""),
+                        }
+                    )
+                print(json.dumps(action, ensure_ascii=False, indent=2))
+                return
             print(f"{field_label('project')}: {project_id} ({project['name']})")
             if getattr(args, "verbose", False):
                 print("workflow_context:")
@@ -657,11 +689,27 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                     else:
                         print(f"execute_after_approval: {workflow['public_execution_command']}")
             elif workflow.get("status") == "paused_for_fix":
-                print("- next_action: fix_and_resume")
+                if workflow.get("failed_verification_id"):
+                    print("- release recipe は verification 失敗で停止しています。")
+                    print("- release task 内で修正を続けないでください。")
+                    print("- 別 task を作成して failed verification を修正してください。")
+                    print("推奨:")
+                    print(f"- nilo task create --project {project_id} --title \"Fix release verification failure\" --type implementation --risk medium")
+                    print("- 修正後に full check を成功させる")
+                    print("- working tree clean 後に release recipe を resume する")
+                    print("- next_action: create_separate_bugfix_task")
+                else:
+                    print("- next_action: fix_and_resume")
                 if workflow.get("reason"):
                     print(f"reason: {workflow['reason']}")
+                if workflow.get("blocked_reason"):
+                    print(f"blocked_reason: {workflow['blocked_reason']}")
                 if workflow.get("failed_verification_id"):
                     print(f"failed_verification_id: {workflow['failed_verification_id']}")
+                if workflow.get("failed_summary_path"):
+                    print(f"failed_summary_path: {workflow['failed_summary_path']}")
+                if workflow.get("failed_shards"):
+                    print("failed_shards: " + ", ".join(str(item) for item in workflow["failed_shards"]))
                 if workflow.get("resume_command"):
                     print(f"resume_command: {workflow['resume_command']}")
             else:

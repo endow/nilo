@@ -333,7 +333,7 @@ def audit_workflow(store: Store, project_id: str, *, cwd: Path | None = None) ->
         if run["recipe_name"] == "release":
             completion = active_task_completion(store, run["task_id"])
             metadata = run.get("metadata") or {}
-            if metadata.get("commit_sha") and run["status"] != "completed" and not (run.get("pending_public_operations") or []):
+            if metadata.get("commit_sha") and run["status"] not in ("completed", "paused_for_fix") and not (run.get("pending_public_operations") or []):
                 findings.append(_finding("release_commit_without_pending_or_completed_run", "release commit is recorded but recipe run is neither completed nor waiting on public operations", severity="error", entity_type="recipe_run", entity_id=run["id"]))
             if completion and not metadata.get("commit_sha"):
                 findings.append(_finding("release_task_completed_without_commit_metadata", "release task is completed but release commit metadata is missing", severity="warning", entity_type="recipe_run", entity_id=run["id"]))

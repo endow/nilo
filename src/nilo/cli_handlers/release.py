@@ -84,6 +84,12 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
         target_version = (getattr(args, "target_version", "") or release_version_from_run(run)).lstrip("v")
         if not target_version:
             raise SystemExit("target version could not be resolved")
+        if not resume and _release_prepare_already_satisfied(run):
+            print("release prepare: already satisfied")
+            print("- full_check: already satisfied")
+            print("- next_action: publish approval required")
+            print(f"publish: {_release_publish_command(project_id, run)}")
+            return
 
         managed_files = _managed_files_for_run(run, target_version)
         dirty = _classify_dirty_files(cwd, managed_files)
@@ -124,6 +130,7 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
                 store,
                 run,
                 reason=failure_reason,
+                verification_row=verification_row,
                 failed_verification_id=verification_row["id"],
                 managed_release_dirty=sorted(_git_changed_files(cwd).intersection(managed_files)),
                 unmanaged_dirty=sorted(_git_changed_files(cwd).difference(managed_files)),
@@ -205,6 +212,7 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
                 "release_prepare_managed_files": managed_files,
                 "post_commit_full_check_reused": verification_mode == "full",
                 "release_prepare_check_mode": verification_mode,
+                "required_full_check": _required_full_check_metadata(verification_row, reused=verification_mode == "full"),
             }
         )
         store.update("recipe_runs", updated_run["id"], {"metadata": metadata, "updated_at": now_iso()})
@@ -302,7 +310,11 @@ def _ensure_release_publish_full_check(store: Store, run: dict[str, Any], cwd: P
     verification_row = reusable_full_verification_for_release(store, run["task_id"], cwd, target_version=target_version)
     if verification_row:
         _record_release_publish_full_check(store, run, verification_row, reused=True)
-        print("- full_check: reused")
+        print(f"- full_check: reused {verification_row['id']}")
+        if verification_row.get("reuse_reason") == "current_full_check":
+            print("- reason: same HEAD, clean tree, same command, same mode, exit 0")
+        else:
+            print(f"- reason: {verification_row.get('reuse_reason', 'current_full_check')}")
         print(f"- verification_run: {verification_row['id']}")
         print(f"- verification_reused: {verification_row.get('reuse_reason', 'current_full_check')}")
         return verification_row
@@ -313,7 +325,19 @@ def _ensure_release_publish_full_check(store: Store, run: dict[str, Any], cwd: P
     print(f"- full_check_exit_code: {verification_row['exit_code']}")
     print(f"- verification_run: {verification_row['id']}")
     if verification_row.get("timed_out") or verification_row.get("exit_code") != 0:
-        raise SystemExit("release publish full check failed; public operations not executed")
+        _pause_release_for_fix(
+            store,
+            run,
+            reason="full_check_failed",
+            verification_row=verification_row,
+            failed_verification_id=verification_row["id"],
+            managed_release_dirty=[],
+            unmanaged_dirty=[],
+        )
+        print("- recipe_run: paused_for_fix")
+        print("- blocked_reason: failed_verification")
+        print(f"- failed_verification_id: {verification_row['id']}")
+        raise SystemExit("release publish full check failed; public operations not executed; release recipe paused_for_fix")
     return verification_row
 
 
@@ -328,6 +352,7 @@ def _record_release_publish_full_check(store: Store, run: dict[str, Any], verifi
             "release_publish_full_check_required": True,
             "release_publish_full_check_passed": passed,
             "release_publish_full_check_reused": reused,
+            "required_full_check": _required_full_check_metadata(verification_row, reused=reused),
         }
     )
     if reused:
@@ -404,15 +429,29 @@ def _pause_release_for_fix(
     run: dict[str, Any],
     *,
     reason: str,
+    verification_row: dict[str, Any] | None = None,
     failed_verification_id: str = "",
     managed_release_dirty: list[str] | None = None,
     unmanaged_dirty: list[str] | None = None,
 ) -> dict[str, Any]:
     current = store.get("recipe_runs", run["id"]) or run
+    verification = verification_row or (store.get("verification_runs", failed_verification_id) if failed_verification_id else None) or {}
+    verification_metadata = verification.get("metadata") or {}
+    failed_summary_path = (
+        verification_metadata.get("failed_summary_path")
+        or verification_metadata.get("summary_path")
+        or verification_metadata.get("summary_json")
+        or ""
+    )
+    failed_shards = verification_metadata.get("failed_shards") or verification_metadata.get("failed_shard_ids") or []
     metadata = {
         **(current.get("metadata") or {}),
         "pause_reason": reason,
+        "blocked_reason": "failed_verification" if failed_verification_id else reason,
         "failed_verification_id": failed_verification_id,
+        "failed_verification": _failed_verification_metadata(verification),
+        "failed_summary_path": failed_summary_path,
+        "failed_shards": failed_shards or (["unknown"] if failed_verification_id else []),
         "managed_release_dirty": managed_release_dirty or [],
         "unmanaged_dirty": unmanaged_dirty or [],
         "resume_command": f"nilo release resume --project {current['project_id']}",
@@ -430,6 +469,55 @@ def _pause_release_for_fix(
         },
     )
     return store.get("recipe_runs", current["id"]) or current
+
+
+def _release_prepare_already_satisfied(run: dict[str, Any]) -> bool:
+    metadata = run.get("metadata") or {}
+    required = metadata.get("required_full_check") or {}
+    return (
+        run.get("recipe_name") == "release"
+        and run.get("status") == "waiting_public_approval"
+        and bool(metadata.get("required_checks_passed"))
+        and required.get("status") == "satisfied"
+        and bool(metadata.get("commit_sha"))
+    )
+
+
+def _required_full_check_metadata(verification_row: dict[str, Any], *, reused: bool) -> dict[str, Any]:
+    metadata = verification_row.get("metadata") or {}
+    verification_mode = metadata.get("verification_mode") or metadata.get("snapshot_mode") or ""
+    passed = not verification_row.get("timed_out") and verification_row.get("exit_code") in (0, "0")
+    if verification_mode != "full":
+        status = "deferred" if passed else "failed"
+    else:
+        status = "satisfied" if passed else "failed"
+    return {
+        "status": status,
+        "verification_id": verification_row.get("id", ""),
+        "reused": reused,
+        "mode": verification_mode,
+        "git_head": verification_row.get("git_head", ""),
+        "git_diff_hash": verification_row.get("git_diff_hash", ""),
+        "working_tree_dirty": bool(verification_row.get("working_tree_dirty")),
+        "command": verification_row.get("command") or RELEASE_FULL_CHECK_COMMAND,
+    }
+
+
+def _failed_verification_metadata(verification_row: dict[str, Any]) -> dict[str, Any]:
+    if not verification_row:
+        return {}
+    metadata = verification_row.get("metadata") or {}
+    return {
+        "verification_id": verification_row.get("id", ""),
+        "command": verification_row.get("command", ""),
+        "mode": metadata.get("verification_mode") or metadata.get("snapshot_mode") or "",
+        "exit_code": verification_row.get("exit_code"),
+        "git_head": verification_row.get("git_head", ""),
+        "git_diff_hash": verification_row.get("git_diff_hash", ""),
+        "working_tree_dirty": bool(verification_row.get("working_tree_dirty")),
+        "failed_summary_path": metadata.get("failed_summary_path") or metadata.get("summary_path") or metadata.get("summary_json") or "",
+        "failed_shards": metadata.get("failed_shards") or metadata.get("failed_shard_ids") or ["unknown"],
+    }
 
 
 def _classify_dirty_files(cwd: Path, managed_files: list[str]) -> dict[str, list[str]]:

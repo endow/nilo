@@ -505,7 +505,11 @@ def workflow_context(store, project_id: str) -> dict[str, Any]:
     elif run["status"] == "paused_for_fix":
         metadata = run.get("metadata") or {}
         context["reason"] = metadata.get("pause_reason", "")
+        context["blocked_reason"] = metadata.get("blocked_reason", metadata.get("pause_reason", ""))
         context["failed_verification_id"] = metadata.get("failed_verification_id", "")
+        context["failed_verification"] = metadata.get("failed_verification") or {}
+        context["failed_summary_path"] = metadata.get("failed_summary_path", "")
+        context["failed_shards"] = metadata.get("failed_shards") or []
         context["resume_command"] = release_resume_command(project_id)
         context["managed_release_dirty"] = metadata.get("managed_release_dirty") or []
         context["unmanaged_dirty"] = metadata.get("unmanaged_dirty") or []

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import unittest
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -149,6 +151,38 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(result["metadata"]["execution_reason"], "shell control token")
         self.assertEqual(run_mock.call_args_list[0].kwargs["shell"], True)
         self.assertEqual(run_mock.call_args_list[0].args[0], "python -m unittest && python -m pytest")
+
+    def test_run_local_verification_records_shard_summary_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary_path = root / ".nilo" / "test-runs" / "run_1" / "summary.json"
+            summary_path.parent.mkdir(parents=True)
+            summary_path.write_text(
+                json.dumps({"summary_path": summary_path.as_posix(), "failed_shards": ["cli:release"]}),
+                encoding="utf-8",
+            )
+            completed = SimpleNamespace(
+                returncode=1,
+                stdout=f"summary_json: {summary_path.as_posix()}\nfailed_shards:\n- stale:value\n",
+                stderr="",
+            )
+
+            with patch("nilo.verification.subprocess.run", return_value=completed), patch(
+                "nilo.verification.current_git_snapshot",
+                return_value={
+                    "git_head": "abc123",
+                    "git_diff_hash": "diffhash",
+                    "working_tree_dirty": False,
+                    "git_status_porcelain": "",
+                    "observed_paths": [],
+                    "git_available": True,
+                },
+            ):
+                result = run_local_verification("python tests/run_shards.py --all", root, 10)
+
+        self.assertEqual(result["metadata"]["failed_summary_path"], summary_path.as_posix())
+        self.assertEqual(result["metadata"]["summary_path"], summary_path.as_posix())
+        self.assertEqual(result["metadata"]["failed_shards"], ["cli:release"])
 
     def test_evidence_status_uses_snapshot_match(self) -> None:
         current = {"git_head": "abc", "git_diff_hash": "hash1", "working_tree_dirty": True}

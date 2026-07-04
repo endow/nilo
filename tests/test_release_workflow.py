@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -223,6 +224,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertEqual(metadata["committed_files"], ["docs/releases/0.3.1.md", "pyproject.toml", "src/nilo/__init__.py"])
                     self.assertFalse(metadata["post_commit_full_check_reused"])
                     self.assertEqual(metadata["release_prepare_check_mode"], "changed")
+                    self.assertEqual(metadata["required_full_check"]["status"], "deferred")
+                    self.assertEqual(metadata["required_full_check"]["mode"], "changed")
                     self.assertFalse(metadata["required_checks_passed"])
                     verification = store.latest_for_task("verification_runs", context["task_id"])
                     self.assertEqual(verification["command"], "PYTHONPATH=src python tests/run_shards.py --changed --jobs auto")
@@ -280,6 +283,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     metadata = store.get("recipe_runs", context["recipe_run_id"])["metadata"]
                     self.assertTrue(metadata["post_commit_full_check_reused"])
                     self.assertEqual(metadata["release_prepare_check_mode"], "full")
+                    self.assertEqual(metadata["required_full_check"]["status"], "satisfied")
+                    self.assertEqual(metadata["required_full_check"]["mode"], "full")
+                    self.assertEqual(metadata["required_full_check"]["verification_id"], "verification_reused_full")
+                    self.assertTrue(metadata["required_full_check"]["reused"])
                 finally:
                     store.close()
             finally:
@@ -322,6 +329,54 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertEqual(metadata["release_prepare_check_mode"], "full")
                 finally:
                     store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_prepare_already_satisfied_does_not_rerun_verification(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    task_id = context["task_id"]
+                    store.insert("verification_runs", full_release_verification_row(task_id, root))
+                    updated = mark_release_commit_recorded(
+                        store,
+                        task_id=task_id,
+                        commit_sha=run_git(root, "rev-parse", "HEAD"),
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                    metadata = {**(updated["metadata"] or {})}
+                    metadata["required_full_check"] = {
+                        "status": "satisfied",
+                        "verification_id": f"verification_full_{task_id}",
+                        "reused": True,
+                        "git_head": run_git(root, "rev-parse", "HEAD"),
+                        "command": release_handler.RELEASE_FULL_CHECK_COMMAND,
+                    }
+                    store.update("recipe_runs", updated["id"], {"metadata": metadata, "updated_at": now_iso()})
+                finally:
+                    store.close()
+
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification") as verification_check:
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                verification_check.assert_not_called()
+                body = output.getvalue()
+                self.assertIn("release prepare: already satisfied", body)
+                self.assertIn("next_action: publish approval required", body)
+                self.assertIn("publish: nilo release publish --project", body)
             finally:
                 os.chdir(previous_cwd)
 
@@ -785,7 +840,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 os.environ["PATH"] = previous_path
                 os.chdir(previous_cwd)
 
-    def test_release_publish_stops_public_operations_when_full_check_fails(self) -> None:
+    def test_release_publish_blocks_recipe_when_full_check_fails_before_public_operations(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             init_repo(root)
@@ -822,18 +877,42 @@ class ReleaseWorkflowTests(unittest.TestCase):
                         with redirect_stdout(output):
                             main(["--db", str(db), "release", "publish", "--project", root.name, "--approval", "v0.3.1 を tag/push/release して"])
                 self.assertIn("release publish full check failed", str(raised.exception))
+                self.assertIn("release recipe paused_for_fix", str(raised.exception))
                 self.assertIn("full_check_exit_code: 1", output.getvalue())
+                self.assertIn("blocked_reason: failed_verification", output.getvalue())
                 self.assertFalse(root.joinpath(".git/release-tools.log").exists())
                 store = Store(db)
                 try:
                     context = workflow_context(store, root.name)
-                    self.assertEqual(context["status"], "waiting_public_approval")
+                    self.assertEqual(context["status"], "paused_for_fix")
+                    self.assertEqual(context["blocked_reason"], "failed_verification")
+                    self.assertTrue(context["failed_verification_id"])
                     run = store.get("recipe_runs", context["recipe_run_id"])
                     metadata = run["metadata"]
                     self.assertTrue(metadata["release_publish_full_check_required"])
                     self.assertFalse(metadata["release_publish_full_check_passed"])
+                    self.assertEqual(metadata["blocked_reason"], "failed_verification")
+                    self.assertEqual(metadata["failed_verification"]["command"], release_handler.RELEASE_FULL_CHECK_COMMAND)
+                    self.assertFalse([item for item in audit_workflow(store, root.name, cwd=root) if item["severity"] == "error"])
                 finally:
                     store.close()
+
+                next_output = io.StringIO()
+                with redirect_stdout(next_output):
+                    main(["--db", str(db), "next", "--project", root.name])
+                next_body = next_output.getvalue()
+                self.assertIn("verification 失敗で停止", next_body)
+                self.assertIn("別 task", next_body)
+                self.assertIn("next_action: create_separate_bugfix_task", next_body)
+
+                next_ai = io.StringIO()
+                with redirect_stdout(next_ai):
+                    main(["--db", str(db), "next", "--ai", "--project", root.name])
+                data = json.loads(next_ai.getvalue())
+                self.assertEqual(data["next_action"], "create_separate_bugfix_task")
+                self.assertEqual(data["blocked_recipe"], "release")
+                self.assertEqual(data["blocked_reason"], "failed_verification")
+                self.assertTrue(data["must_not_fix_inside_recipe"])
             finally:
                 os.environ["PATH"] = previous_path
                 os.chdir(previous_cwd)
@@ -991,7 +1070,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next", "--project", root.name])
                 body = next_output.getvalue()
-                self.assertIn("next_action: fix_and_resume", body)
+                self.assertIn("verification 失敗で停止", body)
+                self.assertIn("next_action: create_separate_bugfix_task", body)
                 self.assertIn("resume_command: nilo release resume --project", body)
             finally:
                 os.chdir(previous_cwd)
