@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from .markdown_parse import parse_labeled_value
 from .report import parse_sections, section_value
 
 
@@ -51,13 +52,6 @@ def parse_scores_text(text: str, strict_invalid: bool = True) -> dict[str, int]:
         for inline in INLINE_SCORE_RE.finditer(line):
             scores[inline.group(1)] = int(inline.group(2))
     return scores
-
-
-def parse_labeled_value(markdown: str, labels: list[str]) -> str:
-    label_pattern = "|".join(re.escape(label) for label in labels)
-    pattern = re.compile(rf"^\s*(?:{label_pattern})\s*[:：]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
-    match = pattern.search(markdown)
-    return match.group(1).strip() if match else ""
 
 
 def parse_labeled_list(markdown: str, labels: list[str]) -> list[str]:

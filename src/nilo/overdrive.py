@@ -64,11 +64,6 @@ def task_cursor_for_commitment(store: Store, project_id: str, commitment_id: str
     return sorted(candidates, key=lambda task: (priority.get(statuses[task["id"]], 50), task["created_at"], task["id"]))[0]
 
 
-def task_cursor_for_project(store: Store, project_id: str) -> dict | None:
-    active = prioritized_active_tasks_for_project(store, project_id)
-    return active[0] if active else None
-
-
 def prioritized_active_tasks_for_project(store: Store, project_id: str) -> list[dict]:
     from . import project_logic as p
 

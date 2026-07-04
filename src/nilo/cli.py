@@ -425,10 +425,6 @@ from .project_logic import (
     ordered_roadmap_commitments,
     pending_roadmap_revisions,
     pending_roadmap_revision_summaries,
-    print_human_project_status,
-    print_project_summary_text,
-    print_roadmap_agent_next_actions,
-    print_roadmap_agent_state,
     project_commit_mapping,
     project_current_phase,
     project_design_residue,
@@ -465,83 +461,12 @@ from .project_logic import (
     verification_working_tree_summary,
     write_handson_markdown,
 )
-from .cli_handlers.backup import cmd_backup, cmd_backups, cmd_backups_prune, cmd_restore
-from .cli_handlers.mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
-from .cli_handlers.overdrive import cmd_roadmap_execute, cmd_run
-from .cli_handlers.project import cmd_project_create, cmd_project_export_handson, cmd_project_export_recipes, cmd_project_import_recipes, cmd_project_status, cmd_project_summary
-from .cli_handlers.facade import (
-    cmd_facade_check,
-    cmd_facade_done,
-    cmd_facade_next,
-    cmd_facade_queue,
-    cmd_facade_reject,
-    cmd_facade_report,
-    cmd_facade_start,
-    cmd_facade_status,
-)
-from .cli_handlers.failure import cmd_failure_ignore, cmd_failure_list, cmd_failure_resolve, cmd_failure_show, cmd_failure_summary
-from .cli_handlers.quality import (
-    cmd_quality_autoscore_import,
-    cmd_quality_autoscore_prepare,
-    cmd_quality_quick,
-    cmd_quality_schema_list,
-    cmd_quality_schema_set,
-    cmd_review_dispatch,
-    cmd_review_doctor,
-    cmd_review_human_launch_claude,
-    cmd_review_init,
-    cmd_review_delegate,
-    cmd_review_import,
-    cmd_review_finding_update,
-    cmd_review_prepare,
-    cmd_review_quick,
-    cmd_review_request,
-    cmd_review_status,
-    cmd_review_template,
-    cmd_review_wait,
-    cmd_review_withdraw,
-)
-from .cli_handlers.recipe import cmd_recipe_approve_public, cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show
-from .cli_handlers.release import cmd_release_prepare, cmd_release_publish, cmd_release_resume, cmd_release_run
-from .cli_handlers.roadmap import (
-    cmd_roadmap_accept,
-    cmd_roadmap_adopt,
-    cmd_roadmap_assess,
-    cmd_roadmap_close,
-    cmd_roadmap_discuss,
-    cmd_roadmap_export,
-    cmd_roadmap_import,
-    cmd_roadmap_reject,
-    cmd_roadmap_status,
-    cmd_roadmap_summary,
-    cmd_roadmap_task_plan,
-)
-from .cli_handlers.task import (
-    cmd_evidence_show,
-    cmd_review_show,
-    cmd_task_analytics,
-    cmd_task_complete,
-    cmd_task_completion_invalidate,
-    cmd_task_create,
-    cmd_task_list,
-    cmd_task_split,
-    cmd_task_start,
-    cmd_task_status,
-    cmd_task_update,
-)
-from .cli_handlers.test import cmd_test_plan, cmd_test_rerun_failed, cmd_test_run
-from .cli_handlers.todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cmd_todo_show, cmd_todo_start, cmd_todo_triage
-from .cli_handlers.view import cmd_view
-from .cli_handlers.workflow import cmd_agent_install, cmd_doctor, cmd_init, cmd_instruct, cmd_migrate, cmd_outcome_record, cmd_report_import, cmd_understanding_approve, cmd_understanding_import, cmd_understanding_prepare, cmd_verification_run
-from .cli_handlers.workflow import cmd_doctor_ai_context, cmd_doctor_completions, cmd_doctor_performance, cmd_doctor_state, cmd_doctor_transitions, cmd_doctor_workflow, cmd_help_ai
-from .cli_handlers.workflow import cmd_update_check, cmd_upgrade
-from .cli_handlers.workspace import cmd_workspace_add, cmd_workspace_list, cmd_workspace_remove, cmd_workspace_show
-
-
+from .project_render import print_human_project_status, print_project_summary_text, print_roadmap_agent_next_actions, print_roadmap_agent_state
 def build_parser() -> argparse.ArgumentParser:
     from .cli_parsers import build_parser as build_cli_parser
+    from .cli_handlers import registry as handler_registry
 
-    return build_cli_parser(add_common, sys.modules[__name__])
+    return build_cli_parser(add_common, handler_registry)
 
 
 TOP_LEVEL_COMMANDS = {

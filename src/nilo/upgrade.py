@@ -1,39 +1,15 @@
 from __future__ import annotations
 
-import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from .backup import BackupError, create_backup
+from .command_runner import CommandResult, RunCommand, package_location, run_command as run_shell_command
 from .store import default_db_path
 
 
-@dataclass(frozen=True)
-class CommandResult:
-    returncode: int
-    stdout: str
-    stderr: str
-
-
-RunCommand = Callable[[list[str], Path], CommandResult]
-
-
 def run_command(command: list[str], cwd: Path) -> CommandResult:
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    return CommandResult(completed.returncode, completed.stdout.rstrip("\n"), completed.stderr.rstrip("\n"))
-
-
-def package_location() -> Path:
-    return Path(__file__).resolve().parent
+    return run_shell_command(command, cwd)
 
 
 def repo_root_from_package(run: RunCommand = run_command) -> tuple[Path | None, str]:

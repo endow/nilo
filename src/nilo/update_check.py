@@ -2,28 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Any
+from typing import Any
 
+from .command_runner import CommandResult, RunCommand, package_location, run_command as run_shell_command
 from .timeutil import now_iso
 
 
 STATE_FILE = "update-check.json"
 CHECK_INTERVAL = timedelta(days=1)
-
-
-@dataclass(frozen=True)
-class CommandResult:
-    returncode: int
-    stdout: str
-    stderr: str
-
-
-RunCommand = Callable[[list[str], Path], CommandResult]
 
 
 @dataclass(frozen=True)
@@ -39,18 +29,7 @@ class UpdateCheckResult:
 
 
 def run_command(command: list[str], cwd: Path) -> CommandResult:
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=cwd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except OSError as exc:
-        return CommandResult(127, "", str(exc))
-    return CommandResult(completed.returncode, completed.stdout.rstrip("\n"), completed.stderr.rstrip("\n"))
+    return run_shell_command(command, cwd, oserror_returncode=127)
 
 
 def state_path() -> Path:
@@ -120,10 +99,6 @@ def should_auto_check(state: dict[str, Any], *, now: datetime | None = None) -> 
         parsed = parsed.replace(tzinfo=timezone.utc)
     now = now or datetime.now(timezone.utc).astimezone()
     return now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc) >= CHECK_INTERVAL
-
-
-def package_location() -> Path:
-    return Path(__file__).resolve().parent
 
 
 def repo_root_from_package(run: RunCommand = run_command) -> tuple[Path | None, str]:

@@ -145,7 +145,7 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertIn("git executable not found", result.reason)
 
     def test_run_command_converts_oserror_to_command_result(self) -> None:
-        with patch("nilo.update_check.subprocess.run", side_effect=FileNotFoundError("git missing")):
+        with patch("nilo.command_runner.subprocess.run", side_effect=FileNotFoundError("git missing")):
             result = run_command(["git", "status"], Path.cwd())
 
         self.assertEqual(result.returncode, 127)

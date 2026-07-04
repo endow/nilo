@@ -39,13 +39,6 @@ def _require_project(store: Store, project_id: str) -> None:
         raise SystemExit(f"project not found: {project_id}")
 
 
-def _require_accepted_commitment(store: Store, commitment_id: str, project_id: str) -> dict:
-    commitment = store.get("roadmap_commitments", commitment_id)
-    if not commitment or commitment["project_id"] != project_id or commitment["status"] != "accepted":
-        raise SystemExit(f"accepted roadmap commitment not found: {commitment_id}")
-    return commitment
-
-
 def _print_todo(todo: dict) -> None:
     print(f"id: {todo['id']}")
     print(f"project_id: {todo['project_id']}")

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from .gitmeta import git_output
+from .markdown_parse import parse_labeled_value
 from .report import parse_sections, section_value
 from .snapshot import current_git_snapshot, evidence_status
 
@@ -135,13 +136,6 @@ def normalize_verdict(value: str) -> str:
         "needs_review": "commented",
     }
     return aliases.get(normalized, normalized or "commented")
-
-
-def parse_labeled_value(markdown: str, labels: list[str]) -> str:
-    label_pattern = "|".join(re.escape(label) for label in labels)
-    pattern = re.compile(rf"^\s*(?:{label_pattern})\s*[:：]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
-    match = pattern.search(markdown)
-    return match.group(1).strip() if match else ""
 
 
 def parse_findings(text: str) -> list[dict]:

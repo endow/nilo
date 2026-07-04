@@ -20,6 +20,7 @@ from .project_boundary import (
     require_write_fence,
     resolve_project_boundary,
 )
+from .project_status import ProjectNotFoundError, build_project_status, project_status_view
 from .project_language import (
     human_readable_language_issues,
     human_readable_language_policy,
@@ -950,13 +951,10 @@ def require_fresh_task_context(store: Store, task_id: str, arguments: dict) -> d
 
 
 def project_summary(store: Store, project_id: str) -> dict:
-    from . import project_logic as p
-
-    project = store.get("projects", project_id)
-    if not project:
+    try:
+        return build_project_status(store, project_id)
+    except ProjectNotFoundError:
         raise project_not_found_error(store, project_id)
-    tasks, statuses = p.project_tasks_and_statuses(store, project_id)
-    return p.project_summary_data(store, project, tasks, statuses)
 
 
 def mcp_arguments_boundary(arguments: dict, store: Store) -> Any:
@@ -1099,22 +1097,7 @@ def refreshed_task_context(store: Store, task_id: str) -> dict:
 def get_project_status(store: Store, arguments: dict) -> dict:
     summary = project_summary(store, require_string(arguments, "project_id"))
     boundary = mcp_arguments_boundary(arguments, store)
-    return {
-        "project_id": summary["project_id"],
-        "project_name": summary["project_name"],
-        "project_boundary": boundary.to_dict(),
-        "roadmap_position": summary["roadmap_position"],
-        "work_state": summary["work_state"],
-        "human_work_state": summary["work_state"],
-        "current_phase": summary["current_phase"],
-        "roadmap_agent_state": summary["roadmap_agent_state"],
-        "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
-        "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],
-        "active_tasks": summary["active_tasks"],
-        "next_actions": summary["next_actions"],
-        "human_next_actions": summary["human_next_actions"],
-        "unexecuted_verifications": summary["unexecuted_verifications"],
-    }
+    return project_status_view(summary, boundary.to_dict())
 
 
 def get_status(store: Store, arguments: dict) -> dict:

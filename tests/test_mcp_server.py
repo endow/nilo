@@ -15,7 +15,7 @@ from unittest.mock import patch
 from nilo.ai_context import render_ai_context_text
 from nilo.cli import main
 from nilo.mcp_identity import identity_matches_expected, mcp_identity
-from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, handle_request
+from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, handle_request, project_summary
 from nilo.review_dispatcher import find_executable
 from nilo.store import JSON_COLUMNS, Store
 from nilo.timeutil import now_iso
@@ -1172,6 +1172,16 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["project_name"], "Nilo")
         self.assertEqual(result["active_tasks"], [])
         self.assertIn("next_actions", result)
+
+    def test_project_summary_does_not_mask_internal_value_error_as_not_found(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "nilo.db")
+            try:
+                with patch("nilo.mcp_server.build_project_status", side_effect=ValueError("bad snapshot data")):
+                    with self.assertRaisesRegex(ValueError, "bad snapshot data"):
+                        project_summary(store, "project_test")
+            finally:
+                store.close()
 
     def test_mcp_ping_response_includes_identity(self) -> None:
         with TemporaryDirectory() as directory:

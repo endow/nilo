@@ -744,10 +744,6 @@ def roadmap_prioritized_project_active_tasks(
     return roadmap_prioritized_active_tasks(tasks, statuses, commitments), commitments
 
 
-def roadmap_discussion_path_for_project(project_id: str) -> str:
-    return f".nilo/roadmap/{project_id}/roadmap_discussion.md"
-
-
 def human_roadmap_path_for_project(project_id: str) -> str:
     return "ROADMAP.md"
 
@@ -1057,12 +1053,9 @@ def no_active_task_next_actions(
 
 
 def verification_summary(verification_run: dict | None) -> str:
-    if not verification_run:
-        return "none"
-    result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
-    source = verification_run.get("source", "nilo_executed")
-    mode = verification_run.get("metadata", {}).get("verification_mode", "targeted")
-    return f"{verification_run['id']} ({result}, source={source}, mode={mode})"
+    from .verification_summary import verification_summary as render_verification_summary
+
+    return render_verification_summary(verification_run)
 
 
 def recipe_provenance_summary(store: Store, task_id: str) -> dict | None:
@@ -1275,13 +1268,9 @@ def recipe_handoff_import_data(store: Store, project: dict, data: dict, cwd: Pat
 
 
 def human_verification_summary(verification_run: dict | None) -> str:
-    if not verification_run:
-        return "直近の検証結果はまだ記録されていません。"
-    if verification_run["timed_out"]:
-        return "直近の検証はタイムアウトしています。"
-    if verification_run["exit_code"] == 0:
-        return "直近の検証は成功しています。"
-    return "直近の検証は失敗しています。"
+    from .verification_summary import human_verification_summary as render_human_verification_summary
+
+    return render_human_verification_summary(verification_run)
 
 
 def human_active_task_lines(task: dict, verification_run: dict | None, blocking_count: int) -> list[str]:
@@ -1311,56 +1300,27 @@ def human_active_task_lines(task: dict, verification_run: dict | None, blocking_
 
 
 def verification_working_tree_state(verification_run: dict | None) -> dict:
-    metadata = verification_run["metadata"] if verification_run else {}
-    dirty = bool(metadata.get("working_tree_dirty", verification_run.get("working_tree_dirty", False) if verification_run else False))
-    files = metadata.get("working_tree_files") or (verification_run.get("observed_paths", []) if verification_run else [])
-    return {
-        "available": bool(metadata.get("working_tree_available", verification_run is not None)),
-        "dirty": dirty,
-        "files": files,
-    }
+    from .verification_summary import verification_working_tree_state as render_verification_working_tree_state
+
+    return render_verification_working_tree_state(verification_run)
 
 
 def verification_working_tree_summary(verification_run: dict | None) -> str:
-    if not verification_run:
-        return "none"
-    state = verification_working_tree_state(verification_run)
-    if not state["available"]:
-        return "unavailable"
-    if not state["dirty"]:
-        return "clean"
-    count = len(state["files"])
-    return f"dirty ({count} file{'s' if count != 1 else ''})"
+    from .verification_summary import verification_working_tree_summary as render_verification_working_tree_summary
+
+    return render_verification_working_tree_summary(verification_run)
 
 
 def verification_snapshot_policy_summary(verification_run: dict | None) -> dict:
-    metadata = verification_run["metadata"] if verification_run else {}
-    excluded_paths = metadata.get("snapshot_excluded_paths", [])
-    hashed_paths = metadata.get("snapshot_hashed_paths", [])
-    reasons: dict[str, int] = {}
-    for item in excluded_paths:
-        reason = item.get("reason", "unknown") if isinstance(item, dict) else "unknown"
-        reasons[reason] = reasons.get(reason, 0) + 1
-    return {
-        "observed_paths": len(metadata.get("working_tree_files", [])),
-        "hashed_paths": len(hashed_paths),
-        "skipped_paths": len(excluded_paths),
-        "skipped_reasons": reasons,
-    }
+    from .verification_summary import verification_snapshot_policy_summary as render_verification_snapshot_policy_summary
+
+    return render_verification_snapshot_policy_summary(verification_run)
 
 
 def verification_snapshot_policy_lines(verification_run: dict | None) -> list[str]:
-    summary = verification_snapshot_policy_summary(verification_run)
-    if not summary["skipped_paths"]:
-        return []
-    reasons = ", ".join(f"{reason}={count}" for reason, count in sorted(summary["skipped_reasons"].items())) or "none"
-    return [
-        "snapshot:",
-        f"  observed paths: {summary['observed_paths']}",
-        f"  hashed paths: {summary['hashed_paths']}",
-        f"  skipped paths: {summary['skipped_paths']}",
-        f"  skipped reasons: {reasons}",
-    ]
+    from .verification_summary import verification_snapshot_policy_lines as render_verification_snapshot_policy_lines
+
+    return render_verification_snapshot_policy_lines(verification_run)
 
 
 def unexecuted_verifications_for_task(status: str, verification_run: dict | None) -> list[str]:
@@ -1702,39 +1662,6 @@ def fast_unfinished_verification_targets(store: Store, project_id: str) -> list[
     return [task for task in tasks if statuses.get(task["id"], task["status"]) not in blocked]
 
 
-def print_roadmap_agent_state(state: dict | None) -> None:
-    print("roadmap_agent_state:")
-    if not state:
-        print("- none")
-        return
-    print(f"  commitment_id: {state['commitment_id']}")
-    print(f"  commitment_title: {state['commitment_title']}")
-    print(f"  work_status: {state['work_status']}")
-    print(f"  evidence_status: {state['evidence_status']}")
-    print(f"  verification_status: {state['verification_status']}")
-    print(f"  closure_status: {state['closure_status']}")
-    print("  ai_allowed_actions:")
-    for action in state["ai_allowed_actions"]:
-        print(f"  - {action}")
-    print("  ai_blocked_actions:")
-    for action in state["ai_blocked_actions"]:
-        print(f"  - {action}")
-    print(f"  recommended_next_action: {state['recommended_next_action']}")
-
-
-def print_roadmap_agent_next_actions(actions: list[dict]) -> None:
-    print("roadmap_agent_next_actions:")
-    if not actions:
-        print("- none")
-        return
-    for action in actions:
-        print(f"- action_id: {action['action_id']}")
-        print(f"  actor: {action['actor']}")
-        print(f"  status: {action['status']}")
-        print(f"  command_hint: {action['command_hint']}")
-        print(f"  reason: {action['reason']}")
-
-
 def task_status_counts(tasks: list[dict], statuses: dict[str, str]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for task in tasks:
@@ -1891,251 +1818,9 @@ def project_design_residue(cwd: Path | None = None) -> list[dict]:
 
 
 def project_summary_data(store: Store, project: dict, tasks: list[dict], statuses: dict[str, str]) -> dict:
-    active_tasks, commitments = roadmap_prioritized_project_active_tasks(store, project["id"], tasks, statuses)
-    active_summaries = []
-    unexecuted = []
-    design_residue = project_design_residue()
-    closed_commitments = closed_roadmap_commitments(store, project["id"])
-    pending_revisions = pending_roadmap_revision_summaries(store, project["id"])
-    for task in active_tasks:
-        status = statuses[task["id"]]
-        verification_run = store.latest_for_task("verification_runs", task["id"])
-        pending_review = latest_pending_review_request(store, task["id"])
-        blocking_findings = unresolved_blocking_review_findings(store, task["id"])
-        recipe_provenance = recipe_provenance_summary(store, task["id"])
-        active_summaries.append(
-            {
-                "id": task["id"],
-                "title": task["title"],
-                "status": status,
-                "human_status": human_task_status(status, task, {"verification_run": verification_run}),
-                "task_type": task["task_type"],
-                "risk_level": task["risk_level"],
-                "latest_verification_run": verification_summary(verification_run),
-                "verification_working_tree": verification_working_tree_summary(verification_run),
-                "verification_working_tree_dirty": verification_working_tree_state(verification_run)["dirty"],
-                "verification_working_tree_available": verification_working_tree_state(verification_run)["available"],
-                "verification_working_tree_files": verification_working_tree_state(verification_run)["files"],
-                "verification_snapshot_policy": verification_snapshot_policy_summary(verification_run),
-                "pending_review_request": pending_review["id"] if pending_review else "",
-                "pending_review_reviewer": pending_review["reviewer"] if pending_review else "",
-                "pending_review_status": pending_review["status"] if pending_review else "",
-                "unresolved_blocking_review_findings": [finding["id"] for finding in blocking_findings],
-                "recipe_provenance": recipe_provenance,
-            }
-        )
-        for item in unexecuted_verifications_for_task(status, verification_run):
-            unexecuted.append({"task_id": task["id"], "issue": item})
-    agent_state = roadmap_agent_state(store, project["id"], tasks, statuses)
-    from .workflow_context import workflow_context as build_workflow_context
+    from .project_status import project_status_from_inputs
 
-    workflow = build_workflow_context(store, project["id"])
-    base_next_actions = project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project["id"])
-    next_actions = base_next_actions
-    if workflow.get("type") == "recipe_run":
-        if workflow.get("status") == "waiting_public_approval":
-            operations = ", ".join(f"{item['operation']}:{item['target']}" for item in workflow.get("pending_public_operations") or [])
-            action = f"release recipe waiting for explicit public operation approval: {operations}"
-            if workflow.get("public_execution_command"):
-                action += f"; after approval run: {workflow['public_execution_command']}"
-            next_actions = [action]
-        else:
-            next_actions = [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
-    elif not active_tasks:
-        next_actions = no_active_task_next_actions(store, project["id"], base_next_actions)
-    return {
-        "project_id": project["id"],
-        "project_name": project["name"],
-        "roadmap_position": project_roadmap_position(tasks, statuses, design_residue, commitments),
-        "roadmap_commitments": commitments,
-        "closed_roadmap_commitments": closed_commitments,
-        "pending_roadmap_revisions": pending_revisions,
-        "roadmap_assessments": roadmap_assessments(store, project["id"], tasks, statuses),
-        "roadmap_agent_state": agent_state,
-        "workflow_context": workflow,
-        "roadmap_agent_next_actions": roadmap_agent_next_actions(store, project["id"], agent_state),
-        "work_state": project_work_state(tasks, statuses),
-        "current_phase": project_current_phase(tasks, statuses),
-        "next_actions": next_actions,
-        "human_next_actions": [human_next_action_text(action) for action in next_actions],
-        "todo_status_counts": todo_status_counts(store, project["id"]),
-        "task_status_counts": task_status_counts(tasks, statuses),
-        "recent_history": recent_project_history(store, tasks),
-        "active_tasks": active_summaries,
-        "unexecuted_verifications": unexecuted,
-        "commit_mapping": project_commit_mapping(store, tasks),
-        "design_residue": design_residue,
-    }
-
-
-def print_project_summary_text(summary: dict) -> None:
-    print(f"project_id: {summary['project_id']}")
-    print(f"project_name: {summary['project_name']}")
-    print(f"roadmap_position: {summary['roadmap_position']}")
-    print(f"work_state: {summary['work_state']}")
-    print(f"current_phase: {summary['current_phase']}")
-
-    print("task_status_counts:")
-    if summary["task_status_counts"]:
-        for status, count in summary["task_status_counts"].items():
-            print(f"- {status}: {count}")
-    else:
-        print("- none")
-
-    print("todo_status_counts:")
-    if summary["todo_status_counts"]:
-        for status, count in summary["todo_status_counts"].items():
-            print(f"- {status}: {count}")
-    else:
-        print("- none")
-
-    print("recent_history:")
-    if summary["recent_history"]:
-        for item in summary["recent_history"]:
-            print(f"- {item['created_at']} {item['task_id']} {item['event']}: {item['summary']}")
-    else:
-        print("- none")
-
-    print("active_tasks:")
-    if summary["active_tasks"]:
-        for task in summary["active_tasks"]:
-            print(f"- {task['id']} [{task['status']}] {task['task_type']} {task['risk_level']} {task['title']}")
-            recipe_label = human_recipe_provenance_label(task.get("recipe_provenance"))
-            if recipe_label:
-                print(f"  recipe: {recipe_label}")
-            print(f"  latest_verification_run: {task['latest_verification_run']}")
-            print(f"  verification_working_tree: {task['verification_working_tree']}")
-            policy = task.get("verification_snapshot_policy", {})
-            if policy.get("skipped_paths"):
-                reasons = ", ".join(f"{reason}={count}" for reason, count in sorted(policy.get("skipped_reasons", {}).items())) or "none"
-                print("  snapshot:")
-                print(f"    observed paths: {policy['observed_paths']}")
-                print(f"    hashed paths: {policy['hashed_paths']}")
-                print(f"    skipped paths: {policy['skipped_paths']}")
-                print(f"    skipped reasons: {reasons}")
-            if task["pending_review_request"]:
-                print(
-                    f"  pending_review_request: {task['pending_review_request']} "
-                    f"[{task['pending_review_status']}] -> {task['pending_review_reviewer']}"
-                )
-            if task["unresolved_blocking_review_findings"]:
-                print("  unresolved_blocking_review_findings:")
-                for finding_id in task["unresolved_blocking_review_findings"]:
-                    print(f"  - {finding_id}")
-    else:
-        print("- none")
-
-    print("unexecuted_verifications:")
-    if summary["unexecuted_verifications"]:
-        for item in summary["unexecuted_verifications"]:
-            print(f"- {item['task_id']}: {item['issue']}")
-    else:
-        print("- none")
-
-    print("roadmap_assessments:")
-    if summary["roadmap_assessments"]:
-        for assessment in summary["roadmap_assessments"]:
-            item = human_roadmap_assessment_summary(assessment)
-            print(f"- {assessment['commitment_id']} {assessment['title']}")
-            print(f"  実装タスク: {item['implementation_task_label']}")
-            print(f"  ロードマップ状態: {item['roadmap_state_label']}")
-            print(f"  確認状況: {item['state_label']}")
-            print(f"  止まっている理由: {item['reason']}")
-    else:
-        print("- none")
-
-    print("closed_roadmap_commitments:")
-    if summary["closed_roadmap_commitments"]:
-        for commitment in summary["closed_roadmap_commitments"]:
-            print(f"- {commitment['id']} {commitment['title']}")
-            print(f"  closed_at: {commitment['closed_at'] or 'none'}")
-            print(f"  closure_reason: {commitment['closure_reason'] or 'none'}")
-    else:
-        print("- none")
-
-    print("next_actions:")
-    if summary["next_actions"]:
-        for action in summary["next_actions"]:
-            print(f"- {action}")
-    else:
-        print("- none")
-
-    print("human_next_actions:")
-    if summary["human_next_actions"]:
-        for action in summary["human_next_actions"]:
-            print(f"- {action}")
-    else:
-        print("- none")
-
-    print("commit_mapping:")
-    for item in summary["commit_mapping"]:
-        print(
-            f"- {item['task_id']} [{item['status']}] "
-            f"base_commit={item['base_commit'] or 'none'} "
-            f"latest_verification_head={item['latest_verification_head'] or 'none'}: {item['summary']}"
-        )
-        for commit in item["commits"]:
-            print(f"  - {commit['hash']} {commit['subject']}")
-    print("design_residue:")
-    for item in summary["design_residue"]:
-        print(f"- {item['source']} [{item['status']}] {item['suggested_task_type']}: {item['summary']}")
-
-
-def print_human_project_status(store: Store, project: dict, active_tasks: list[dict], statuses: dict[str, str], *, current_snapshot: dict | None = None) -> None:
-    from .failure import summarize_failure_logs
-
-    print(f"{field_label('project')}: {project['id']}")
-    if not active_tasks:
-        print(f"{field_label('status')}: 完了")
-        print()
-        print(f"{field_label('next_action')}:")
-        print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
-        return
-
-    print(f"{field_label('status')}: 作業中")
-    print()
-    print("作業中のタスク:")
-
-    next_lines: list[str] = []
-    snapshot = current_snapshot or current_git_snapshot(Path.cwd(), mode="fast")
-    for task in active_tasks[:3]:
-        task = {**task, "status": statuses[task["id"]]}
-        verification_run = store.latest_for_task("verification_runs", task["id"])
-        blocking = unresolved_blocking_review_findings(store, task["id"])
-        evidence = commit_aware_evidence_status(verification_run, snapshot, active_task_completion(store, task["id"]), strict=False)
-        print(f"- {task['title']}")
-        print(f"  {field_label('status')}: {status_label(task['status'])}")
-        print(f"  {field_label('evidence')}: {status_label(evidence)}")
-        if evidence in {"present", "recorded"}:
-            print("  証跡あり。厳密な差分一致は詳細確認で確認してください。")
-        for line in human_active_task_lines(task, verification_run, len(blocking)):
-            print(f"  {line}")
-        recipe_label = human_recipe_provenance_label(recipe_provenance_summary(store, task["id"]))
-        if recipe_label:
-            print(f"  Recipe: {recipe_label}")
-        print()
-
-        status = task["status"]
-        unexecuted = unexecuted_verifications_for_task(status, verification_run)
-        if blocking:
-            next_lines.append("次はその指摘を確認して、修正するか、理由を記録して受け入れれば完了に進めます。")
-        else:
-            next_lines.append(human_next_action_text(task_next_actions(task, status, verification_run, unexecuted)[0]))
-
-    print(f"{field_label('evidence')}:")
-    print("- 上記の各タスク行を確認してください。")
-    print()
-    if next_lines:
-        print(f"{field_label('next_action')}:")
-        print(next_lines[0])
-        print()
-    failure_summary = summarize_failure_logs(store, project_id=project["id"], limit=100000)
-    print(f"{field_label('failure_logs')}:")
-    print(f"- {field_label('open_failures')}: {failure_summary['open_failure_count']}")
-    print(f"- {field_label('high_open_failures')}: {failure_summary['high_open_failure_count']}")
-    print()
-    print("詳細が必要な場合:")
-    print(f"nilo status --project {project['id']} --verbose")
+    return project_status_from_inputs(store, project, tasks, statuses)
 
 
 def handson_language() -> str:

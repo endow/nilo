@@ -71,6 +71,7 @@ UNIT_MODULES: dict[str, tuple[str, ...]] = {
     "unit:gitmeta": ("tests.test_gitmeta",),
     "unit:upgrade": ("tests.test_upgrade", "tests.test_update_check"),
     "unit:verification": ("tests.test_verification",),
+    "unit:status": ("tests.test_status_surface",),
     "unit:other": (
         "tests.test_failure_patterns",
         "tests.test_failure_ledger",

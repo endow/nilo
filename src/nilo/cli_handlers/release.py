@@ -682,14 +682,6 @@ def _release_note_template(version: str) -> str:
 """
 
 
-def _require_clean_or_release_managed(cwd: Path, version: str) -> None:
-    dirty = _git_changed_files(cwd)
-    allowed = set(release_managed_files(version))
-    unexpected = sorted(path for path in dirty if path not in allowed)
-    if unexpected:
-        raise SystemExit("release prepare requires a clean tree except release managed files: " + ", ".join(unexpected))
-
-
 def _run_lightweight_post_commit_checks(project_id: str, cwd: Path, db_path: str) -> None:
     for command in (["recipe", "doctor", "--project", project_id], ["status", "--project", project_id]):
         completed = subprocess.run([sys.executable, "-m", "nilo", "--db", db_path, *command], cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)

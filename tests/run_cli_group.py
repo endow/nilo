@@ -53,6 +53,7 @@ GROUPS = {
         "test_facade_*",
         "test_ai_*",
         "test_status_ai_*",
+        "test_status_fast_path_*",
         "test_overdrive_*",
         "test_handson_*",
         "test_human_next_action_*",
@@ -119,7 +120,7 @@ GROUPS = {
         "test_review_finding_update_records_history_and_unblocks_completion",
     ],
     "verification": ["test_verification_*", "test_status_surfaces_dirty_verification_*"],
-    "guard": ["test_secret_*", "test_success_*", "test_understanding_*"],
+    "guard": ["test_secret_*", "test_success_*", "test_understanding_*", "test_instruct_*"],
     "workflow": [
         "test_next_*",
         "test_unresolved_*",
