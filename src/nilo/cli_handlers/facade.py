@@ -45,7 +45,7 @@ def active_tasks_for_project(store: Store, project_id: str) -> tuple[list[dict],
 
 
 def first_active_task_for_project(store: Store, project_id: str) -> dict | None:
-    active_tasks, _ = active_tasks_for_project(store, project_id)
+    active_tasks, _ = _fast_active_tasks_and_statuses(store, project_id, limit=1)
     return active_tasks[0] if active_tasks else None
 
 

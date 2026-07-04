@@ -4105,11 +4105,10 @@ project status からロードマップ現在地を読めるようにする。
             status_output = io.StringIO()
             with redirect_stdout(status_output):
                 main(["--db", str(db), "roadmap", "status", "--project", "project_test"])
-            self.assertIn("accepted_commitments:", status_output.getvalue())
-            self.assertIn("- none", status_output.getvalue())
-            self.assertIn("pending_revisions:", status_output.getvalue())
-            self.assertIn(revision_id, status_output.getvalue())
-            self.assertIn(f"source_path: {proposal}", status_output.getvalue())
+            self.assertIn("# ロードマップ状態", status_output.getvalue())
+            self.assertIn("現在、受理済みロードマップ項目はありません。", status_output.getvalue())
+            self.assertIn("## 確認待ちのロードマップ案", status_output.getvalue())
+            self.assertIn("Phase 2.5 Roadmap Projection", status_output.getvalue())
 
             project_status_output = io.StringIO()
             with redirect_stdout(project_status_output):
@@ -4131,9 +4130,9 @@ project status からロードマップ現在地を読めるようにする。
             status_output = io.StringIO()
             with redirect_stdout(status_output):
                 main(["--db", str(db), "roadmap", "status", "--project", "project_test"])
-            self.assertIn("accepted_commitments:", status_output.getvalue())
+            self.assertIn("# ロードマップ状態", status_output.getvalue())
             self.assertIn("Phase 2.5 Roadmap Projection", status_output.getvalue())
-            self.assertIn("pending_revisions:\n- none", status_output.getvalue())
+            self.assertNotIn("## 確認待ちのロードマップ案", status_output.getvalue())
 
             summary_output = io.StringIO()
             with redirect_stdout(summary_output):
@@ -5572,7 +5571,8 @@ This malformed proposal has no top-level title.
             roadmap_status = io.StringIO()
             with redirect_stdout(roadmap_status):
                 main(["--db", str(db), "roadmap", "status", "--project", "project_test"])
-            self.assertIn("pending_revisions:\n- none", roadmap_status.getvalue())
+            self.assertIn("# ロードマップ状態", roadmap_status.getvalue())
+            self.assertNotIn("## 確認待ちのロードマップ案", roadmap_status.getvalue())
             self.assertNotIn(revision_id, roadmap_status.getvalue())
 
             project_status = io.StringIO()

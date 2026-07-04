@@ -309,17 +309,15 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
     return f"""{NILO_BLOCK_BEGIN}
 ## Nilo 必須プロトコル
 
-このプロジェクトでは Nilo を AI 作業の状態管理装置として使う。
-
 {boundary_prompt}
 
 Normal work:
-- 作業開始は `nilo status --ai --project {project_id}`。
+- 開始は `nilo status --ai --project {project_id}`。
 - `nilo next --project {project_id}` の先頭 action だけに従う。
 - active recipe 中は recipe のみ。
-- 保存文面は primary_language={primary_language}。command/path/status/enum/JSONは原文
+- 保存文面は primary_language={primary_language}。command/path/status/enum/JSONは原文。
 - release公開操作は明示承認待ち。
-- 検証済み dirty tree 由来の Nilo commit は stale 扱いしない。
+- 検証済み dirty tree 由来 commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
 - 検証後は `nilo check --task <task_id> "..."`。省略は一意target。
@@ -330,30 +328,25 @@ Review handoff:
 - AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
 - `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は CLI reviewer process fallback/human-launch 専用。
 - review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
-- repository 固定: CLI cwd、MCP `project_root`
-
 MCP identity guard:
-- MCP tool 可でも正しい Nilo 状態とは判断しない。
-- 使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認する。
-- `expected_project` は repository directory name 用。複数 repo では `project_root` または `workspace`。
-- MCP response の repository / db_path 不一致は使わず、CLI fallback。
-- fallback: `nilo status --ai --project {project_id}`、続けて `nilo next --project {project_id}`。
+- MCP tool 可でも正しい Nilo 状態とは判断しない。使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認。
+- `expected_project` は repository directory name 用。複数 repo は `project_root` か `workspace`。
+- MCP response の repository / db_path 不一致は使わず CLI fallback。
+- fallback: `nilo status --ai --project {project_id}` -> `nilo next --project {project_id}`。
 
 大きな作業の扱い:
 - 実装前に小さい作業か大きい作業かを判定する。
-- 小さく明確なら task。小〜中規模は Light plan または通常 task で進める。
-- 複数ファイルだけでは roadmap 扱いしない。明確な一まとまりの修正は通常 task。
-- 複数タスク・複数コミット・実装と検証の分離が必要な作業は Roadmap を推奨する。
-- DB schema、状態遷移、リリース基盤、複数サブシステムにまたがる大改修だけ Epic 扱いを提案する。
-- Epic 扱いが必要な場合は理由を示して停止し、明示承認まで roadmap revision / acceptance / task plan を進めない。
+- 小さく明確なら通常 task。複数ファイルだけでは roadmap 扱いしない。
+- 複数タスク/コミット、DB schema、状態遷移、リリース基盤など広い変更だけ Roadmap/Epic。
+- Epic 必要時は停止し、承認まで roadmap revision / acceptance / task plan を進めない。
 - 大作業は自動 roadmap 化しない。承認後だけ `nilo roadmap discuss` -> `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
 
 質問抑制:
 - Nilo 出力や状態から一意推定できる不足値は質問しない。
 - release recipe の `target_version` は一意なら次 patch。
-- 質問は候補複数、状態矛盾、公開・破壊的操作の直前確認だけ。
+- 質問は候補複数、状態矛盾、公開・破壊的操作直前だけ。
 
-詳細は `nilo help ai` を参照する。
+詳細: `nilo help ai`
 {NILO_BLOCK_END}
 """
 

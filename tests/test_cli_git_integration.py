@@ -629,10 +629,10 @@ class CliGitIntegrationTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("# 現在の状態", body)
+            self.assertIn("# ロードマップ状態", body)
             self.assertIn(f"## Phase 2.5 Roadmap Projection", body)
-            self.assertIn("- 実装タスク: 残あり", body)
-            self.assertIn("- ロードマップ状態: 追加検証待ち", body)
+            self.assertIn("- 作業タスク: 残作業あり", body)
+            self.assertIn("- ロードマップ: 追加検証待ち", body)
             self.assertIn("検証記録の確認が必要です", body)
             self.assertIn("task_assess", body)
             self.assertNotIn("needs_verification", body)
