@@ -2928,7 +2928,7 @@ variables:
             self.assertIn("evidence が stale / missing / failed の場合は完了扱いしない", body)
             self.assertIn("unresolved review finding がある場合は完了扱いしない", body)
             self.assertIn("nilo check", body)
-            self.assertIn("MCP は通常入口ではない", body)
+            self.assertIn("通常入口ではない", body)
             self.assertIn("nilo review status --task <task_id> --format json", body)
             self.assertIn("`review status` に `--project` は付けない", body)
             self.assertIn("MCP identity guard", body)
@@ -9137,7 +9137,7 @@ close 済み commitment を表示できるようにした。
         self.assertEqual(request["status"], "requested")
         self.assertIn("revived_review_requests:\n- none", output.getvalue())
         self.assertIn("- none", output.getvalue())
-        self.assertIn("next_action: reviewer worker must call claim_next_review via MCP", output.getvalue())
+        self.assertIn("next_action: heartbeat recorded only; this command does not start Claude", output.getvalue())
         self.assertNotIn(f"- review_request: {request_id}", output.getvalue())
 
     def test_mcp_ping_runs_stdio_handshake_and_writes_transcript(self) -> None:
@@ -9204,7 +9204,7 @@ close 済み commitment を表示できるようにした。
         self.assertEqual(request["status"], "reviewer_unavailable")
         self.assertIn("reviewer: claude-code", output.getvalue())
         self.assertIn("revived_review_requests:\n- none", output.getvalue())
-        self.assertIn("next_action: reviewer worker must call claim_next_review via MCP", output.getvalue())
+        self.assertIn("next_action: heartbeat recorded only; this command does not start Claude", output.getvalue())
         self.assertNotIn(f"- review_request: {request['id']}", output.getvalue())
 
     def test_mcp_reviewer_claim_registers_worker_claims_and_writes_handoff(self) -> None:

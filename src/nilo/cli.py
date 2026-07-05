@@ -324,10 +324,9 @@ Normal work:
 - 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
-- Claude レビューの通常導線は `nilo review claude --task <task_id>`。MCP は `--with-mcp` 指定時だけ補助ツールとして使う。
+- Claude レビューの通常導線は `nilo review claude --task <task_id>`。MCP は補助/高度用途で通常入口ではない。
 - Claude に `register_reviewer` / `claim_next_review` / `import_review_result` を主導線として実行させない。ReviewResult は stdout で受け、Nilo が import する。
-- MCP tool は状態参照、reviewer worker、MCP 経由の証跡記録などの補助/高度用途。通常入口ではない。
-- `nilo review dispatch` / `quick` / `delegate` / `human-launch-claude` と reviewer worker orchestration は legacy/advanced/fallback 扱い。
+- `nilo review dispatch` / `quick` / `delegate` / `human-launch-claude` / reviewer worker orchestration は legacy/advanced/fallback。
 - review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
 MCP identity guard:
 - MCP tool 可でも正しい Nilo 状態とは判断しない。使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認。
