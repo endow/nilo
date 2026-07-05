@@ -44,7 +44,7 @@ def cmd_mcp_reviewer_start(args: argparse.Namespace) -> None:
         print("- none")
     print("claim:")
     print("- none")
-    print("next_action: reviewer worker must call claim_next_review via MCP, then import_review_result")
+    print("next_action: heartbeat recorded only; this command does not start Claude. For normal Claude review use `nilo review claude --task <task_id>`.")
 
 
 def write_claim_file(path: Path, body: str, label: str) -> None:

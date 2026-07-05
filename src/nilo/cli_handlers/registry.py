@@ -24,6 +24,8 @@ from .quality import (
     cmd_quality_schema_set,
     cmd_review_dispatch,
     cmd_review_doctor,
+    cmd_review_claude,
+    cmd_review_claude_doctor,
     cmd_review_human_launch_claude,
     cmd_review_init,
     cmd_review_delegate,

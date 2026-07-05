@@ -324,9 +324,10 @@ Normal work:
 - 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
-- レビュー依頼、reviewer worker、MCP 経由の証跡記録だけ Nilo MCP tool を使う。MCP は通常入口ではない。
-- AIレビュー依頼は必ず high-level `dispatch_review` を第一候補にする。無ければ `register_reviewer` -> `claim_next_review` -> `import_review_result`。
-- `claude` / `codex` CLI の直接起動、`nilo review dispatch` / `quick` は CLI reviewer process fallback/human-launch 専用。
+- Claude レビューの通常導線は `nilo review claude --task <task_id>`。MCP は `--with-mcp` 指定時だけ補助ツールとして使う。
+- Claude に `register_reviewer` / `claim_next_review` / `import_review_result` を主導線として実行させない。ReviewResult は stdout で受け、Nilo が import する。
+- MCP tool は状態参照、reviewer worker、MCP 経由の証跡記録などの補助/高度用途。通常入口ではない。
+- `nilo review dispatch` / `quick` / `delegate` / `human-launch-claude` と reviewer worker orchestration は legacy/advanced/fallback 扱い。
 - review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
 MCP identity guard:
 - MCP tool 可でも正しい Nilo 状態とは判断しない。使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認。
@@ -536,21 +537,23 @@ def route_natural_language_intent(argv: list[str]) -> bool:
         reason = f"{utterance} (quick requested; quick is local CLI fallback / diagnostics only)"
     project_id = Path.cwd().name
     task_id = natural_language_active_task_id(db_path or Path(".nilo") / "nilo.db", project_id)
-    print("review_handoff: use Nilo MCP dispatch_review for normal AI-to-AI review")
-    print("review_handoff_reason: natural-language CLI entrypoint cannot call MCP tools directly")
     print(f"reviewer: {reviewer}")
     print(f"project: {project_id}")
     if task_id:
         print(f"task: {task_id}")
+        if reviewer == "claude-code":
+            print("review_handoff: use Claude CLI direct review")
+            print(f"cli_command: nilo review claude --task {task_id} --project {project_id}")
+        else:
+            print("review_handoff: codex direct review is not implemented; use legacy/advanced review dispatch if needed")
     else:
-        print("task: unresolved; resolve the active task before calling dispatch_review")
+        print("task: unresolved; resolve the active task before requesting review")
     print(f"reason: {reason}")
-    print("mcp_tool: dispatch_review")
     mcp_arguments = {"project_id": project_id, "actor": "codex", "reviewer": reviewer, "reason": reason}
     if task_id:
         mcp_arguments["task_id"] = task_id
-    print(f"mcp_arguments: {json.dumps(mcp_arguments, ensure_ascii=False)}")
-    print("cli_fallback: use `nilo review dispatch` only after explaining why MCP review workflow is unavailable")
+    print(f"legacy_mcp_arguments: {json.dumps(mcp_arguments, ensure_ascii=False)}")
+    print("legacy_fallback: `nilo review dispatch` and MCP reviewer worker orchestration are advanced/fallback paths")
     return True
 
 

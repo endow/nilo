@@ -3062,10 +3062,9 @@ variables:
             self.assertIn("@.nilo/agent-instructions.md", claude)
             self.assertIn("nilo help ai", runtime)
             self.assertIn("MCP identity guard", runtime)
-            self.assertIn("必ず high-level `dispatch_review` を第一候補にする", runtime)
-            self.assertIn("`register_reviewer` -> `claim_next_review` -> `import_review_result`", runtime)
-            self.assertIn("`claude` / `codex` CLI の直接起動", runtime)
-            self.assertIn("CLI reviewer process fallback", runtime)
+            self.assertIn("Claude レビューの通常導線は `nilo review claude --task <task_id>`", runtime)
+            self.assertIn("ReviewResult は stdout で受け、Nilo が import する", runtime)
+            self.assertIn("legacy/advanced/fallback", runtime)
             self.assertIn("nilo review status --task <task_id> --format json", runtime)
             self.assertIn("`review status` に `--project` は付けない", runtime)
             self.assertIn("repository / project / git_root / db_path", runtime)
@@ -10098,14 +10097,14 @@ close 済み commitment を表示できるようにした。
         self.assertIsNone(result)
         self.assertEqual(dispatches, [])
         body = output.getvalue()
-        self.assertIn("review_handoff: use Nilo MCP dispatch_review", body)
-        self.assertIn("review_handoff_reason: natural-language CLI entrypoint cannot call MCP tools directly", body)
+        self.assertIn("review_handoff: use Claude CLI direct review", body)
+        self.assertIn(f"cli_command: nilo review claude --task task_test --project {root.name}", body)
         self.assertIn("reviewer: claude-code", body)
         self.assertIn("task: task_test", body)
         self.assertIn('"reason": "Cluade Codeにレビューしてもらって"', body)
-        arguments_line = next(line for line in body.splitlines() if line.startswith("mcp_arguments: "))
+        arguments_line = next(line for line in body.splitlines() if line.startswith("legacy_mcp_arguments: "))
         self.assertEqual(
-            json.loads(arguments_line.removeprefix("mcp_arguments: ")),
+            json.loads(arguments_line.removeprefix("legacy_mcp_arguments: ")),
             {
                 "task_id": "task_test",
                 "project_id": root.name,
@@ -10114,7 +10113,7 @@ close 済み commitment を表示できるようにした。
                 "reason": "Cluade Codeにレビューしてもらって",
             },
         )
-        self.assertIn("cli_fallback: use `nilo review dispatch` only after explaining why MCP review workflow is unavailable", body)
+        self.assertIn("legacy_fallback: `nilo review dispatch` and MCP reviewer worker orchestration are advanced/fallback paths", body)
 
     def test_review_quick_imports_parseable_review_result(self) -> None:
         with TemporaryDirectory() as directory:
@@ -10273,7 +10272,7 @@ close 済み commitment を表示できるようにした。
         self.assertEqual(dispatches, [])
         self.assertIsNone(request)
         self.assertIn("quick requested; quick is local CLI fallback / diagnostics only", output.getvalue())
-        self.assertIn("mcp_tool: dispatch_review", output.getvalue())
+        self.assertIn("review_handoff: use Claude CLI direct review", output.getvalue())
 
     def test_natural_language_formal_review_prints_mcp_handoff_not_dispatch(self) -> None:
         with TemporaryDirectory() as directory:
@@ -10300,7 +10299,7 @@ close 済み commitment を表示できるようにした。
                 store.close()
 
         self.assertEqual(dispatches, [])
-        self.assertIn("review_handoff: use Nilo MCP dispatch_review", output.getvalue())
+        self.assertIn("review_handoff: use Claude CLI direct review", output.getvalue())
 
     def test_review_dispatch_missing_config_returns_structured_next_action(self) -> None:
         with TemporaryDirectory() as directory:

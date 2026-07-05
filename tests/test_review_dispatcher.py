@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.mcp_server import call_tool
+from nilo.claude_cli_review import claude_doctor, claude_review, dry_run_claude_review
 from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
 from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_REVIEW_PROMPT
 from nilo.review_dispatcher import dispatch_review, find_executable, import_dispatch_review_result, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
@@ -129,6 +130,138 @@ approved
 
 
 class ReviewDispatcherTests(unittest.TestCase):
+    def test_claude_cli_review_imports_stdout_review_result_without_mcp_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (root / ".gitignore").write_text(".nilo/\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            claude = write_reviewer_script(root, f"#!{sys.executable}\nprint({review_result(summary='Claude OK.')!r})\n", name="bin/claude")
+            claude.chmod(0o755)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                output_file = root / ".nilo" / "reviews" / "claude_stdout.md"
+                with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                    result = claude_review(store, task_id="task_test", repo_root=root, write_prompt=True, output_file=output_file)
+                self.assertEqual(result["status"], "review_completed")
+                self.assertEqual(result["verdict"], "approved")
+                self.assertEqual(result["mcp"], "disabled")
+                self.assertTrue(result["review_request_id"].startswith("review_"))
+                self.assertTrue(Path(result["prompt_file"]).exists())
+                self.assertEqual(Path(result["output_file"]), output_file)
+                self.assertIn("# ReviewResult", output_file.read_text(encoding="utf-8"))
+                request = store.get("review_requests", result["review_request_id"])
+                stored = store.get("review_results", result["review_result_id"])
+                self.assertEqual(request["status"], "completed")
+                self.assertEqual(stored["reviewer"], "claude-code")
+                self.assertEqual(store.list_where("review_reviewers"), [])
+            finally:
+                store.close()
+
+    def test_claude_cli_review_rejects_stdout_preamble_and_saves_recovery_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (root / ".gitignore").write_text(".nilo/\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            claude = write_reviewer_script(root, f"#!{sys.executable}\nprint('preamble')\nprint({review_result()!r})\n", name="bin/claude")
+            claude.chmod(0o755)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                    result = claude_review(store, task_id="task_test", repo_root=root)
+                self.assertEqual(result["status"], "review_import_failed")
+                self.assertIn("claude output malformed", result["reason"])
+                self.assertTrue((root / result["raw_output_file"]).exists() if not Path(result["raw_output_file"]).is_absolute() else Path(result["raw_output_file"]).exists())
+                request = store.get("review_requests", result["review_request_id"])
+                self.assertEqual(request["status"], "failed")
+            finally:
+                store.close()
+
+    def test_claude_cli_review_timeout_marks_request_failed_without_traceback(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (root / ".gitignore").write_text(".nilo/\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            claude = write_reviewer_script(root, f"#!{sys.executable}\nimport time\ntime.sleep(10)\n", name="bin/claude")
+            claude.chmod(0o755)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                    result = claude_review(store, task_id="task_test", repo_root=root, timeout_seconds=0.02)
+                self.assertEqual(result["status"], "review_failed")
+                self.assertEqual(result["failure_stage"], "reviewer_timeout")
+                request = store.get("review_requests", result["review_request_id"])
+                self.assertEqual(request["status"], "failed")
+            finally:
+                store.close()
+
+    def test_claude_cli_review_missing_command_fails_before_creating_request(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                with patch.dict(os.environ, {"PATH": ""}):
+                    result = claude_review(store, task_id="task_test", repo_root=Path(directory))
+                self.assertEqual(result["status"], "review_failed")
+                self.assertEqual(result["failure_stage"], "command_resolution")
+                self.assertEqual(result["review_request_id"], "")
+                self.assertEqual(store.list_where("review_requests"), [])
+            finally:
+                store.close()
+
+    def test_claude_cli_review_dry_run_does_not_require_claude_or_write_db(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                result = dry_run_claude_review(
+                    store,
+                    task_id="task_test",
+                    project_id=None,
+                    reason="claude cli review",
+                    permission_mode="bypassPermissions",
+                    with_mcp=True,
+                    mcp_config=Path(".mcp.json"),
+                    write_prompt=True,
+                    output_file=None,
+                    no_import=False,
+                    repo_root=Path(directory),
+                )
+                self.assertEqual(result["status"], "dry_run")
+                self.assertIn("--mcp-config", result["command"])
+                self.assertEqual(store.list_where("review_requests"), [])
+            finally:
+                store.close()
+
+    def test_claude_doctor_reports_command_and_mcp_config(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            claude = write_reviewer_script(root, f"#!{sys.executable}\nprint('unused')\n", name="bin/claude")
+            claude.chmod(0o755)
+            mcp_config = root / ".mcp.json"
+            mcp_config.write_text("{}", encoding="utf-8")
+            with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                result = claude_doctor(mcp_config=mcp_config, with_mcp=True)
+            self.assertTrue(result["claude_found"])
+            self.assertEqual(result["mcp"], "enabled")
+            self.assertTrue(result["mcp_config_exists"])
+            self.assertIn("--mcp-config", result["command"])
+
     def test_dispatch_review_import_rejects_stale_task_event_seen_before_reviewer_run(self) -> None:
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"

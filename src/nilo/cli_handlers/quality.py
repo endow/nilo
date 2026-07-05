@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from ..cli import prompt_quality_review
+from ..claude_cli_review import claude_doctor, claude_review, dry_run_claude_review
 from ..cli_support import make_id, read_text_or_exit
 from ..instruction import build_autoscore_prompt, build_review_prompt
 from ..quality import parse_quality_review
@@ -431,7 +432,7 @@ def cmd_review_quick(args: argparse.Namespace) -> None:
         if result.get("stderr"):
             print("quick_stderr:")
             print(result["stderr"], end="" if result["stderr"].endswith("\n") else "\n")
-        print("quick_usage: local CLI fallback / diagnostics only; prefer Nilo MCP dispatch_review for normal AI review handoff")
+        print("quick_usage: local CLI fallback / diagnostics only; prefer `nilo review claude` for normal Claude review")
         print(f"quick_status: {result['status']}")
         print(f"quick_imported: {str(bool(result.get('imported'))).lower()}")
         if result.get("review_request_id"):
@@ -460,6 +461,102 @@ def cmd_review_doctor(args: argparse.Namespace) -> None:
     path = Path(args.config) if args.config else Path.cwd() / ".nilo" / "reviewers.toml"
     result = doctor_reviewer_config(path, reviewers)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def cmd_review_claude(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        kwargs = {
+            "task_id": args.task,
+            "project_id": args.project,
+            "reason": args.reason,
+            "permission_mode": args.permission_mode,
+            "with_mcp": args.with_mcp,
+            "mcp_config": Path(args.mcp_config),
+            "write_prompt": args.write_prompt,
+            "output_file": Path(args.output_file) if args.output_file else None,
+            "no_import": args.no_import,
+            "repo_root": Path.cwd(),
+        }
+        if args.dry_run:
+            result = dry_run_claude_review(store, **kwargs)
+            print_claude_review_result(result)
+            return
+        result = claude_review(
+            store,
+            timeout_seconds=args.timeout,
+            **kwargs,
+        )
+        print_claude_review_result(result)
+        if result["status"] in {"review_failed", "review_import_failed"}:
+            raise SystemExit(1)
+    finally:
+        store.close()
+
+
+def cmd_review_claude_doctor(args: argparse.Namespace) -> None:
+    result = claude_doctor(mcp_config=Path(args.mcp_config), with_mcp=args.with_mcp)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(f"claude_found: {str(result['claude_found']).lower()}")
+    if result["claude_executable"]:
+        print(f"claude_executable: {result['claude_executable']}")
+    print(f"rtk_found: {str(result['rtk_found']).lower()}")
+    if result["rtk_executable"]:
+        print(f"rtk_executable: {result['rtk_executable']}")
+    print(f"mcp: {result['mcp']}")
+    print(f"mcp_config: {result['mcp_config']}")
+    print(f"mcp_config_exists: {str(result['mcp_config_exists']).lower()}")
+    if result["command"]:
+        print(f"command: {result['command']}")
+    if result.get("permission_mode_default"):
+        print(f"permission_mode_default: {result['permission_mode_default']}")
+    if result.get("permission_mode_note"):
+        print(f"permission_mode_note: {result['permission_mode_note']}")
+    if result.get("rtk_fallback_note"):
+        print(f"rtk_fallback_note: {result['rtk_fallback_note']}")
+    if result["error"]:
+        print(f"error: {result['error']}")
+
+
+def print_claude_review_result(result: dict) -> None:
+    print(f"claude_status: {result['status']}")
+    print(f"mcp: {result.get('mcp', 'disabled')}")
+    if result.get("mcp_config"):
+        print(f"mcp_config: {result['mcp_config']}")
+    if result.get("task_id"):
+        print(f"task_id: {result['task_id']}")
+    if result.get("review_request_id"):
+        print(f"review_request: {result['review_request_id']}")
+    if result.get("review_result_id"):
+        print(f"review_result: {result['review_result_id']}")
+    if result.get("verdict"):
+        print(f"verdict: {result['verdict']}")
+    if result.get("prompt_file"):
+        print(f"prompt_file: {result['prompt_file']}")
+    if result.get("output_file"):
+        print(f"output_file: {result['output_file']}")
+    if result.get("raw_output_file"):
+        print(f"raw_output_file: {result['raw_output_file']}")
+    if result.get("command"):
+        print(f"command: {result['command']}")
+    if result.get("reason"):
+        print(f"reason: {result['reason']}")
+    if result.get("stderr"):
+        print("stderr:")
+        print(result["stderr"].rstrip())
+    if result.get("findings") is not None:
+        print("findings:")
+        blocking_count = result.get("blocking_findings")
+        nonblocking_count = result.get("non_blocking_findings")
+        if blocking_count is None or nonblocking_count is None:
+            blocking_count = len([finding for finding in result["findings"] if finding["status"] == "unresolved" and finding["blocking"]])
+            nonblocking_count = len(result["findings"]) - blocking_count
+        print(f"- unresolved blocking: {blocking_count}")
+        print(f"- addressed_or_nonblocking: {nonblocking_count}")
+    if result.get("next_action"):
+        print(f"next_action: {result['next_action']}")
 
 
 def create_dirty_tree_review_task(store: Store, project_id: str, files: list[str]) -> dict:
@@ -584,7 +681,7 @@ def claude_instruction(project_id: str, task: dict, review_request: dict, dirty_
             f"状態確認が必要な場合は get_status(project_id=\"{project_id}\") または get_task_status を使って。",
             "MCP 経由で検証ログを書き戻す必要がある場合は record_verification を使って。",
             "コード変更はしないで。",
-            "通常のAI間レビュー依頼では claude/codex CLI を直接起動せず、Nilo MCP review workflow を優先する。",
+            "このコマンドは legacy MCP workflow helper。通常の Claude review は `nilo review claude --task <task_id>` を使う。",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -646,7 +743,7 @@ def cmd_review_human_launch_claude(args: argparse.Namespace) -> None:
             "reason": args.reason,
         }
         print_review_delegation(args.project, review_request, task, dirty_tree_review)
-        print("human_launch_note: human-requested Claude CLI helper; normal AI review handoff should use Nilo MCP dispatch_review")
+        print("human_launch_note: legacy Claude MCP workflow helper; prefer `nilo review claude` for normal Claude review")
         print_human_runner_command(args)
         print("claude_status: skipped (dry-run)")
         return
@@ -663,7 +760,7 @@ def cmd_review_human_launch_claude(args: argparse.Namespace) -> None:
     review_request, task, dirty_tree_review = create_review_delegation(delegate_args)
     instruction = claude_instruction(args.project, task, review_request, dirty_tree_review)
     print_review_delegation(args.project, review_request, task, dirty_tree_review)
-    print("human_launch_note: human-requested Claude CLI helper; normal AI review handoff should use Nilo MCP dispatch_review")
+    print("human_launch_note: legacy Claude MCP workflow helper; prefer `nilo review claude` for normal Claude review")
 
     command = claude_runner_command(args)
     print_human_runner_command(args)
