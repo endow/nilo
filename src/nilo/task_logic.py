@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 COMPLETED_STATUSES = {"completed_by_user", "completed_by_ai"}
+CLOSED_STATUSES = COMPLETED_STATUSES | {"rejected_by_user"}
 
 
 def outcome_status(decision: str) -> str:
@@ -39,6 +40,10 @@ def projected_task_status(store, task: dict, *, current_snapshot: dict | None = 
 
 def is_task_completed_status(status: str) -> bool:
     return status in COMPLETED_STATUSES
+
+
+def is_task_closed_status(status: str) -> bool:
+    return status in CLOSED_STATUSES
 
 
 def completion_status(actor: str) -> str:

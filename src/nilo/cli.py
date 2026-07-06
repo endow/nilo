@@ -34,7 +34,7 @@ from .roadmap_render import (
 )
 from .secret import mask_secrets
 from .store import Store
-from .task_logic import completion_status, is_task_completed_status, outcome_status, projected_task_status, require_ai_completion_evidence, split_task_specs
+from .task_logic import completion_status, is_task_closed_status, is_task_completed_status, outcome_status, projected_task_status, require_ai_completion_evidence, split_task_specs
 from .timeutil import now_iso
 from .update_check import auto_update_notice
 from .verification import run_local_verification
@@ -564,7 +564,7 @@ def natural_language_active_task_id(db_path: Path, project_id: str) -> str:
         if not project:
             return ""
         tasks, statuses = project_tasks_and_statuses(store, project_id)
-        active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+        active = [task for task in tasks if not is_task_closed_status(statuses[task["id"]])]
         if len(active) != 1:
             return ""
         return str(active[0]["id"])

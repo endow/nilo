@@ -1441,8 +1441,51 @@ variables:
                 with redirect_stdout(reject_output):
                     main(["--db", str(db), "reject", "再作業が必要"])
                 self.assertIn("status: rejected_by_user", reject_output.getvalue())
+                self.assertIn("closed: true", reject_output.getvalue())
             finally:
                 os.chdir(previous_cwd)
+
+    def test_facade_reject_removes_mistaken_task_from_active_work(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+
+                mistaken = io.StringIO()
+                with redirect_stdout(mistaken):
+                    main(["--db", str(db), "start", "誤起票タスク"])
+                mistaken_task_id = next(line.split(": ", 1)[1] for line in mistaken.getvalue().splitlines() if line.startswith("task: "))
+
+                reject_output = io.StringIO()
+                with redirect_stdout(reject_output):
+                    main(["--db", str(db), "reject", "誤起票なので却下"])
+
+                wanted = io.StringIO()
+                with redirect_stdout(wanted):
+                    main(["--db", str(db), "start", "次に進めるタスク"])
+                wanted_task_id = next(line.split(": ", 1)[1] for line in wanted.getvalue().splitlines() if line.startswith("task: "))
+
+                status_json = io.StringIO()
+                with redirect_stdout(status_json):
+                    main(["--db", str(db), "status", "--ai", "--json"])
+                next_output = io.StringIO()
+                with redirect_stdout(next_output):
+                    main(["--db", str(db), "next"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("status: rejected_by_user", reject_output.getvalue())
+            self.assertIn("closed: true", reject_output.getvalue())
+            data = json.loads(status_json.getvalue())
+            self.assertEqual(data["active_task"]["id"], wanted_task_id)
+            self.assertNotEqual(data["active_task"]["id"], mistaken_task_id)
+            self.assertIn(wanted_task_id, next_output.getvalue())
+            self.assertNotIn(mistaken_task_id, next_output.getvalue())
 
     def test_facade_work_creates_recipe_backed_task_and_records_check_completion(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1477,6 +1520,105 @@ variables:
                 store.close()
             self.assertIsNotNone(completion)
             self.assertIsNotNone(verification)
+
+    def test_facade_work_does_not_select_release_recipe_for_meta_release_requests(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+
+                bugfix_output = io.StringIO()
+                with redirect_stdout(bugfix_output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "work",
+                            "release recipe の release note validation バグを修正する",
+                            "--dry-run",
+                        ]
+                    )
+
+                task_output = io.StringIO()
+                with redirect_stdout(task_output):
+                    main(["--db", str(db), "work", "release note validation の修正タスクを作る", "--dry-run"])
+
+                english_bugfix_output = io.StringIO()
+                with redirect_stdout(english_bugfix_output):
+                    main(["--db", str(db), "work", "fix the release recipe bug", "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("recipe: bugfix", bugfix_output.getvalue())
+            self.assertNotIn("recipe: release", bugfix_output.getvalue())
+            self.assertIn("recipe: none", task_output.getvalue())
+            self.assertIn("recipe_reason: no clear recipe keyword", task_output.getvalue())
+            self.assertIn("recipe: bugfix", english_bugfix_output.getvalue())
+            self.assertNotIn("recipe: release", english_bugfix_output.getvalue())
+
+    def test_facade_work_selects_release_recipe_for_explicit_release_preparation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "0.7.0 のリリース準備を始める", "--dry-run"])
+                japanese_compact_output = io.StringIO()
+                with redirect_stdout(japanese_compact_output):
+                    main(["--db", str(db), "work", "0.7.0を公開", "--dry-run"])
+                japanese_particle_output = io.StringIO()
+                with redirect_stdout(japanese_particle_output):
+                    main(["--db", str(db), "work", "リリースを実行する", "--dry-run"])
+                english_output = io.StringIO()
+                with redirect_stdout(english_output):
+                    main(["--db", str(db), "work", "prepare release v0.7.0", "--dry-run"])
+                english_debugging_output = io.StringIO()
+                with redirect_stdout(english_debugging_output):
+                    main(["--db", str(db), "work", "release v0.7.0 after debugging the CI", "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("recipe: release", output.getvalue())
+            self.assertIn("recipe_reason: matched: explicit release intent", output.getvalue())
+            self.assertIn("recipe: release", japanese_compact_output.getvalue())
+            self.assertIn("recipe: release", japanese_particle_output.getvalue())
+            self.assertIn("recipe: release", english_output.getvalue())
+            self.assertIn("recipe: release", english_debugging_output.getvalue())
+
+    def test_facade_work_does_not_treat_generic_publish_as_release_intent(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "ドキュメントを公開する", "--dry-run"])
+                release_word_output = io.StringIO()
+                with redirect_stdout(release_word_output):
+                    main(["--db", str(db), "work", "ドキュメントをリリースする", "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("recipe: docs-update", output.getvalue())
+            self.assertNotIn("recipe: release", output.getvalue())
+            self.assertIn("recipe: docs-update", release_word_output.getvalue())
+            self.assertNotIn("recipe: release", release_word_output.getvalue())
 
     def test_facade_work_stops_on_multiple_active_tasks_unless_task_is_explicit(self) -> None:
         with TemporaryDirectory() as directory:

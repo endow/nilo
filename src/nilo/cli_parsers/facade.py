@@ -95,7 +95,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     done.add_argument("--commit-message")
     done.set_defaults(func=handlers.cmd_facade_done)
 
-    reject = sub.add_parser("reject")
+    reject = sub.add_parser("reject", help="Reject the active daily task and remove it from normal active work.")
     reject.add_argument("reason")
     add_project_option(reject)
     add_task_option(reject)

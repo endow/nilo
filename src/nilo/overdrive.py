@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .cli_support import make_id
 from .store import Store
-from .task_logic import is_task_completed_status
+from .task_logic import is_task_closed_status
 from .timeutil import now_iso
 
 
@@ -56,7 +56,7 @@ def task_cursor_for_commitment(store: Store, project_id: str, commitment_id: str
     candidates = [
         task
         for task in tasks
-        if task.get("roadmap_commitment_id") == commitment_id and not is_task_completed_status(statuses[task["id"]])
+        if task.get("roadmap_commitment_id") == commitment_id and not is_task_closed_status(statuses[task["id"]])
     ]
     if not candidates:
         return None

@@ -45,6 +45,7 @@ STATUS_LABELS_JA = {
     "completed_by_user": "人間が完了",
     "completed_by_ai": "AIが完了",
     "completion_needs_review": "完了記録の確認が必要",
+    "rejected_by_user": "人間が却下",
     "unresolved": "未解決",
     "addressed": "対応済み",
     "accepted-risk": "リスク受け入れ",

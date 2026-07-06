@@ -10,7 +10,7 @@ from .human_status import human_next_action_text
 from .project_language import project_primary_language
 from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status
 from .store import Store
-from .task_logic import active_task_completion, is_task_completed_status, projected_task_status, unresolved_review_findings
+from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
 from .workflow_context import workflow_context
 
 
@@ -31,7 +31,7 @@ def active_tasks(store: Store, project_id: str) -> tuple[list[dict], dict[str, s
     from . import project_logic as p
 
     tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
-    return [task for task in tasks if not is_task_completed_status(statuses[task["id"]])], statuses
+    return [task for task in tasks if not is_task_closed_status(statuses[task["id"]])], statuses
 
 
 def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snapshot_mode: str = "full") -> dict[str, Any]:

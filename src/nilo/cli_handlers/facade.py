@@ -37,8 +37,25 @@ WORK_RECIPE_KEYWORDS = {
     "bugfix": ("bug", "fix", "failing", "error", "exception", "バグ", "不具合", "失敗", "エラー", "直して"),
     "perf": ("slow", "heavy", "performance", "perf", "timeout", "full check", "遅い", "重い", "高速化", "計測", "ボトルネック"),
     "basic-design": ("design", "architecture", "plan", "設計", "方針", "検討", "実装前"),
-    "release": ("release", "publish", "version", "リリース", "公開", "バージョン"),
 }
+WORK_RELEASE_INTENT_PATTERNS = (
+    r"\brelease\s+(prep|prepare|preparation|flow|process|run)\b",
+    r"\bprepare\s+(a\s+)?release\b",
+    r"\bstart\s+(the\s+)?release\b",
+    r"\brun\s+(the\s+)?release\b",
+    r"\bpublish\s+(the\s+)?release\b",
+    r"\brelease\s+(v?\d+(?:\.\d+){1,2}|this|it|now)\b",
+    r"\b(v?\d+(?:\.\d+){1,2})\s*(を|の)?\s*(リリース|公開)",
+    r"リリース(準備|作業|フロー|を始め|実行)",
+    r"リリースを(始め|実行)",
+    r"公開(準備|作業|フロー)",
+)
+WORK_RELEASE_META_PATTERNS = (
+    r"\brelease\s+(recipe|note|notes|validation|bug|fix|task)\b",
+    r"\b(recipe|note|notes|validation|bug|fix|task)\s+.*\brelease\b",
+    r"(release|リリース).*(\bbug\b|\bfix\b|バグ|不具合|修正|起票|タスクを作|タスク作成|validation)",
+    r"(release\s+note|リリースノート).*(空|template|テンプレート)",
+)
 WORK_RECIPE_ALIASES = {
     "docs": "docs-update",
     "document": "docs-update",
@@ -89,6 +106,9 @@ def infer_work_recipe_candidate(request: str, *, explicit_recipe: str | None = N
         hits = [keyword for keyword in keywords if _work_keyword_matches(lowered, keyword)]
         if hits:
             matches.append({"recipe": recipe, "score": len(hits), "reason": ", ".join(hits[:3])})
+    release_reason = _work_release_intent_reason(lowered)
+    if release_reason:
+        matches.append({"recipe": "release", "score": 2, "reason": release_reason})
     if not matches:
         return {"recipe": "", "confidence": "none", "reason": "no clear recipe keyword", "ambiguous_candidates": []}
     matches.sort(key=lambda item: (-item["score"], item["recipe"]))
@@ -113,6 +133,17 @@ def _work_keyword_matches(lowered_request: str, keyword: str) -> bool:
     if lowered_keyword.isascii() and lowered_keyword.replace(" ", "").isalpha():
         return re.search(rf"(?<![a-z0-9_-]){re.escape(lowered_keyword)}(?![a-z0-9_-])", lowered_request) is not None
     return lowered_keyword in lowered_request
+
+
+def _work_release_intent_reason(lowered_request: str) -> str:
+    if not any(keyword in lowered_request for keyword in ("release", "publish", "version", "リリース", "公開", "バージョン")):
+        return ""
+    if any(re.search(pattern, lowered_request) for pattern in WORK_RELEASE_META_PATTERNS):
+        return ""
+    for pattern in WORK_RELEASE_INTENT_PATTERNS:
+        if re.search(pattern, lowered_request):
+            return "explicit release intent"
+    return ""
 
 
 def default_project_id(args: argparse.Namespace) -> str:
@@ -221,7 +252,7 @@ def work_queue_data(store: Store, project_id: str, *, audit: bool = False, verbo
     task_rows, recorded_statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
     for task in task_rows:
         status = c.projected_task_status(store, task, current_snapshot=snapshot) if audit else recorded_statuses[task["id"]]
-        if c.is_task_completed_status(status):
+        if c.is_task_closed_status(status):
             if audit:
                 audit_issues = completion_audit_issues(store, task, current_snapshot=snapshot)
                 if not audit_issues:
@@ -1302,3 +1333,4 @@ def cmd_facade_reject(args: argparse.Namespace) -> None:
             decision="rejected",
         )
     )
+    print("closed: true")

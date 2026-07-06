@@ -113,6 +113,12 @@ TASK_STATUS_MESSAGES: dict[str, dict[str, str]] = {
         "next_action": "必要に応じて完了記録と証跡を確認してください。",
         "severity": "info",
     },
+    "rejected_by_user": {
+        "state": "このタスクは人間が却下しました。",
+        "summary": "人間の判断により、このタスクは通常の作業対象から外れています。",
+        "next_action": "追加対応は不要です。必要なら別タスクとして起票してください。",
+        "severity": "info",
+    },
     "completion_needs_review": {
         "state": "完了記録の確認が必要です。",
         "summary": "完了記録はありますが、証跡・レビュー・失敗ログなどに確認すべき不整合があります。",

@@ -11,7 +11,7 @@ from .review_lifecycle import update_review_request
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
 from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status, review_result_status
 from .store import Store
-from .task_logic import active_task_completion, is_task_completed_status, outcome_status, projected_task_status, unresolved_blocking_review_findings
+from .task_logic import active_task_completion, is_task_closed_status, is_task_completed_status, outcome_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
 
 
@@ -93,7 +93,7 @@ def git_commit_log(cwd: Path, base_commit: str, latest_head: str) -> list[dict]:
 
 
 def project_current_phase(tasks: list[dict], statuses: dict[str, str]) -> str:
-    active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    active = [task for task in tasks if not is_task_closed_status(statuses[task["id"]])]
     if not active:
         return "completed"
     priority = [
@@ -112,7 +112,7 @@ def project_current_phase(tasks: list[dict], statuses: dict[str, str]) -> str:
 
 
 def project_work_state(tasks: list[dict], statuses: dict[str, str]) -> str:
-    active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    active = [task for task in tasks if not is_task_closed_status(statuses[task["id"]])]
     if not active:
         return human_project_work_state(set())
     active_statuses = {statuses[task["id"]] for task in active}
@@ -304,7 +304,7 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
     has_current_review = all(item["latest_review_status"] in {"current", "missing"} for item in task_evidence) if task_evidence else False
     has_unresolved_findings = any(item["unresolved_review_findings"] for item in task_evidence)
     all_completions_valid = all(item["completion_valid"] for item in task_evidence) if task_evidence else False
-    active = [item for item in task_evidence if not is_task_completed_status(item["status"])]
+    active = [item for item in task_evidence if not is_task_closed_status(item["status"])]
 
     if not has_task:
         overall_status = "task_plan_required"
@@ -431,7 +431,7 @@ def auto_close_ready_roadmap_commitments(
         related = related_tasks_for_commitment(tasks, commitment)
         if not related:
             continue
-        if any(not is_task_completed_status(statuses[task["id"]]) for task in related):
+        if any(not is_task_closed_status(statuses[task["id"]]) for task in related):
             continue
         assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
         if not assessment["closure_ready"]:
@@ -508,7 +508,7 @@ def human_roadmap_assessment_status(status: str) -> dict:
 def human_roadmap_assessment_summary(assessment: dict) -> dict:
     status_text = human_roadmap_assessment_status(assessment["status"])
     related_tasks = assessment["related_tasks"]
-    active_tasks = [task for task in related_tasks if not is_task_completed_status(task["status"])]
+    active_tasks = [task for task in related_tasks if not is_task_closed_status(task["status"])]
     passed_verifications = [task for task in related_tasks if task["latest_verification_status"] == "passed"]
     failed_verifications = [
         task for task in related_tasks if task["latest_verification_status"] in ("failed", "timed_out")
@@ -684,7 +684,7 @@ def selected_roadmap_commitment(store: Store, commitments: list[dict], tasks: li
     for index, commitment in enumerate(commitments):
         assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
         related = related_tasks_for_commitment(tasks, commitment)
-        active = [task for task in related if not is_task_completed_status(statuses[task["id"]])]
+        active = [task for task in related if not is_task_closed_status(statuses[task["id"]])]
         if active:
             rank = 0
         elif assessment["status"] != "evidence_present":
@@ -707,7 +707,7 @@ def ordered_roadmap_commitments(store: Store, commitments: list[dict], tasks: li
 def active_roadmap_commitment(commitments: list[dict], tasks: list[dict], statuses: dict[str, str]) -> dict | None:
     for commitment in commitments:
         related = related_tasks_for_commitment(tasks, commitment)
-        if any(not is_task_completed_status(statuses[task["id"]]) for task in related):
+        if any(not is_task_closed_status(statuses[task["id"]]) for task in related):
             return commitment
     return commitments[0] if commitments else None
 
@@ -717,7 +717,7 @@ def roadmap_prioritized_active_tasks(
     statuses: dict[str, str],
     commitments: list[dict],
 ) -> list[dict]:
-    active_tasks = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    active_tasks = [task for task in tasks if not is_task_closed_status(statuses[task["id"]])]
     commitment = active_roadmap_commitment(commitments, tasks, statuses)
     if not commitment:
         return active_tasks
@@ -758,7 +758,7 @@ def roadmap_agent_state(store: Store, project_id: str, tasks: list[dict], status
     active_tasks = [
         task
         for task in related_tasks_for_commitment(tasks, commitment)
-        if not is_task_completed_status(statuses[task["id"]])
+        if not is_task_closed_status(statuses[task["id"]])
     ]
 
     if active_tasks:
@@ -863,7 +863,7 @@ def project_roadmap_position(
     open_residue = [item for item in design_residue if item["status"] != "resolved"]
     if open_residue:
         return f"design residue open: {open_residue[0]['summary']}"
-    active = [task for task in tasks if not is_task_completed_status(statuses[task["id"]])]
+    active = [task for task in tasks if not is_task_closed_status(statuses[task["id"]])]
     if active:
         priority = {
             "implementation": 0,
