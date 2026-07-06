@@ -32,6 +32,7 @@ ALLOWED_CORE_WRITERS = {
         "src/nilo/mcp_server.py",
         "src/nilo/project_logic.py",
         "src/nilo/cli_handlers/workflow.py",
+        "src/nilo/cli_handlers/release.py",
     },
     "todos": {"src/nilo/transitions.py", "src/nilo/cli_handlers/todo.py", "src/nilo/mcp_server.py"},
     "transition_events": {"src/nilo/transitions.py", "src/nilo/workflow_context.py"},

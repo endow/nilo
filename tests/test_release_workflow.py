@@ -239,6 +239,106 @@ class ReleaseWorkflowTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_release_prepare_adopts_existing_work_release_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                work_output = io.StringIO()
+                with redirect_stdout(work_output):
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--project", root.name])
+                work_task_id = next(line.split(":", 1)[1].strip() for line in work_output.getvalue().splitlines() if line.startswith("work_session:"))
+
+                output = io.StringIO()
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ), patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                self.assertIn(f"adopted_task: {work_task_id}", output.getvalue())
+                store = Store(db)
+                try:
+                    runs = store.list_where("recipe_runs", "project_id=? AND recipe_name='release'", (root.name,))
+                    self.assertEqual(len(runs), 1)
+                    self.assertEqual(runs[0]["task_id"], work_task_id)
+                    task = store.get("tasks", work_task_id)
+                    self.assertEqual(task["title"], "リリース 0.3.1")
+                    self.assertTrue(store.latest_for_task("recipe_task_provenance", work_task_id))
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_report_accepts_committed_release_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ), patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(io.StringIO()):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                store = Store(db)
+                try:
+                    task_id = workflow_context(store, root.name)["task_id"]
+                finally:
+                    store.close()
+                root.joinpath(".nilo/reports").mkdir(parents=True)
+                report = root / ".nilo/reports/release-report.md"
+                report.write_text(
+                    """# 完了報告
+
+## 1. 実施内容
+release prepare を実行した。
+
+## 2. 変更ファイル一覧
+- docs/releases/0.3.1.md
+- pyproject.toml
+- src/nilo/__init__.py
+
+## 3. 実行した検証
+### テストコマンド
+PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
+### テスト結果
+成功。
+### 型チェック
+指定なし。
+### lint
+指定なし。
+
+## 4. 未実行の検証（理由を記載）
+公開操作は未実行。
+
+## 5. 既知の問題 / 仕様から外れた判断
+なし。
+
+## 6. 人間に確認してほしい点
+公開承認。
+""",
+                    encoding="utf-8",
+                )
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "report", "import", "--task", task_id, "--file", str(report)])
+                self.assertIn("report_form_status: present", output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
     def test_release_prepare_reuses_full_check_instead_of_changed_check(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

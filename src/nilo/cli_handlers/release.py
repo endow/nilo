@@ -384,6 +384,12 @@ def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str,
     rendered, variable_messages = _render_task_fields(source, project_id, raw_vars, "", cwd)
     for message in variable_messages:
         print(message)
+    adopted = _adopt_release_work_task(store, project_id, source, rendered)
+    if adopted:
+        from ..workflow_context import create_recipe_run
+
+        print(f"- adopted_task: {adopted['id']}")
+        return create_recipe_run(store, project_id=project_id, task_id=adopted["id"], recipe_name="release", rendered_fields=rendered)
     recipe_args = argparse.Namespace(
         db=args.db,
         task_type="implementation",
@@ -394,6 +400,48 @@ def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str,
     from ..workflow_context import create_recipe_run
 
     return create_recipe_run(store, project_id=project_id, task_id=task_id, recipe_name="release", rendered_fields=rendered)
+
+
+def _adopt_release_work_task(store: Store, project_id: str, source: Any, rendered: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for task in store.list_where("tasks", "project_id=?", (project_id,)):
+        if task.get("status") not in {"planned", "instruction_generated"}:
+            continue
+        if recipe_run_for_existing_task(store, task["id"]):
+            continue
+        acceptance = task.get("acceptance_criteria") or []
+        if any(str(item).strip().lower() == "recipe: release" for item in acceptance):
+            candidates.append(task)
+    if len(candidates) != 1:
+        return None
+    task = candidates[0]
+    updates = {
+        "title": rendered["title"],
+        "description": rendered["description"],
+        "acceptance_criteria": rendered["acceptance"],
+    }
+    store.update("tasks", task["id"], updates)
+    if not store.latest_for_task("recipe_task_provenance", task["id"]):
+        store.insert(
+            "recipe_task_provenance",
+            {
+                "id": make_id("recipe_provenance"),
+                "task_id": task["id"],
+                "recipe_name": source.name,
+                "source_layer": source.layer,
+                "source_id": source.source_id,
+                "content_hash": source.content_hash,
+                "rendered_fields": rendered,
+                "recipe_snapshot": source.to_dict(),
+                "created_at": now_iso(),
+            },
+        )
+    return store.get("tasks", task["id"]) or {**task, **updates}
+
+
+def recipe_run_for_existing_task(store: Store, task_id: str) -> dict[str, Any] | None:
+    runs = store.list_where("recipe_runs", "task_id=?", (task_id,))
+    return runs[0] if runs else None
 
 
 def _resolved_db_path(db_path: Path | None, cwd: Path) -> Path:

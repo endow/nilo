@@ -30,6 +30,11 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
     store.insert("agent_reports", report)
 
     status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd)
+    issues = _ignore_release_committed_file_extras(store, task["id"], issues)
+    if status == "needs_human_review" and not any(
+        issue.startswith("changed_files") or issue.startswith("git metadata") or issue.startswith("secret detected") for issue in issues
+    ):
+        status = "evidence_missing" if issues else "evidence_submitted"
     snapshot = compact_snapshot(current_git_snapshot(cwd))
     display_status = "present" if status == "evidence_submitted" else "failed"
     check = {
@@ -67,3 +72,35 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
             )
 
     return {"report": report, "evidence_status": check, "evidence_check": check}
+
+
+def _ignore_release_committed_file_extras(store: Store, task_id: str, issues: list[str]) -> list[str]:
+    allowed = _release_committed_files(store, task_id)
+    if not allowed:
+        return issues
+    filtered: list[str] = []
+    prefix = "changed_files contains non-local changes: "
+    for issue in issues:
+        if issue == "git metadata warning: base_commit is missing; committed task changes cannot be compared":
+            continue
+        if not issue.startswith(prefix):
+            filtered.append(issue)
+            continue
+        listed = issue[len(prefix) :].split(". このタスクで", 1)[0]
+        files = {item.strip() for item in listed.split(",") if item.strip()}
+        remaining = sorted(files - allowed)
+        if not remaining:
+            continue
+        filtered.append(issue.replace(", ".join(sorted(files)), ", ".join(remaining), 1))
+    return filtered
+
+
+def _release_committed_files(store: Store, task_id: str) -> set[str]:
+    runs = store.list_where("recipe_runs", "task_id=? AND recipe_name='release'", (task_id,))
+    if not runs:
+        return set()
+    metadata = runs[0].get("metadata") or {}
+    if not metadata.get("commit_sha"):
+        return set()
+    files = metadata.get("committed_files") or metadata.get("release_prepare_managed_files") or []
+    return {str(path).replace("\\", "/") for path in files}
