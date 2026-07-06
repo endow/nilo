@@ -11216,6 +11216,8 @@ close 済み commitment を表示できるようにした。
             self.assertIn("- unresolved_blocking: 1", body)
             self.assertIn("- addressed: 1", body)
             self.assertIn("- unresolved: 1", body)
+            self.assertIn("- current_event_id:", body)
+            self.assertIn("- context_token: task:task_test:", body)
             self.assertIn("update_history:", body)
             self.assertIn("  - none", body)
 
@@ -11281,6 +11283,8 @@ close 済み commitment を表示できるようにした。
 
             data = json.loads(output.getvalue())
             self.assertEqual(data["task_id"], "task_test")
+            self.assertTrue(data["current_event_id"].startswith("finding_update_"))
+            self.assertEqual(data["context_token"], f"task:task_test:{data['current_event_id']}")
             self.assertEqual(data["total_findings"], 1)
             self.assertEqual(data["unresolved_blocking"], 0)
             self.assertEqual(data["finding_status_counts"]["addressed"], 1)
@@ -11288,6 +11292,198 @@ close 済み commitment を表示できるようにした。
             self.assertEqual(data["review_findings"][0]["id"], finding["id"])
             self.assertEqual(data["review_findings"][0]["status"], "addressed")
             self.assertEqual(data["review_findings"][0]["update_history"][0]["reason"], "JSON確認用に更新")
+
+    def test_review_finding_update_missing_context_suggests_retry_command(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            review = root / "review.md"
+            review.write_text(
+                "# ReviewResult\n\n"
+                "## Verdict\nchanges_requested\n\n"
+                "## Findings\n"
+                "### F1\n"
+                "severity: high\n"
+                "status: unresolved\n"
+                "blocking: true\n\n"
+                "要対応。\n",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "missing context"])
+                register_test_reviewer(db, "human")
+                request_output = io.StringIO()
+                with redirect_stdout(request_output):
+                    main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "review"])
+            request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
+            store = Store(db)
+            try:
+                finding = store.latest_for_task("review_findings", "task_test")
+                current_event_id = store.latest_task_status_event("task_test")["event_id"]
+            finally:
+                store.close()
+
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "review",
+                            "finding",
+                            "update",
+                            "--finding",
+                            finding["id"],
+                            "--status",
+                            "addressed",
+                            "--reason",
+                            "修正済み",
+                            "--actor",
+                            "ai",
+                        ]
+                    )
+
+            message = str(raised.exception)
+            self.assertIn("missing required argument: --context-token or --last-seen-event-id", message)
+            self.assertIn(f"current_event_id: {current_event_id}", message)
+            self.assertIn(f"nilo --db {db}", message)
+            self.assertIn("nilo review status --task task_test --format json", message)
+            self.assertIn(f"--last-seen-event-id {current_event_id}", message)
+
+    def test_review_finding_update_accepted_risk_requires_human_with_retry_command(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            review = root / "review.md"
+            review.write_text(
+                "# ReviewResult\n\n"
+                "## Verdict\napproved\n\n"
+                "## Findings\n"
+                "### F1\n"
+                "severity: low\n"
+                "status: unresolved\n"
+                "blocking: false\n\n"
+                "許容判断が必要。\n",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "accepted risk"])
+                register_test_reviewer(db, "human")
+                request_output = io.StringIO()
+                with redirect_stdout(request_output):
+                    main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "review"])
+            request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
+            store = Store(db)
+            try:
+                finding = store.latest_for_task("review_findings", "task_test")
+                current_event_id = store.latest_task_status_event("task_test")["event_id"]
+            finally:
+                store.close()
+
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "review",
+                            "finding",
+                            "update",
+                            "--finding",
+                            finding["id"],
+                            "--status",
+                            "accepted-risk",
+                            "--reason",
+                            "許容する",
+                            "--actor",
+                            "ai",
+                            "--last-seen-event-id",
+                            current_event_id,
+                        ]
+                    )
+
+            message = str(raised.exception)
+            self.assertIn("human decision required: accepted-risk must be recorded by a human", message)
+            self.assertIn("have a human run:", message)
+            self.assertIn(f"nilo --db {db}", message)
+            self.assertIn("--actor human", message)
+            self.assertIn("--human-confirm", message)
+            self.assertIn(f"--last-seen-event-id {current_event_id}", message)
+
+    def test_review_finding_update_accepted_risk_human_requires_confirmation_with_retry_command(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            review = root / "review.md"
+            review.write_text(
+                "# ReviewResult\n\n"
+                "## Verdict\napproved\n\n"
+                "## Findings\n"
+                "### F1\n"
+                "severity: low\n"
+                "status: unresolved\n"
+                "blocking: false\n\n"
+                "許容判断が必要。\n",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "human accepted risk"])
+                register_test_reviewer(db, "human")
+                request_output = io.StringIO()
+                with redirect_stdout(request_output):
+                    main(["--db", str(db), "review", "request", "--task", "task_test", "--from", "codex", "--to", "human", "--reason", "review"])
+            request_id = next(line.split(": ", 1)[1] for line in request_output.getvalue().splitlines() if line.startswith("review_request: "))
+            last_seen_event_id = claim_review_for_import(db, request_id)
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "review", "import", "--task", "task_test", "--review", request_id, "--file", str(review), "--last-seen-event-id", last_seen_event_id])
+            store = Store(db)
+            try:
+                finding = store.latest_for_task("review_findings", "task_test")
+                current_event_id = store.latest_task_status_event("task_test")["event_id"]
+            finally:
+                store.close()
+
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "review",
+                            "finding",
+                            "update",
+                            "--finding",
+                            finding["id"],
+                            "--status",
+                            "accepted-risk",
+                            "--reason",
+                            "許容する",
+                            "--actor",
+                            "human",
+                            "--last-seen-event-id",
+                            current_event_id,
+                        ]
+                    )
+
+            message = str(raised.exception)
+            self.assertIn("human confirmation required: accepted-risk needs --human-confirm", message)
+            self.assertIn(f"nilo --db {db}", message)
+            self.assertIn("--actor human", message)
+            self.assertIn("--human-confirm", message)
+            self.assertIn("--decision-note", message)
+            self.assertIn(f"--last-seen-event-id {current_event_id}", message)
 
     def test_review_finding_update_rejects_invalid_status(self) -> None:
         with TemporaryDirectory() as directory:

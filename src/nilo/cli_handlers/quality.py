@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 import time
@@ -1025,8 +1026,12 @@ def review_status_data(store: Store, task_id: str, requests: list[dict], finding
         item = dict(finding)
         item["update_history"] = list(reversed(store.list_where("review_finding_updates", "finding_id=?", (finding["id"],))))
         enriched_findings.append(item)
+    latest_event = store.latest_task_status_event(task_id)
+    current_event_id = latest_event["event_id"] if latest_event else ""
     return {
         "task_id": task_id,
+        "current_event_id": current_event_id,
+        "context_token": f"task:{task_id}:{current_event_id}" if current_event_id else "",
         "review_requests": requests,
         "review_results": store.list_where("review_results", "task_id=?", (task_id,)),
         "review_findings": enriched_findings,
@@ -1040,6 +1045,9 @@ def print_review_finding_summary(data: dict) -> None:
     print("review_summary:")
     print(f"- total_findings: {data['total_findings']}")
     print(f"- unresolved_blocking: {data['unresolved_blocking']}")
+    if data.get("current_event_id"):
+        print(f"- current_event_id: {data['current_event_id']}")
+        print(f"- context_token: {data['context_token']}")
     print("finding_status_counts:")
     for status in sorted(data["finding_status_counts"]):
         print(f"- {status}: {data['finding_status_counts'][status]}")
@@ -1063,7 +1071,12 @@ def cmd_review_finding_update(args: argparse.Namespace) -> None:
         finding = store.get("review_findings", args.finding)
         if not finding:
             raise SystemExit(f"review finding not found: {args.finding}")
-        _require_cli_fresh_task_context(store, finding["task_id"], getattr(args, "last_seen_event_id", ""), getattr(args, "context_token", ""))
+        current_event_id = _require_cli_fresh_task_context(store, finding["task_id"], getattr(args, "last_seen_event_id", ""), getattr(args, "context_token", ""), args=args, finding=finding)
+        if args.status == "accepted-risk":
+            if args.actor != "human":
+                raise SystemExit(_human_decision_required_message(args, finding, current_event_id))
+            if not getattr(args, "human_confirm", False):
+                raise SystemExit(_human_confirmation_required_message(args, finding, current_event_id))
         try:
             update_review_finding(
                 store,
@@ -1092,12 +1105,93 @@ def _event_id_from_cli_context(context_token: str, task_id: str) -> str:
     return parts[2]
 
 
-def _require_cli_fresh_task_context(store: Store, task_id: str, last_seen_event_id: str, context_token: str) -> str:
+def _finding_update_command(args: argparse.Namespace, finding: dict, event_id: str, *, actor: str | None = None, human: bool = False) -> str:
+    command = [
+        "nilo",
+        "--db",
+        str(args.db),
+        "review",
+        "finding",
+        "update",
+        "--finding",
+        finding["id"],
+        "--status",
+        args.status,
+        "--reason",
+        args.reason,
+        "--actor",
+        actor or args.actor,
+        "--last-seen-event-id",
+        event_id or "<current_event_id>",
+    ]
+    if human:
+        command.extend(["--human-confirm", "--decision-note", args.decision_note or "<human acceptance note>"])
+    elif getattr(args, "decision_note", ""):
+        command.extend(["--decision-note", args.decision_note])
+    return " ".join(shlex.quote(part) for part in command)
+
+
+def _missing_context_message(task_id: str, args: argparse.Namespace, finding: dict, current_event_id: str) -> str:
+    return "\n".join(
+        [
+            "missing required argument: --context-token or --last-seen-event-id",
+            f"current_event_id: {current_event_id or 'none'}",
+            "next:",
+            f"- nilo review status --task {shlex.quote(task_id)} --format json",
+            f"- {_finding_update_command(args, finding, current_event_id)}",
+        ]
+    )
+
+
+def _stale_context_message(task_id: str, observed: str, current: str, args: argparse.Namespace, finding: dict) -> str:
+    return "\n".join(
+        [
+            f"stale task state: last_seen_event_id={observed}, current_event_id={current}",
+            "next:",
+            f"- nilo review status --task {shlex.quote(task_id)} --format json",
+            f"- {_finding_update_command(args, finding, current)}",
+        ]
+    )
+
+
+def _human_decision_required_message(args: argparse.Namespace, finding: dict, current_event_id: str) -> str:
+    return "\n".join(
+        [
+            "human decision required: accepted-risk must be recorded by a human",
+            "next:",
+            f"- have a human run: {_finding_update_command(args, finding, current_event_id, actor='human', human=True)}",
+        ]
+    )
+
+
+def _human_confirmation_required_message(args: argparse.Namespace, finding: dict, current_event_id: str) -> str:
+    return "\n".join(
+        [
+            "human confirmation required: accepted-risk needs --human-confirm and a decision note",
+            "next:",
+            f"- {_finding_update_command(args, finding, current_event_id, actor='human', human=True)}",
+        ]
+    )
+
+
+def _require_cli_fresh_task_context(
+    store: Store,
+    task_id: str,
+    last_seen_event_id: str,
+    context_token: str,
+    *,
+    args: argparse.Namespace | None = None,
+    finding: dict | None = None,
+) -> str:
     observed = last_seen_event_id or _event_id_from_cli_context(context_token, task_id)
-    if not observed:
-        raise SystemExit("missing required argument: --context-token or --last-seen-event-id")
     latest = store.latest_task_status_event(task_id)
     current = latest["event_id"] if latest else ""
+    if not observed:
+        if args is not None and finding is not None:
+            raise SystemExit(_missing_context_message(task_id, args, finding, current))
+        raise SystemExit("missing required argument: --context-token or --last-seen-event-id")
     if observed != current:
+        if args is not None and finding is not None:
+            raise SystemExit(_stale_context_message(task_id, observed, current, args, finding))
         raise SystemExit(f"stale task state: last_seen_event_id={observed}, current_event_id={current}")
-    return observed
+    return current
