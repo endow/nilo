@@ -15,6 +15,22 @@ def add_task_option(parser: argparse.ArgumentParser) -> None:
 
 
 def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> None:
+    work = sub.add_parser("work", help="Default daily workflow entrypoint.")
+    work.add_argument("request", nargs="?", default="")
+    add_project_option(work)
+    add_task_option(work)
+    work.add_argument("--recipe")
+    work.add_argument("--no-recipe", action="store_true")
+    work.add_argument("--check")
+    work.add_argument("--mode", choices=["quick", "targeted", "full"], default="targeted")
+    work.add_argument("--snapshot", choices=["fast", "full", "none", "audit"], default="fast")
+    work.add_argument("--timeout", type=float, default=300.0)
+    work.add_argument("--no-done", action="store_true")
+    work.add_argument("--audit", action="store_true")
+    work.add_argument("--dry-run", action="store_true")
+    work.add_argument("--json", action="store_true")
+    work.set_defaults(func=handlers.cmd_facade_work)
+
     status = sub.add_parser(
         "status",
         help="Lightweight current-position check. Use --verbose for details, --audit for strict evidence checks, or --ai for agent context.",
@@ -32,6 +48,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     add_task_option(next_step)
     next_step.add_argument("--verbose", action="store_true", help="Show background context in addition to the first action.")
     next_step.add_argument("--ai", action="store_true", help="Show machine-readable next action context.")
+    next_step.add_argument("--do", action="store_true", help="Preview the safe next local step, or stop with the reason it cannot run yet.")
     next_step.set_defaults(func=handlers.cmd_facade_next)
 
     queue = sub.add_parser("queue")

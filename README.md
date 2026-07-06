@@ -54,9 +54,12 @@ nilo status
 
 ```bash
 nilo init
+nilo work "READMEを短く整理して"
 ```
 
 主に `.nilo/nilo.db`、AI エージェント向け runtime 指示、ローカル exclude が作られます。生成される runtime ファイルは通常コミットしません。
+
+通常の作業では `nilo work` を入口にします。Nilo は必要に応じて task 作成、recipe 選択、検証記録、AI 完了報告を束ねます。
 
 ここから先、通常利用で人間が Nilo の細かいコマンドを覚えて打つ必要はありません。AI エージェントに普段どおり依頼します。
 

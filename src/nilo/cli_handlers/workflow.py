@@ -442,7 +442,8 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
         "\n".join(
             [
                 "Nilo AI normal work:",
-                "- Start with `nilo status --ai`; the default AI context is a short index-first work card.",
+                "- Start normal development requests with `nilo work \"<user request>\"`; it creates or selects the task and prints a compact session card.",
+                "- Fallback: Start with `nilo status --ai` and `nilo next` when `nilo work` stops or background context is needed.",
                 "- Follow the first action shown by `nilo next`; use `nilo next --verbose` only when background context is needed.",
                 "- Detailed evidence, roadmap, failure, review, and recipe context is retained, but fetched on demand instead of expanded every turn.",
                 "- Set `NILO_AI_CONTEXT_MAX_CHARS` before starting Nilo to cap compact AI text; overflow keeps the action card and points to detail commands.",
@@ -453,7 +454,7 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "- Do not treat commit-created git head changes as stale evidence if the commit was created by Nilo from the verified dirty tree.",
                 "- Do not treat stale, missing, or failed evidence as complete.",
                 "- Do not treat unresolved review findings as complete.",
-                "- After verification, normally record it with `nilo check --task <task_id> \"...\" --mode quick|targeted|full`.",
+                "- After verification, normally record it with `nilo work --task <task_id> --check \"...\" \"<user request>\"`; fallback: record it with `nilo check --task <task_id> \"...\" --mode quick|targeted|full`.",
                 "- Omit `--task` only when Nilo can safely infer exactly one unfinished verification target.",
                 "- Use quick for narrow smoke checks, targeted for changed modules or focused test groups, and full for releases or broad-risk changes.",
                 "- Treat timeouts as guardrails around a chosen scope, not as the main way to make full-suite verification practical.",
@@ -501,6 +502,7 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "- then proceed task by task.",
                 "",
                 "Useful commands:",
+                "- nilo work \"<user request>\"",
                 "- nilo status --ai",
                 "- nilo status --ai --verbose",
                 "- nilo status --ai --json",

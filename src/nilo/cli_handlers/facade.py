@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
+import shlex
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -30,6 +32,87 @@ from .workflow import cmd_outcome_record, cmd_report_import, cmd_verification_ru
 
 QUEUE_TODO_STATUSES = {"open", "ready", "triaged", "blocked", "requires_roadmap", "deferred"}
 NEXT_TODO_STATUS_PRIORITY = {"ready": 0, "requires_roadmap": 1}
+WORK_RECIPE_KEYWORDS = {
+    "docs-update": ("readme", "docs", "document", "ドキュメント", "説明", "文言"),
+    "bugfix": ("bug", "fix", "failing", "error", "exception", "バグ", "不具合", "失敗", "エラー", "直して"),
+    "perf": ("slow", "heavy", "performance", "perf", "timeout", "full check", "遅い", "重い", "高速化", "計測", "ボトルネック"),
+    "basic-design": ("design", "architecture", "plan", "設計", "方針", "検討", "実装前"),
+    "release": ("release", "publish", "version", "リリース", "公開", "バージョン"),
+}
+WORK_RECIPE_ALIASES = {
+    "docs": "docs-update",
+    "document": "docs-update",
+    "design": "basic-design",
+}
+WORK_RECIPE_ACCEPTANCE = {
+    "docs-update": [
+        "対象読者が明確である",
+        "冗長な説明が減っている",
+        "主要導線が先に読める",
+        "リンク切れや古い導線がない",
+    ],
+    "bugfix": [
+        "再現条件または失敗条件が記録されている",
+        "原因と修正内容が説明されている",
+        "再発防止テストまたは代替検証がある",
+        "関連範囲への副作用確認がある",
+    ],
+    "perf": [
+        "改善対象が明確である",
+        "改善前の体感または測定値がある",
+        "ボトルネック仮説が記録されている",
+        "改善後の再測定結果がある",
+        "正しさ検証が通っている",
+    ],
+    "basic-design": [
+        "目的と制約が明確である",
+        "採用方針と代替案が記録されている",
+        "実装前に必要な未決事項が分離されている",
+    ],
+    "release": [
+        "公開操作は明示承認まで実行しない",
+        "リリース対象とバージョン判断が記録されている",
+        "公開前に必要な検証が通っている",
+    ],
+}
+
+
+def infer_work_recipe_candidate(request: str, *, explicit_recipe: str | None = None, no_recipe: bool = False) -> dict[str, Any]:
+    if no_recipe:
+        return {"recipe": "", "confidence": "disabled", "reason": "--no-recipe", "ambiguous_candidates": []}
+    if explicit_recipe:
+        explicit_recipe = WORK_RECIPE_ALIASES.get(explicit_recipe, explicit_recipe)
+        return {"recipe": explicit_recipe, "confidence": "explicit", "reason": "--recipe", "ambiguous_candidates": []}
+    lowered = request.lower()
+    matches = []
+    for recipe, keywords in WORK_RECIPE_KEYWORDS.items():
+        hits = [keyword for keyword in keywords if _work_keyword_matches(lowered, keyword)]
+        if hits:
+            matches.append({"recipe": recipe, "score": len(hits), "reason": ", ".join(hits[:3])})
+    if not matches:
+        return {"recipe": "", "confidence": "none", "reason": "no clear recipe keyword", "ambiguous_candidates": []}
+    matches.sort(key=lambda item: (-item["score"], item["recipe"]))
+    top_score = matches[0]["score"]
+    tied = [item for item in matches if item["score"] == top_score]
+    if len(tied) > 1:
+        return {"recipe": "", "confidence": "ambiguous", "reason": "multiple recipe candidates", "ambiguous_candidates": tied}
+    return {
+        "recipe": matches[0]["recipe"],
+        "confidence": "high",
+        "reason": f"matched: {matches[0]['reason']}",
+        "ambiguous_candidates": [],
+    }
+
+
+def work_acceptance_for_recipe(recipe: str) -> list[str]:
+    return WORK_RECIPE_ACCEPTANCE.get(recipe, ["依頼内容が満たされている", "変更内容と検証結果が記録されている"])
+
+
+def _work_keyword_matches(lowered_request: str, keyword: str) -> bool:
+    lowered_keyword = keyword.lower()
+    if lowered_keyword.isascii() and lowered_keyword.replace(" ", "").isalpha():
+        return re.search(rf"(?<![a-z0-9_-]){re.escape(lowered_keyword)}(?![a-z0-9_-])", lowered_request) is not None
+    return lowered_keyword in lowered_request
 
 
 def default_project_id(args: argparse.Namespace) -> str:
@@ -204,7 +287,7 @@ def no_active_task_recovery_message(project_id: str) -> str:
     return (
         f"active task not found for project: {project_id}. "
         "Before implementation, create or select a Nilo task. "
-        f'For a concrete implementation request, run `nilo start "<short title>" --project {project_id}`, '
+        f'For a concrete implementation request, run `nilo work "<user request>" --project {project_id}`, '
         "then rerun `nilo check --task <task_id> \"...\"`."
     )
 
@@ -241,6 +324,297 @@ def resolve_task_id(args: argparse.Namespace, store: Store) -> str:
     if len(active_tasks) > 1:
         raise SystemExit(multiple_active_tasks_recovery_message(project_id, active_tasks))
     return active_tasks[0]["id"]
+
+
+def _compact_task_rows(tasks: list[dict]) -> list[dict[str, str]]:
+    return [{"id": task["id"], "title": task["title"], "status": task.get("status", "")} for task in sorted(tasks, key=lambda row: row["id"])]
+
+
+def _work_stop_payload(reason: str, *, project_id: str, next_commands: list[str] | None = None, tasks: list[dict] | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"status": "stopped", "reason": reason, "project_id": project_id, "next": next_commands or []}
+    if tasks is not None:
+        payload["tasks"] = _compact_task_rows(tasks)
+    return payload
+
+
+def print_work_payload(payload: dict[str, Any], *, as_json: bool = False) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if payload["status"] == "stopped":
+        print(f"stopped: {payload['reason']}")
+        if payload.get("tasks"):
+            print("choose target task:")
+            for task in payload["tasks"]:
+                print(f"- {task['id']} [{status_label(task.get('status', ''))}] {task['title']}")
+        if payload.get("next"):
+            print("next:")
+            for command in payload["next"]:
+                print(f"- {command}")
+        return
+    print(f"work_session: {payload['task_id']}")
+    print(f"project: {payload['project_id']}")
+    print(f"status: {payload['status']}")
+    print(f"task: {payload['task_title']}")
+    recipe = payload.get("recipe") or "none"
+    print(f"recipe: {recipe}")
+    if payload.get("recipe_reason"):
+        print(f"recipe_reason: {payload['recipe_reason']}")
+    print("objective:")
+    print(f"- {payload['request']}")
+    print("acceptance:")
+    for item in payload.get("acceptance", []):
+        print(f"- {item}")
+    if payload.get("recommended_check"):
+        print("recommended_check:")
+        print(f"- {payload['recommended_check']}")
+    print("stop_if:")
+    for item in payload.get("stop_if", []):
+        print(f"- {item}")
+    if payload.get("next"):
+        print("next:")
+        for command in payload["next"]:
+            print(f"- {command}")
+
+
+def cmd_facade_work(args: argparse.Namespace) -> None:
+    project_id = default_project_id(args)
+    request = (getattr(args, "request", "") or "").strip()
+    if not request and not getattr(args, "check", None):
+        raise SystemExit('request required: nilo work "<user request>"')
+    boundary = resolve_project_boundary(db_path=args.db)
+    store = Store(args.db)
+    try:
+        project = store.get("projects", project_id)
+        if not project:
+            payload = _work_stop_payload("project_not_found", project_id=project_id, next_commands=[f"nilo init --project {project_id}"])
+            payload["project_boundary"] = boundary.to_dict()
+            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
+        workflow = workflow_context(store, project_id)
+        if workflow.get("type") == "recipe_run":
+            payload = _work_stop_payload(
+                f"blocked_workflow:{workflow.get('status')}",
+                project_id=project_id,
+                next_commands=[f"nilo next --project {project_id} --verbose"],
+            )
+            payload["active_recipe"] = workflow.get("recipe_name", "")
+            payload["project_boundary"] = boundary.to_dict()
+            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
+        recipe = infer_work_recipe_candidate(
+            request,
+            explicit_recipe=getattr(args, "recipe", None),
+            no_recipe=bool(getattr(args, "no_recipe", False)),
+        )
+        if recipe["confidence"] == "ambiguous":
+            quoted_request = shlex.quote(request)
+            next_commands = [f"nilo work --recipe {item['recipe']} {quoted_request}" for item in recipe["ambiguous_candidates"]]
+            next_commands.append(f"nilo work --no-recipe {quoted_request}")
+            payload = _work_stop_payload("ambiguous_recipe", project_id=project_id, next_commands=next_commands)
+            payload["recipe_candidates"] = recipe["ambiguous_candidates"]
+            payload["project_boundary"] = boundary.to_dict()
+            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
+        active_tasks, statuses = active_tasks_for_project(store, project_id)
+        task_id = getattr(args, "task", None)
+        created = False
+        if task_id:
+            task = store.get("tasks", task_id)
+            if not task:
+                raise SystemExit(f"task not found: {task_id}")
+            if task["project_id"] != project_id:
+                payload = _work_stop_payload(
+                    "task_project_mismatch",
+                    project_id=project_id,
+                    next_commands=[f"nilo work --project {task['project_id']} --task {task_id} {shlex.quote(request or task['title'])}"],
+                )
+                payload["task_project_id"] = task["project_id"]
+                payload["project_boundary"] = boundary.to_dict()
+                print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+                return
+            task_status = statuses.get(task_id, task["status"])
+            if is_task_completed_status(task_status):
+                payload = _work_stop_payload(
+                    "task_already_completed",
+                    project_id=project_id,
+                    next_commands=[f"nilo work {shlex.quote(request or '<user request>')} --project {project_id}"],
+                )
+                payload["task_id"] = task_id
+                payload["task_status"] = task_status
+                payload["project_boundary"] = boundary.to_dict()
+                print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+                return
+        elif len(active_tasks) == 1:
+            task = active_tasks[0]
+            task_id = task["id"]
+        elif len(active_tasks) > 1:
+            for active_task in active_tasks:
+                active_task["status"] = statuses.get(active_task["id"], active_task["status"])
+            quoted_request = shlex.quote(request or "<user request>")
+            payload = _work_stop_payload(
+                "multiple_active_tasks",
+                project_id=project_id,
+                next_commands=[f"nilo work --task {active_tasks[0]['id']} {quoted_request}"],
+                tasks=active_tasks,
+            )
+            payload["project_boundary"] = boundary.to_dict()
+            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
+        else:
+            if not request:
+                payload = _work_stop_payload(
+                    "request_required_without_active_task",
+                    project_id=project_id,
+                    next_commands=[f'nilo work "<user request>" --project {project_id} --check {shlex.quote(args.check)}'],
+                )
+                payload["project_boundary"] = boundary.to_dict()
+                print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+                return
+            task_id = deterministic_id("task", [project_id, request, now_iso()])
+            acceptance = ["依頼内容が満たされている", "変更内容と検証結果が記録されている"]
+            if recipe["recipe"]:
+                acceptance = [f"recipe: {recipe['recipe']}", f"recipe_reason: {recipe['reason']}", *work_acceptance_for_recipe(recipe["recipe"])]
+            task = {
+                "id": task_id,
+                "project_id": project_id,
+                "title": request[:80],
+                "description": request,
+                "acceptance_criteria": acceptance,
+                "status": "planned",
+            }
+            if not getattr(args, "dry_run", False):
+                create_args = argparse.Namespace(
+                    db=args.db,
+                    project=project_id,
+                    title=task["title"],
+                    description=[request],
+                    acceptance=acceptance,
+                    id=task_id,
+                    parent_task=None,
+                    split_index=None,
+                    commitment="",
+                    roadmap_item="",
+                    model="",
+                    degradation="normal",
+                    mode="normal",
+                    task_type="implementation",
+                    risk="medium",
+                    requires_understanding_check=False,
+                )
+                with redirect_stdout(io.StringIO()):
+                    cmd_task_create(create_args)
+                created = True
+        payload = {
+            "status": "dry_run" if getattr(args, "dry_run", False) else ("created" if created else "ready"),
+            "project_id": project_id,
+            "task_id": task_id,
+            "task_title": task["title"],
+            "request": request or task["title"],
+            "recipe": recipe["recipe"],
+            "recipe_confidence": recipe["confidence"],
+            "recipe_reason": recipe["reason"],
+            "acceptance": task.get("acceptance_criteria") or work_acceptance_for_recipe(recipe["recipe"]),
+            "recommended_check": getattr(args, "check", "") or "",
+            "stop_if": [
+                "public operation is required",
+                "destructive change is required",
+                "verification fails",
+                "human acceptance is required",
+            ],
+            "next": [
+                f"nilo instruct --task {task_id}",
+                f'nilo check --task {task_id} "<verification command>"',
+                f"nilo done --task {task_id} --actor ai --reason \"work session complete\"",
+            ],
+            "project_boundary": boundary.to_dict(),
+        }
+    finally:
+        store.close()
+
+    if getattr(args, "dry_run", False) or not getattr(args, "check", None):
+        if boundary.should_print_text() and not getattr(args, "json", False):
+            for line in boundary.text_lines():
+                print(line)
+            for warning in boundary_warning_lines(boundary):
+                print(warning)
+            print()
+        print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+        return
+
+    if boundary.should_print_text() and not getattr(args, "json", False):
+        for line in boundary.text_lines():
+            print(line)
+        for warning in boundary_warning_lines(boundary):
+            print(warning)
+        print()
+    if not getattr(args, "json", False):
+        print_work_payload(payload, as_json=False)
+
+    check_stdout = io.StringIO()
+    check_args = argparse.Namespace(
+        db=args.db,
+        project=project_id,
+        task=task_id,
+        command=args.check,
+        mode=args.mode,
+        snapshot="full" if getattr(args, "audit", False) else args.snapshot,
+        timeout=args.timeout,
+    )
+    if getattr(args, "json", False):
+        with redirect_stdout(check_stdout):
+            cmd_facade_check(check_args)
+    else:
+        cmd_facade_check(check_args)
+    store = Store(args.db)
+    try:
+        verification = store.latest_for_task("verification_runs", task_id)
+        verification_failed = not verification or int(verification["exit_code"]) != 0 or bool(verification["timed_out"])
+        if verification:
+            payload["verification"] = {
+                "id": verification["id"],
+                "exit_code": verification["exit_code"],
+                "timed_out": bool(verification["timed_out"]),
+                "mode": args.mode,
+                "snapshot": verification.get("metadata", {}).get("snapshot_mode", check_args.snapshot),
+            }
+    finally:
+        store.close()
+    if getattr(args, "json", False):
+        payload["verification_output"] = check_stdout.getvalue().splitlines()
+    if verification_failed:
+        payload["status"] = "stopped"
+        payload["reason"] = "verification_failed"
+        if getattr(args, "json", False):
+            print_work_payload(payload, as_json=True)
+        else:
+            print("stopped: verification_failed")
+        return
+    if not getattr(args, "no_done", False):
+        done_args = argparse.Namespace(
+            db=args.db,
+            project=project_id,
+            task=task_id,
+            reason="work session complete",
+            actor="ai",
+            human_confirm=False,
+            decision_note="",
+            human_acceptance="",
+            commit=False,
+            commit_message=None,
+        )
+        done_stdout = io.StringIO()
+        if getattr(args, "json", False):
+            with redirect_stdout(done_stdout):
+                cmd_facade_done(done_args)
+            payload["completion_output"] = done_stdout.getvalue().splitlines()
+        else:
+            cmd_facade_done(done_args)
+        payload["completion_recorded"] = True
+    else:
+        payload["completion_recorded"] = False
+    if getattr(args, "json", False):
+        print_work_payload(payload, as_json=True)
 
 
 def explicit_check_task_warning(store: Store, task: dict) -> str:
@@ -622,6 +996,10 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                 print(warning)
             print()
         if getattr(args, "task", None):
+            if getattr(args, "do", False):
+                print("stopped: next_do_no_safe_action")
+                print(f"next: nilo next --task {args.task}")
+                return
             print_facade_next_for_task(store, args.task)
             return
         project = store.get("projects", project_id)
@@ -629,6 +1007,10 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             raise SystemExit(f"project not found: {project_id}")
         workflow = workflow_context(store, project_id)
         if workflow.get("type") == "recipe_run":
+            if getattr(args, "do", False):
+                print("stopped: active_recipe_requires_explicit_step")
+                print(f"next: nilo next --project {project_id} --verbose")
+                return
             if getattr(args, "ai", False):
                 action: dict[str, Any] = {
                     "project_id": project_id,
@@ -723,7 +1105,20 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             return
         active_task = first_active_task_for_project(store, project_id)
         if active_task:
+            if getattr(args, "do", False):
+                print("stopped: active_task_requires_agent_work")
+                print(f"next: nilo work --task {active_task['id']} \"{active_task['title']}\"")
+                return
             print_facade_next_for_task(store, active_task["id"])
+            return
+        if getattr(args, "do", False):
+            todo = first_next_todo_for_project(store, project_id)
+            if todo:
+                print("stopped: todo_conversion_requires_explicit_task")
+                print(f"next: nilo work \"{todo['title']}\" --project {project_id}")
+            else:
+                print("stopped: no_safe_next_action")
+                print(f"next: nilo work \"<user request>\" --project {project_id}")
             return
         print(f"{field_label('project')}: {project_id} ({project['name']})")
         print(f"{field_label('next_action')}:")

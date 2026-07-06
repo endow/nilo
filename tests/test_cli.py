@@ -39,6 +39,7 @@ from nilo.snapshot import UNCOMPUTED_DIFF_HASH
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
+from nilo.workflow_context import create_recipe_run
 
 LEGACY_LEARNING_TABLES = {
     "derived_rules",
@@ -1443,6 +1444,215 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
+    def test_facade_work_creates_recipe_backed_task_and_records_check_completion(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "full check が重いので改善して", "--check", "python --version"])
+            finally:
+                os.chdir(previous_cwd)
+
+            body = output.getvalue()
+            self.assertIn("work_session: task_", body)
+            self.assertIn("recipe: perf", body)
+            self.assertIn("verification_run:", body)
+            self.assertIn("status: completed_by_ai", body)
+            store = Store(db)
+            try:
+                tasks = store.list_where("tasks", "project_id=?", (project_id,))
+                self.assertEqual(1, len(tasks))
+                self.assertIn("recipe: perf", tasks[0]["acceptance_criteria"])
+                completion = store.latest_for_task("task_completions", tasks[0]["id"])
+                verification = store.latest_for_task("verification_runs", tasks[0]["id"])
+            finally:
+                store.close()
+            self.assertIsNotNone(completion)
+            self.assertIsNotNone(verification)
+
+    def test_facade_work_stops_on_multiple_active_tasks_unless_task_is_explicit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_one", "--title", "one"])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_two", "--title", "two"])
+
+                stopped = io.StringIO()
+                with redirect_stdout(stopped):
+                    main(["--db", str(db), "work", "このバグを直して"])
+                explicit = io.StringIO()
+                with redirect_stdout(explicit):
+                    main(["--db", str(db), "work", "このバグを直して", "--task", "task_one"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("stopped: multiple_active_tasks", stopped.getvalue())
+            self.assertIn("task_one", stopped.getvalue())
+            self.assertIn("work_session: task_one", explicit.getvalue())
+            self.assertIn("recipe: bugfix", explicit.getvalue())
+
+    def test_facade_work_dry_run_json_does_not_write_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "READMEを短く整理して", "--dry-run", "--json"])
+            finally:
+                os.chdir(previous_cwd)
+
+            data = json.loads(output.getvalue())
+            self.assertEqual("dry_run", data["status"])
+            self.assertEqual("docs-update", data["recipe"])
+            store = Store(db)
+            try:
+                self.assertEqual([], store.list_where("tasks", "project_id=?", (project_id,)))
+            finally:
+                store.close()
+
+    def test_facade_work_json_check_outputs_valid_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "このバグを直して", "--check", "python --version", "--json"])
+            finally:
+                os.chdir(previous_cwd)
+
+            data = json.loads(output.getvalue())
+            self.assertEqual("created", data["status"])
+            self.assertEqual("bugfix", data["recipe"])
+            self.assertEqual(0, data["verification"]["exit_code"])
+            self.assertTrue(data["completion_recorded"])
+
+    def test_facade_work_stops_during_active_recipe_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_recipe", "--title", "recipe task"])
+                store = Store(db)
+                try:
+                    create_recipe_run(
+                        store,
+                        project_id=project_id,
+                        task_id="task_recipe",
+                        recipe_name="release",
+                        rendered_fields={"title": "Release 1.2.3"},
+                    )
+                finally:
+                    store.close()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "別の依頼を進めて"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("stopped: blocked_workflow:active", output.getvalue())
+            self.assertIn("nilo next --project", output.getvalue())
+
+    def test_facade_work_check_only_requires_existing_target(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                stopped = io.StringIO()
+                with redirect_stdout(stopped):
+                    main(["--db", str(db), "work", "--check", "python --version"])
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_existing", "--title", "existing"])
+                completed = io.StringIO()
+                with redirect_stdout(completed):
+                    main(["--db", str(db), "work", "--check", "python --version"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("stopped: request_required_without_active_task", stopped.getvalue())
+            self.assertIn("work_session: task_existing", completed.getvalue())
+            self.assertIn("status: completed_by_ai", completed.getvalue())
+            store = Store(db)
+            try:
+                tasks = store.list_where("tasks", "project_id=?", (project_id,))
+            finally:
+                store.close()
+            self.assertEqual(["existing"], [task["title"] for task in tasks])
+
+    def test_facade_work_explicit_task_must_belong_to_project(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "One", "--id", "one"])
+                    main(["--db", str(db), "project", "create", "Two", "--id", "two"])
+                    main(["--db", str(db), "task", "create", "--project", "one", "--id", "task_one", "--title", "one task"])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "続けて", "--project", "two", "--task", "task_one"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("stopped: task_project_mismatch", output.getvalue())
+            self.assertIn("nilo work --project one --task task_one", output.getvalue())
+
+    def test_facade_next_do_stops_with_safe_next_step(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "next", "--do"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("stopped: no_safe_next_action", output.getvalue())
+            self.assertIn('nilo work "<user request>"', output.getvalue())
+
     def test_facade_next_with_active_task_skips_project_summary(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2059,7 +2269,7 @@ variables:
                 "project_name": "Project Test",
                 "compact": True,
                 "active_task": None,
-                "next_action": 'no active task; create or select a Nilo task before implementation; if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; ask the user for the next concrete task or design direction',
+                "next_action": 'no active task; create or select a Nilo task before implementation; if the user already gave a concrete implementation request, run `nilo work "<user request>" --project project_test` before code edits; ask the user for the next concrete task or design direction',
                 "blockers": {"count": 0, "items": []},
                 "latest_verification": {"status": "none", "verification_run_id": "", "exit_code": None},
                 "latest_review": {"unresolved_count": 0, "unresolved_blocking_count": 0},
@@ -3858,7 +4068,7 @@ variables:
             status_body = status_output.getvalue()
             expected_guardrail = (
                 "no active task; create or select a Nilo task before implementation; "
-                'if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; '
+                'if the user already gave a concrete implementation request, run `nilo work "<user request>" --project project_test` before code edits; '
                 "ask the user for the next concrete task or design direction"
             )
             self.assertIn("roadmap_position: roadmap not configured; no open design residue detected", status_body)
@@ -6035,7 +6245,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertNotIn(f"create tasks from accepted commitment {commitment_id}", body)
             self.assertIn(
                 "no active task; create or select a Nilo task before implementation; "
-                'if the user already gave a concrete implementation request, run `nilo start "<short title>" --project project_test` before code edits; '
+                'if the user already gave a concrete implementation request, run `nilo work "<user request>" --project project_test` before code edits; '
                 f"ask the user for the next concrete task within roadmap commitment {commitment_id}",
                 body,
             )
@@ -11193,7 +11403,7 @@ close 済み commitment を表示できるようにした。
             message = str(raised.exception)
             self.assertIn("active task not found for project: project_test", message)
             self.assertIn("Before implementation, create or select a Nilo task", message)
-            self.assertIn('nilo start "<short title>" --project project_test', message)
+            self.assertIn('nilo work "<user request>" --project project_test', message)
             self.assertIn('rerun `nilo check --task <task_id> "..."`', message)
 
     def test_facade_check_with_multiple_active_tasks_explains_evidence_target(self) -> None:

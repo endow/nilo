@@ -2,6 +2,18 @@
 
 This document supplements the README with basic Nilo commands, stored files, and display-language behavior.
 
+## Normal Work
+
+Use `nilo work` as the normal work entrypoint. It creates or selects a task from the request and, when clear, includes a recipe candidate and acceptance criteria in a compact work session.
+
+```bash
+nilo work "shorten the README"
+nilo work --recipe bugfix "fix the review result import crash"
+nilo work --task <task_id> --check "python -m unittest tests.test_cli"
+```
+
+`status`, `next`, `start`, `check`, and `done` remain helper, advanced, or fallback commands.
+
 ## Status
 
 `nilo status` is the lightweight current-position check. The default view avoids expensive diff-hash, roadmap, commit, and history summaries, and its git dirty indicator covers tracked-file changes only.
@@ -11,9 +23,11 @@ nilo status
 nilo status --verbose
 nilo status --audit
 nilo status --ai
+nilo next --do
 ```
 
 Use `--verbose` for detailed status, `--audit` for stricter evidence checks, and `--ai` for agent-oriented context.
+`nilo next --do` previews only a safe daily next-step candidate. In the initial implementation it does not execute the step; it prints the stop reason and next command.
 
 ## Human View
 
@@ -52,6 +66,7 @@ The CLI help is the source of truth for exact command options.
 
 ```bash
 nilo --help
+nilo work --help
 nilo start --help
 nilo check --help
 nilo review --help

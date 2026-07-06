@@ -2,6 +2,8 @@
 
 Overdrive reduces confirmation waits while advancing the current task. It can also continue along accepted roadmap items, but by default it stays within the current requested work.
 
+`nilo next --do` advances only one safe daily step. Overdrive is the stronger execution mode for continuing the current task or accepted roadmap work.
+
 Humans do not need to remember detailed execution options. Ask the AI agent in natural language:
 
 ```text

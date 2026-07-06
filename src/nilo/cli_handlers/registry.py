@@ -11,6 +11,7 @@ from .facade import (
     cmd_facade_report,
     cmd_facade_start,
     cmd_facade_status,
+    cmd_facade_work,
 )
 from .failure import cmd_failure_ignore, cmd_failure_list, cmd_failure_resolve, cmd_failure_show, cmd_failure_summary
 from .mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve

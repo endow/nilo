@@ -7,11 +7,14 @@ This document supplements how AI agents should read Nilo state.
 At the start of work, an AI agent checks the target repository with:
 
 ```bash
+nilo work "<request>" --project <project_id>
 nilo status --ai --project <project_id>
 nilo next --project <project_id>
 ```
 
-If there is an active task, follow only the first action from `nilo next`. If an active recipe is running, recipe `next` is the only relevant next action.
+For normal development requests, start with `nilo work`. `status --ai` and `next` are fallback commands when `work` stops or more background context is needed.
+
+If there is an active task and you use `nilo next`, follow only the first action. If an active recipe is running, recipe `next` is the only relevant next action.
 
 ## Default `status --ai` Output
 

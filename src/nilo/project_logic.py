@@ -1002,7 +1002,7 @@ def project_level_next_actions(
 def no_active_task_action(next_step: str, project_id: str) -> str:
     return (
         "no active task; create or select a Nilo task before implementation; "
-        f'if the user already gave a concrete implementation request, run `nilo start "<short title>" --project {project_id}` before code edits; '
+        f'if the user already gave a concrete implementation request, run `nilo work "<user request>" --project {project_id}` before code edits; '
         f"{next_step}"
     )
 

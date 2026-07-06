@@ -54,9 +54,12 @@ Initialize Nilo once at the root of your project.
 
 ```bash
 nilo init
+nilo work "shorten the README"
 ```
 
 This mainly creates `.nilo/nilo.db`, runtime instructions for AI agents, and local exclude settings. The generated runtime files are usually not committed.
+
+For normal work, use `nilo work` as the entrypoint. Nilo can bundle task creation, recipe selection, verification recording, and AI completion reporting behind that session command.
 
 After that, humans usually do not need to type detailed Nilo commands. Ask your AI agent as you normally would.
 

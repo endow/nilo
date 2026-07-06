@@ -2,6 +2,8 @@
 
 Recipes start common work in a consistent way.
 
+Normally, `nilo work` selects the needed recipe from the request. `nilo recipe run` remains for explicit runs, recipe debugging, release work, and other advanced paths.
+
 Examples:
 
 - Update documentation only
@@ -17,6 +19,10 @@ Humans can ask in natural language:
 Use the README update recipe for this.
 ```
 
+```bash
+nilo work "Use the README update recipe for this"
+```
+
 ```text
 Turn the work we just did into a recipe so we can repeat it next time.
 ```
@@ -29,6 +35,12 @@ When needed, project recipes are saved under `.nilo/recipes/`.
 
 ```bash
 nilo recipe run perf --project nilo
+```
+
+Normal work can start through `work`:
+
+```bash
+nilo work "full check is too slow; improve it" --project nilo
 ```
 
 `performance` and `performance-investigation` are aliases for `perf`. Its completion contract includes the target, measurement conditions, baseline measurement, bottleneck analysis, change summary, after measurement, comparison result, correctness verification, and side-effect check.

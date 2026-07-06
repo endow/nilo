@@ -312,26 +312,25 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 {boundary_prompt}
 
 Normal work:
-- 開始は `nilo status --ai --project {project_id}`。
-- `nilo next --project {project_id}` の先頭 action だけに従う。
+- 通常依頼はまず `nilo work "<依頼内容>" --project {project_id}`。
+- 停止時だけ `nilo status --ai --project {project_id}` -> `nilo next --project {project_id}` fallback。next は先頭 action だけ。
 - active recipe 中は recipe のみ。
 - 保存文面は primary_language={primary_language}。command/path/status/enum/JSONは原文。
 - release公開操作は明示承認待ち。
 - 検証済み dirty tree 由来 commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
-- 検証後は `nilo check --task <task_id> "..."`。省略は一意target。
+- 検証後は `nilo work --task <task_id> --check "..." "<依頼内容>"`。fallback は `nilo check --task <task_id> "..."`。
 - 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
 - Claude レビューの通常導線は `nilo review claude --task <task_id>`。MCP は補助/高度用途で通常入口ではない。
-- Claude に `register_reviewer` / `claim_next_review` / `import_review_result` を主導線として実行させない。ReviewResult は stdout で受け、Nilo が import する。
-- `nilo review dispatch` / `quick` / `delegate` / `human-launch-claude` / reviewer worker orchestration は legacy/advanced/fallback。
+- ReviewResult は stdout で受け、Nilo が import する。
+- `nilo review dispatch` / `quick` / `delegate` / reviewer worker orchestration は legacy/advanced/fallback。
 - review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
 MCP identity guard:
 - MCP tool 可でも正しい Nilo 状態とは判断しない。使用前に identity の repository / project / git_root / db_path が現在 repo と一致するか確認。
-- `expected_project` は repository directory name 用。複数 repo は `project_root` か `workspace`。
-- MCP response の repository / db_path 不一致は使わず CLI fallback。
+- 複数 repo は `project_root` か `workspace`。repository / db_path 不一致は使わず CLI fallback。
 - fallback: `nilo status --ai --project {project_id}` -> `nilo next --project {project_id}`。
 
 大きな作業の扱い:
@@ -339,7 +338,7 @@ MCP identity guard:
 - 小さく明確なら通常 task。複数ファイルだけでは roadmap 扱いしない。
 - 複数タスク/コミット、DB schema、状態遷移、リリース基盤など広い変更だけ Roadmap/Epic。
 - Epic 必要時は停止し、承認まで roadmap revision / acceptance / task plan を進めない。
-- 大作業は自動 roadmap 化しない。承認後だけ `nilo roadmap discuss` -> `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
+- 承認後だけ `nilo roadmap discuss` -> `import`/`adopt` -> 人間承認 -> `nilo roadmap task-plan`。
 
 質問抑制:
 - Nilo 出力や状態から一意推定できる不足値は質問しない。
