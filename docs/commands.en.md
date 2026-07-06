@@ -9,8 +9,10 @@ Use `nilo work` as the normal work entrypoint. It creates or selects a task from
 ```bash
 nilo work "shorten the README"
 nilo work --recipe bugfix "fix the review result import crash"
-nilo work --task <task_id> --check "python -m unittest tests.test_cli"
+nilo check --task <task_id> "python -m unittest tests.test_cli"
 ```
+
+`nilo work --check` is a shortcut that also records AI completion when verification succeeds. Use `nilo check --task <task_id> "..."` when you only want to record verification before the completion decision.
 
 `status`, `next`, `start`, `check`, and `done` remain helper, advanced, or fallback commands.
 

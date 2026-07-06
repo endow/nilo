@@ -3137,7 +3137,9 @@ variables:
             self.assertIn("nilo next --project project_test", body)
             self.assertIn("evidence が stale / missing / failed の場合は完了扱いしない", body)
             self.assertIn("unresolved review finding がある場合は完了扱いしない", body)
-            self.assertIn("nilo check", body)
+            self.assertIn('検証後は `nilo check --task <task_id> "..."`', body)
+            self.assertIn("完了判断前の検証記録には使わない", body)
+            self.assertNotIn("nilo work --task <task_id> --check", body)
             self.assertIn("通常入口ではない", body)
             self.assertIn("nilo review status --task <task_id> --format json", body)
             self.assertIn("`review status` に `--project` は付けない", body)
@@ -3242,7 +3244,9 @@ variables:
             self.assertIn("nilo next --project project_test", body)
             self.assertIn("evidence が stale / missing / failed の場合は完了扱いしない", body)
             self.assertIn("unresolved review finding がある場合は完了扱いしない", body)
-            self.assertIn("nilo check", body)
+            self.assertIn('検証後は `nilo check --task <task_id> "..."`', body)
+            self.assertIn("完了判断前の検証記録には使わない", body)
+            self.assertNotIn("nilo work --task <task_id> --check", body)
             self.assertIn("Review handoff", body)
             self.assertIn("nilo review status --task <task_id> --format json", body)
             self.assertIn("`review status` に `--project` は付けない", body)
@@ -3251,6 +3255,16 @@ variables:
             self.assertIn("roadmap close", body)
             present = [command for command in verbose_reference_only_commands if command in body]
             self.assertEqual([], present)
+
+    def test_help_ai_routes_verification_only_recording_to_check(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main(["help", "ai"])
+
+        body = output.getvalue()
+        self.assertIn('record it with `nilo check --task <task_id> "..."', body)
+        self.assertIn("Do not use `nilo work --check` for verification-only recording", body)
+        self.assertNotIn("nilo work --task <task_id> --check", body)
 
     def test_agent_install_all_updates_codex_and_claude_code(self) -> None:
         with TemporaryDirectory() as directory:

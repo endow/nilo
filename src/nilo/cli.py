@@ -320,7 +320,7 @@ Normal work:
 - 検証済み dirty tree 由来 commit は stale 扱いしない。
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
-- 検証後は `nilo work --task <task_id> --check "..." "<依頼内容>"`。fallback は `nilo check --task <task_id> "..."`。
+- 検証後は `nilo check --task <task_id> "..."`。`nilo work --check` は検証成功時に AI 完了報告まで記録するため、完了判断前の検証記録には使わない。
 - 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:

@@ -9,8 +9,10 @@
 ```bash
 nilo work "READMEを短く整理して"
 nilo work --recipe bugfix "review result import が落ちる問題を直して"
-nilo work --task <task_id> --check "python -m unittest tests.test_cli"
+nilo check --task <task_id> "python -m unittest tests.test_cli"
 ```
+
+`nilo work --check` は、検証が成功した場合に AI の完了報告まで記録するショートカットです。完了判断前に検証だけを記録したい場合は `nilo check --task <task_id> "..."` を使います。
 
 `status`、`next`、`start`、`check`、`done` は補助/advanced/fallback の入口です。
 
