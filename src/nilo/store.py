@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,6 +30,8 @@ CORE_STATE_TABLES = {
     "understanding_checks",
     "verification_runs",
 }
+
+SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 SCHEMA = """
@@ -595,6 +598,7 @@ class Store:
             self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self._table_columns_cache: dict[str, set[str]] = {}
         self.direct_write_warnings: list[dict[str, str]] = []
         if not read_only:
             self.conn.executescript(SCHEMA)
@@ -604,6 +608,7 @@ class Store:
         self.conn.close()
 
     def insert(self, table: str, row: dict[str, Any]) -> None:
+        self._validate_write_target(table, row.keys())
         self._warn_direct_core_write(table, "insert")
         cols = list(row)
         placeholders = ", ".join("?" for _ in cols)
@@ -612,6 +617,9 @@ class Store:
         self._commit_unless_transaction()
 
     def update(self, table: str, row_id: str, values: dict[str, Any]) -> None:
+        self._validate_write_target(table, values.keys())
+        if not values:
+            return
         self._warn_direct_core_write(table, "update")
         parts = ", ".join(f"{key}=?" for key in values)
         args = [self._encode(value) for value in values.values()]
@@ -645,11 +653,37 @@ class Store:
         if self._transaction_depth == 0 and table in CORE_STATE_TABLES:
             self.direct_write_warnings.append({"table": table, "operation": operation})
 
+    def _validate_table(self, table: str) -> None:
+        self._table_columns(table)
+
+    def _validate_write_target(self, table: str, columns: Any) -> None:
+        table_columns = self._table_columns(table)
+        for column in list(columns):
+            if not isinstance(column, str) or not SQL_IDENTIFIER_PATTERN.fullmatch(column):
+                raise ValueError(f"invalid SQL column identifier: {column!r}")
+            if column not in table_columns:
+                raise ValueError(f"unknown SQL column for {table}: {column}")
+
+    def _table_columns(self, table: str) -> set[str]:
+        if not SQL_IDENTIFIER_PATTERN.fullmatch(table):
+            raise ValueError(f"invalid SQL table identifier: {table!r}")
+        cached = self._table_columns_cache.get(table)
+        if cached is not None:
+            return cached
+        exists = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            raise ValueError(f"unknown SQL table: {table}")
+        table_columns = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        self._table_columns_cache[table] = table_columns
+        return table_columns
+
     def get(self, table: str, row_id: str) -> dict[str, Any] | None:
+        self._validate_table(table)
         row = self.conn.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
         return self._decode_row(row, table) if row else None
 
     def latest_for_task(self, table: str, task_id: str) -> dict[str, Any] | None:
+        self._validate_table(table)
         row = self.conn.execute(
             f"SELECT * FROM {table} WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (task_id,),
@@ -657,6 +691,7 @@ class Store:
         return self._decode_row(row, table) if row else None
 
     def list_where(self, table: str, where: str = "1=1", args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        self._validate_table(table)
         rows = self.conn.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY created_at DESC, rowid DESC", args).fetchall()
         return [self._decode_row(row, table) for row in rows]
 
@@ -710,6 +745,7 @@ class Store:
             if "duplicate column name" not in str(exc).lower():
                 raise
             return
+        self._table_columns_cache.pop(table, None)
         self.conn.commit()
 
     @staticmethod

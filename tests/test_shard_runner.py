@@ -7,12 +7,15 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 try:
+    import run_shards as run_shards_module
     from run_shards import load_failed_shards, main as run_shards_main, parse_jobs, run_shards, selected_shards
     from test_shards import UNIT_MODULES, TestShard, all_shards, auto_jobs, get_shard, shard_names, shards_for_changed_files
     from run_cli_group import selected_test_names
 except ModuleNotFoundError:
+    import tests.run_shards as run_shards_module
     from tests.run_shards import load_failed_shards, main as run_shards_main, parse_jobs, run_shards, selected_shards
     from tests.test_shards import UNIT_MODULES, TestShard, all_shards, auto_jobs, get_shard, shard_names, shards_for_changed_files
     from tests.run_cli_group import selected_test_names
@@ -43,7 +46,12 @@ class ShardDefinitionTests(unittest.TestCase):
         self.assertEqual(auto_jobs(20, 64), 8)
         self.assertEqual(auto_jobs(3, 64), 3)
         self.assertEqual(auto_jobs(5, None), 2)
-        self.assertEqual(parse_jobs("auto", 2), 2)
+        # run_shards imports os as a module, so this process-local patch is the
+        # narrowest stable way to exercise parse_jobs without depending on host CPU count.
+        with patch.object(run_shards_module.os, "cpu_count", return_value=64):
+            self.assertEqual(parse_jobs("auto", 2), 2)
+        with patch.object(run_shards_module.os, "cpu_count", return_value=1):
+            self.assertEqual(parse_jobs("auto", 2), 1)
 
     def test_changed_file_mapping_selects_expected_shards(self) -> None:
         self.assertEqual(shards_for_changed_files(["src/nilo/backup.py"]), ["unit:backup"])

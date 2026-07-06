@@ -211,7 +211,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 lightweight_checks.assert_called_once_with(root.name, root, str(db))
                 self.assertEqual(root.joinpath("pyproject.toml").read_text(encoding="utf-8").count('version = "0.3.1"'), 1)
                 self.assertIn('__version__ = "0.3.1"', root.joinpath("src/nilo/__init__.py").read_text(encoding="utf-8"))
-                self.assertTrue(root.joinpath("docs/releases/0.3.1.md").exists())
+                release_note = root.joinpath("docs/releases/0.3.1.md")
+                self.assertTrue(release_note.exists())
+                release_note_text = release_note.read_text(encoding="utf-8")
+                self.assertIn("具体的な変更点を記入する。", release_note_text)
+                self.assertIn("Describe the concrete changes in this release.", release_note_text)
+                self.assertNotIn("Prepared the Nilo 0.3.1 release.", release_note_text)
                 self.assertEqual(run_git(root, "status", "--porcelain=v1", "--untracked-files=all"), "")
                 store = Store(db)
                 try:

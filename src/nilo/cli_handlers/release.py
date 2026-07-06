@@ -787,7 +787,7 @@ def _update_release_managed_files(cwd: Path, version: str) -> list[str]:
         changed.append("src/nilo/__init__.py")
     if not release_note.exists():
         release_note.parent.mkdir(parents=True, exist_ok=True)
-        release_note.write_text(_release_note_template(version), encoding="utf-8")
+        release_note.write_text(_release_note_template(cwd, version), encoding="utf-8")
         changed.append(release_note.relative_to(cwd).as_posix())
     return changed
 
@@ -801,21 +801,61 @@ def _replace_version_line(path: Path, pattern: str, version: str) -> bool:
     return True
 
 
-def _release_note_template(version: str) -> str:
+def _release_note_template(cwd: Path, version: str) -> str:
+    evidence_ja, evidence_en = _release_note_evidence(cwd)
     return f"""# v{version}
 
 ## リリースノート（日本語）
 
-- Nilo {version} のリリース準備。
-- release prepare による version 更新、full verification、release commit 記録を確認。
-- 公開は人間承認後に tag / push / GitHub release を実行。
+このファイルは release prepare が作成する下書きです。公開前に、このリリースで変わった機能、修正、検証証跡を具体的に記入してください。
+
+### 変更点
+
+- 具体的な変更点を記入する。
+
+### 検証
+
+- 実行した full check / changed check と結果を記入する。
+- {evidence_ja}
+- 公開は人間承認後に tag / push / GitHub release を実行する。
 
 ## Release Notes (English)
 
-- Prepared the Nilo {version} release.
-- Verified version updates, full verification, and release commit recording through release prepare.
+This file is a draft created by release prepare. Before publishing, replace this text with the concrete feature changes, fixes, and verification evidence for this release.
+
+### Changes
+
+- Describe the concrete changes in this release.
+
+### Verification
+
+- Record the full check / changed check command and result.
+- {evidence_en}
 - Publishing remains gated by explicit human approval for tag, push, and GitHub release creation.
 """
+
+
+def _release_note_evidence(cwd: Path) -> tuple[str, str]:
+    code, latest_tag, _ = _git_output(cwd, ["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"])
+    if code != 0 or not latest_tag.strip():
+        return (
+            "変更範囲: 直近の release tag を自動検出できませんでした。",
+            "Change range: latest release tag could not be detected automatically.",
+        )
+    tag = latest_tag.strip()
+    code, log_text, _ = _git_output(cwd, ["log", "--oneline", "--no-decorate", f"{tag}..HEAD"])
+    commits = [line.strip() for line in log_text.splitlines() if line.strip()] if code == 0 else []
+    if not commits:
+        return (
+            f"変更範囲: `{tag}..HEAD` に release note へ反映する commit はまだありません。",
+            f"Change range: `{tag}..HEAD` has no commits to summarize yet.",
+        )
+    commit_text = "; ".join(commits[:12])
+    suffix = " ..." if len(commits) > 12 else ""
+    return (
+        f"変更範囲: `{tag}..HEAD`; 対象 commit: {commit_text}{suffix}",
+        f"Change range: `{tag}..HEAD`; commits: {commit_text}{suffix}",
+    )
 
 
 def _run_lightweight_post_commit_checks(project_id: str, cwd: Path, db_path: str) -> None:

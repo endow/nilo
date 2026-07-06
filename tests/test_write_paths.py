@@ -144,6 +144,45 @@ class WritePathTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_store_rejects_invalid_write_identifiers(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "nilo.db")
+            try:
+                with self.assertRaisesRegex(ValueError, "invalid SQL table identifier"):
+                    store.insert("projects; DROP TABLE tasks", {"id": "project_test"})
+                with self.assertRaisesRegex(ValueError, "unknown SQL table"):
+                    store.insert("not_a_table", {"id": "project_test"})
+                with self.assertRaisesRegex(ValueError, "invalid SQL column identifier"):
+                    store.insert("projects", {"id": "project_test", "name); DROP TABLE tasks; --": "bad"})
+                with self.assertRaisesRegex(ValueError, "unknown SQL column"):
+                    store.update("projects", "project_test", {"not_a_column": "bad"})
+            finally:
+                store.close()
+
+    def test_store_rejects_invalid_read_tables(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "nilo.db")
+            try:
+                with self.assertRaisesRegex(ValueError, "invalid SQL table identifier"):
+                    store.get("projects; DROP TABLE tasks", "project_test")
+                with self.assertRaisesRegex(ValueError, "unknown SQL table"):
+                    store.latest_for_task("not_a_table", "task_test")
+                with self.assertRaisesRegex(ValueError, "unknown SQL table"):
+                    store.list_where("not_a_table")
+            finally:
+                store.close()
+
+    def test_store_caches_validated_table_columns(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "nilo.db")
+            try:
+                first = store._table_columns("projects")
+                second = store._table_columns("projects")
+                self.assertIs(first, second)
+                self.assertIn("id", first)
+            finally:
+                store.close()
+
 
 if __name__ == "__main__":
     unittest.main()
