@@ -183,7 +183,7 @@ class UpgradeTests(unittest.TestCase):
                 code = run_upgrade(run=runner)
 
         self.assertEqual(code, 0)
-        self.assertIn(f"Repository: {repo}", output.getvalue())
+        self.assertIn(f"Repository: {repo.resolve()}", output.getvalue())
 
     def test_upgrade_runs_update_operations_from_current_directory_nilo_checkout_fallback(self) -> None:
         with TemporaryDirectory() as directory:
@@ -198,7 +198,7 @@ class UpgradeTests(unittest.TestCase):
                 code = run_upgrade(db_path=db, run=runner)
 
         self.assertEqual(code, 0)
-        self.assertIn(f"Repository: {repo}", output.getvalue())
+        self.assertIn(f"Repository: {repo.resolve()}", output.getvalue())
         self.assertTrue(runner.command_was_run(["git", "pull", "--ff-only"]))
         self.assertTrue(runner.command_prefix_was_run([sys.executable, "-m", "pip", "install"]))
         self.assertTrue(any(command[:3] == [sys.executable, "-m", "nilo"] and command[-2:] == ["migrate", "--apply"] for command in runner.commands))

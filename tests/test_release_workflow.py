@@ -233,13 +233,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertIn("pending_public_operations: none", text)
                 self.assertNotIn("pending_public_operations: created", text)
                 self.assertNotIn("publish: nilo release publish --project", text)
-                verification_check.assert_called_once_with(
-                    release_handler.RELEASE_CHANGED_CHECK_COMMAND,
-                    root,
-                    600,
-                    snapshot_mode="fast",
-                )
-                lightweight_checks.assert_called_once_with(root.name, root, str(db))
+                verification_check.assert_called_once()
+                check_args = verification_check.call_args.args
+                self.assertEqual(check_args[0], release_handler.RELEASE_CHANGED_CHECK_COMMAND)
+                self.assertEqual(check_args[1].resolve(), root.resolve())
+                self.assertEqual(check_args[2], 600)
+                self.assertEqual(verification_check.call_args.kwargs, {"snapshot_mode": "fast"})
+                lightweight_checks.assert_called_once()
+                lightweight_args = lightweight_checks.call_args.args
+                self.assertEqual(lightweight_args[0], root.name)
+                self.assertEqual(lightweight_args[1].resolve(), root.resolve())
+                self.assertEqual(Path(lightweight_args[2]).resolve(), db.resolve())
                 self.assertEqual(root.joinpath("pyproject.toml").read_text(encoding="utf-8").count('version = "0.3.1"'), 1)
                 self.assertIn('__version__ = "0.3.1"', root.joinpath("src/nilo/__init__.py").read_text(encoding="utf-8"))
                 release_note = root.joinpath("docs/releases/0.3.1.md")
@@ -1130,7 +1134,12 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                     with redirect_stdout(output):
                         main(["--db", str(db), "release", "publish", "--project", root.name, "--approval", "v0.3.1 を tag/push/release して"])
                 text = output.getvalue()
-                full_check.assert_called_once_with(release_handler.RELEASE_FULL_CHECK_COMMAND, root, 600.0, snapshot_mode="full")
+                full_check.assert_called_once()
+                check_args = full_check.call_args.args
+                self.assertEqual(check_args[0], release_handler.RELEASE_FULL_CHECK_COMMAND)
+                self.assertEqual(check_args[1].resolve(), root.resolve())
+                self.assertEqual(check_args[2], 600.0)
+                self.assertEqual(full_check.call_args.kwargs, {"snapshot_mode": "full"})
                 self.assertIn("full_check: PYTHONPATH=src python tests/run_shards.py --all --jobs auto", text)
                 self.assertIn("full_check_exit_code: 0", text)
                 self.assertIn("release_recipe: completed", text)
@@ -1738,7 +1747,7 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 self.assertIn("recipe_run: active", output.getvalue())
                 self.assertIn("required_checks: full_check_deferred", output.getvalue())
                 self.assertFalse(root.joinpath("None").exists())
-                self.assertEqual(lightweight_checks.call_args.args[2], str(root / ".nilo" / "nilo.db"))
+                self.assertEqual(Path(lightweight_checks.call_args.args[2]).resolve(), (root / ".nilo" / "nilo.db").resolve())
             finally:
                 os.chdir(previous_cwd)
 
