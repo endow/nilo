@@ -354,6 +354,7 @@ def _record_release_publish_full_check(store: Store, run: dict[str, Any], verifi
             "release_publish_full_check_passed": passed,
             "release_publish_full_check_reused": reused,
             "required_full_check": _required_full_check_metadata(verification_row, reused=reused),
+            "verification_snapshot": compact_snapshot(verification_row),
         }
     )
     if reused:

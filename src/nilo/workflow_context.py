@@ -117,7 +117,7 @@ def mark_release_commit_recorded(
         "commit_message": commit_message,
         "post_commit_snapshot": post_commit_snapshot,
     }
-    checks_passed = release_required_checks_passed(store, task_id)
+    checks_passed = release_required_checks_passed(store, task_id, run_metadata=metadata)
     if not checks_passed:
         store.update(
             "recipe_runs",
@@ -149,10 +149,42 @@ def mark_release_commit_recorded(
     return store.get("recipe_runs", run["id"])
 
 
-def release_required_checks_passed(store, task_id: str) -> bool:
-    verification = store.latest_for_task("verification_runs", task_id)
-    if not verification:
-        return False
+def release_required_checks_passed(store, task_id: str, *, run_metadata: dict[str, Any] | None = None) -> bool:
+    return release_required_full_verification(store, task_id, run_metadata=run_metadata) is not None
+
+
+def release_required_full_verification(store, task_id: str, *, run_metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    required = (run_metadata or {}).get("required_full_check") or {}
+    required_id = required.get("verification_id") or ""
+    if required.get("status") == "satisfied" and required_id:
+        verification = store.get("verification_runs", required_id)
+        if (
+            verification
+            and verification.get("task_id") == task_id
+            and _release_verification_satisfies_required_full_check(verification)
+            and _release_required_full_check_matches_metadata(required, verification, run_metadata or {})
+        ):
+            return verification
+    latest = store.latest_for_task("verification_runs", task_id)
+    if latest and _release_verification_satisfies_required_full_check(latest) and _release_required_full_check_matches_metadata(required, latest, run_metadata or {}):
+        return latest
+    return None
+
+
+def _release_required_full_check_matches_metadata(required: dict[str, Any], verification: dict[str, Any], run_metadata: dict[str, Any]) -> bool:
+    for key in ("git_head", "git_diff_hash", "working_tree_dirty"):
+        if key in required and required.get(key) != verification.get(key):
+            return False
+    # Prefer the verification snapshot because release metadata-only commits can
+    # legitimately make the pre-commit snapshot differ from the reused full check.
+    expected_snapshot = run_metadata.get("verification_snapshot") or run_metadata.get("pre_commit_snapshot") or {}
+    for key in ("git_head", "git_diff_hash", "working_tree_dirty"):
+        if key in expected_snapshot and expected_snapshot.get(key) != verification.get(key):
+            return False
+    return True
+
+
+def _release_verification_satisfies_required_full_check(verification: dict[str, Any]) -> bool:
     metadata = verification.get("metadata") or {}
     return (
         not verification.get("timed_out")
@@ -338,7 +370,7 @@ def recover_missing_release_public_operations(store, *, project_id: str, cwd: Pa
         return run
     if metadata.get("public_operations_approved"):
         return run
-    if not release_required_checks_passed(store, run["task_id"]):
+    if not release_required_checks_passed(store, run["task_id"], run_metadata=metadata):
         raise ValueError("release recipe has no pending public operations and required checks have not passed")
 
     code, out, err = _run_command(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd)
@@ -381,7 +413,7 @@ def _record_release_task_completion_if_needed(store, *, task_id: str, approval: 
 
     if active_task_completion(store, task_id):
         return ""
-    verification = store.latest_for_task("verification_runs", task_id)
+    verification = release_required_full_verification(store, task_id, run_metadata=metadata)
     now = now_iso()
     snapshot = compact_snapshot(current_git_snapshot(cwd))
     commit_transition = {

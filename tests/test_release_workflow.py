@@ -861,6 +861,166 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
             finally:
                 os.chdir(previous_cwd)
 
+    def test_release_commit_uses_latest_successful_full_check_even_after_targeted_check(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    full_verification = full_release_verification_row(release_task_id, root, target_version="0.3.1")
+                    store.insert("verification_runs", full_verification)
+                    context = workflow_context(store, root.name)
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    metadata = {**(run["metadata"] or {})}
+                    metadata["required_full_check"] = {
+                        "status": "satisfied",
+                        "verification_id": f"verification_full_{release_task_id}",
+                        "reused": True,
+                        "mode": "full",
+                        "git_head": run_git(root, "rev-parse", "HEAD"),
+                        "git_diff_hash": full_verification["git_diff_hash"],
+                        "working_tree_dirty": full_verification["working_tree_dirty"],
+                        "command": release_handler.RELEASE_FULL_CHECK_COMMAND,
+                    }
+                    metadata["verification_snapshot"] = compact_snapshot(full_verification)
+                    metadata["pre_commit_snapshot"] = {**compact_snapshot(full_verification), "git_diff_hash": "post-release-metadata-change"}
+                    store.update("recipe_runs", run["id"], {"metadata": metadata, "updated_at": now_iso()})
+                    latest_targeted = verification_row(release_task_id, root)
+                    latest_targeted["id"] = "verification_targeted_after_full"
+                    latest_targeted["command"] = "nilo recipe doctor --project test"
+                    store.insert("verification_runs", latest_targeted)
+                    self.assertEqual(store.latest_for_task("verification_runs", release_task_id)["id"], "verification_targeted_after_full")
+
+                    run = mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha="abc123",
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                    self.assertEqual(run["status"], "waiting_public_approval")
+                    self.assertTrue((run["metadata"] or {})["required_checks_passed"])
+                    self.assertEqual([item["operation"] for item in run["pending_public_operations"]], ["create_tag", "push_branch", "push_tag", "create_github_release"])
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_commit_rejects_stale_pinned_full_check_after_targeted_check(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    full_verification = full_release_verification_row(release_task_id, root, target_version="0.3.1")
+                    store.insert("verification_runs", full_verification)
+                    context = workflow_context(store, root.name)
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    metadata = {**(run["metadata"] or {})}
+                    metadata["required_full_check"] = {
+                        "status": "satisfied",
+                        "verification_id": f"verification_full_{release_task_id}",
+                        "reused": True,
+                        "mode": "full",
+                        "git_head": full_verification["git_head"],
+                        "git_diff_hash": full_verification["git_diff_hash"],
+                        "working_tree_dirty": full_verification["working_tree_dirty"],
+                        "command": release_handler.RELEASE_FULL_CHECK_COMMAND,
+                    }
+                    stale_snapshot = compact_snapshot(full_verification)
+                    stale_snapshot["git_diff_hash"] = "stale"
+                    metadata["pre_commit_snapshot"] = stale_snapshot
+                    store.update("recipe_runs", run["id"], {"metadata": metadata, "updated_at": now_iso()})
+                    latest_targeted = verification_row(release_task_id, root)
+                    latest_targeted["id"] = "verification_targeted_after_stale_full"
+                    latest_targeted["command"] = "nilo recipe doctor --project test"
+                    store.insert("verification_runs", latest_targeted)
+
+                    run = mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha="abc123",
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                    self.assertEqual(run["status"], "active")
+                    self.assertEqual(run["current_step"], "run_required_checks")
+                    self.assertFalse((run["metadata"] or {})["required_checks_passed"])
+                    self.assertEqual(run["pending_public_operations"], [])
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_commit_rejects_stale_pinned_full_check_when_full_is_latest(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    full_verification = full_release_verification_row(release_task_id, root, target_version="0.3.1")
+                    store.insert("verification_runs", full_verification)
+                    context = workflow_context(store, root.name)
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    metadata = {**(run["metadata"] or {})}
+                    metadata["required_full_check"] = {
+                        "status": "satisfied",
+                        "verification_id": f"verification_full_{release_task_id}",
+                        "reused": True,
+                        "mode": "full",
+                        "git_head": full_verification["git_head"],
+                        "git_diff_hash": full_verification["git_diff_hash"],
+                        "working_tree_dirty": full_verification["working_tree_dirty"],
+                        "command": release_handler.RELEASE_FULL_CHECK_COMMAND,
+                    }
+                    stale_snapshot = compact_snapshot(full_verification)
+                    stale_snapshot["git_diff_hash"] = "stale"
+                    metadata["verification_snapshot"] = stale_snapshot
+                    store.update("recipe_runs", run["id"], {"metadata": metadata, "updated_at": now_iso()})
+
+                    run = mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha="abc123",
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                    self.assertEqual(run["status"], "active")
+                    self.assertEqual(run["current_step"], "run_required_checks")
+                    self.assertFalse((run["metadata"] or {})["required_checks_passed"])
+                    self.assertEqual(run["pending_public_operations"], [])
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
     def test_approve_public_execute_runs_release_operations_and_completes_recipe(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1291,6 +1451,80 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                     self.assertEqual(completed_context["type"], "project")
                     runs = store.list_where("recipe_runs", "project_id=? AND recipe_name='release'", (root.name,))
                     self.assertTrue((runs[0]["metadata"] or {}).get("public_operations_recovered"))
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_release_publish_deferred_full_check_recovers_pending_operations(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")
+                    ),
+                ), patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(io.StringIO()):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                store = Store(db)
+                try:
+                    context = workflow_context(store, root.name)
+                    self.assertEqual(context["status"], "active")
+                    self.assertEqual(context["pending_public_operations"], [])
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    self.assertEqual((run["metadata"] or {})["required_full_check"]["status"], "deferred")
+                finally:
+                    store.close()
+
+                root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Finalize release notes")
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                output = io.StringIO()
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(
+                        cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "full")
+                    ),
+                ):
+                    with redirect_stdout(output):
+                        main(
+                            [
+                                "--db",
+                                str(db),
+                                "release",
+                                "publish",
+                                "--project",
+                                root.name,
+                                "--approval",
+                                "v0.3.1 を tag/push/release して",
+                            ]
+                        )
+                text = output.getvalue()
+                self.assertIn("full_check:", text)
+                self.assertIn("release_recipe: completed", text)
+                store = Store(db)
+                try:
+                    completed_context = workflow_context(store, root.name)
+                    self.assertEqual(completed_context["type"], "project")
+                    runs = store.list_where("recipe_runs", "project_id=? AND recipe_name='release'", (root.name,))
+                    metadata = runs[0]["metadata"] or {}
+                    self.assertTrue(metadata["public_operations_recovered"])
+                    self.assertEqual(metadata["required_full_check"]["status"], "satisfied")
+                    self.assertEqual(metadata["verification_snapshot"]["git_head"], metadata["required_full_check"]["git_head"])
                 finally:
                     store.close()
             finally:
