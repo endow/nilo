@@ -22,7 +22,7 @@ class ViewRequestHandler(BaseHTTPRequestHandler):
             self.respond_json({"error": str(exc).strip("'")}, status=404)
         except SystemExit as exc:
             self.respond_json({"error": str(exc)}, status=404)
-        except sqlite3.OperationalError as exc:
+        except (sqlite3.OperationalError, ValueError) as exc:
             self.respond_json(
                 {
                     "error": "database schema is not ready for nilo view",
