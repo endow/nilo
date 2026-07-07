@@ -370,6 +370,11 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
 
                 output = io.StringIO()
                 with redirect_stdout(output):
+                    main(["--db", str(db), "report", "validate", "--task", task_id, "--file", str(report)])
+                self.assertIn("report_form_status: present", output.getvalue())
+
+                output = io.StringIO()
+                with redirect_stdout(output):
                     main(["--db", str(db), "report", "import", "--task", task_id, "--file", str(report)])
                 self.assertIn("report_form_status: present", output.getvalue())
             finally:

@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from ..agent_report_import import validate_agent_report
 from ..ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, render_ai_context_text
 from ..cli import (
     AGENT_TARGET_FILES,
@@ -639,6 +640,36 @@ def cmd_report_import(args: argparse.Namespace) -> None:
             print("issues:")
             for issue in check["issues"]:
                 print(f"- {issue}")
+    finally:
+        store.close()
+
+
+def cmd_report_validate(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        task = store.get("tasks", args.task)
+        if not task:
+            raise SystemExit(f"task not found: {args.task}")
+        if args.file:
+            markdown = read_text_or_exit(Path(args.file))
+        else:
+            markdown = sys.stdin.read()
+        if not markdown.strip():
+            raise SystemExit("report body is empty")
+
+        result = validate_agent_report(store, task, markdown, Path.cwd(), evaluate_evidence)
+        print(f"report_form_status: {result['status']}")
+        print("changed_files:")
+        if result["changed_files"]:
+            for path in result["changed_files"]:
+                print(f"- {path}")
+        else:
+            print("- none")
+        if result["issues"]:
+            print("issues:")
+            for issue in result["issues"]:
+                print(f"- {issue}")
+            raise SystemExit(1)
     finally:
         store.close()
 

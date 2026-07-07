@@ -33,6 +33,10 @@ def register_report(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     report_import.add_argument("--file")
     report_import.add_argument("--agent", default="unknown")
     report_import.set_defaults(func=handlers.cmd_report_import)
+    report_validate = report_sub.add_parser("validate")
+    report_validate.add_argument("--task", required=True)
+    report_validate.add_argument("--file")
+    report_validate.set_defaults(func=handlers.cmd_report_validate)
 
 
 def register_understanding(sub: argparse._SubParsersAction, handlers: ModuleType) -> None:

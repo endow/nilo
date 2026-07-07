@@ -86,6 +86,7 @@ from .workflow import (
     cmd_migrate,
     cmd_outcome_record,
     cmd_report_import,
+    cmd_report_validate,
     cmd_understanding_approve,
     cmd_understanding_import,
     cmd_understanding_prepare,

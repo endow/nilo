@@ -2765,6 +2765,86 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
+    def test_report_validate_checks_report_without_importing(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            report = root / "report.md"
+            report.write_text(REPORT, encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "CLIフローを確認する",
+                    ]
+                )
+
+            output = io.StringIO()
+            with redirect_stdout(output), patch("nilo.cli_handlers.workflow.evaluate_evidence", return_value=("evidence_submitted", [], {"ok": True})):
+                main(["--db", str(db), "report", "validate", "--task", "task_test", "--file", str(report)])
+
+            store = Store(db)
+            reports = store.list_where("agent_reports", "task_id=?", ("task_test",))
+            failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
+            store.close()
+
+            self.assertIn("report_form_status: present", output.getvalue())
+            self.assertIn("- src/nilo/cli.py", output.getvalue())
+            self.assertEqual(reports, [])
+            self.assertEqual(failures, [])
+
+    def test_report_validate_fails_without_recording_failure_logs(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            report = root / "report.md"
+            report.write_text(REPORT.replace("- src/nilo/cli.py", "- src/nilo/cli.py 説明つき"), encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "create",
+                        "--project",
+                        "project_test",
+                        "--id",
+                        "task_test",
+                        "--title",
+                        "CLIフローを確認する",
+                    ]
+                )
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit) as raised, redirect_stdout(output), patch(
+                "nilo.cli_handlers.workflow.evaluate_evidence",
+                return_value=("needs_human_review", ["missing changed_files"], {"ok": False}),
+            ):
+                main(["--db", str(db), "report", "validate", "--task", "task_test", "--file", str(report)])
+
+            store = Store(db)
+            reports = store.list_where("agent_reports", "task_id=?", ("task_test",))
+            failures = store.list_where("failure_logs", "task_id=?", ("task_test",))
+            store.close()
+
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("report_form_status: failed", output.getvalue())
+            self.assertIn("- missing changed_files", output.getvalue())
+            self.assertEqual(reports, [])
+            self.assertEqual(failures, [])
+
     def test_todo_add_list_show_and_triage(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -7564,6 +7644,7 @@ close 済み commitment を表示できるようにした。
             self.assertIn("## タスク説明\nタスク説明を保存する。", instruct_output.getvalue())
             self.assertIn("- 指示書に説明が表示される", instruct_output.getvalue())
             self.assertIn(".nilo/reports/task_test.md", instruct_output.getvalue())
+            self.assertIn("nilo report validate --task task_test --file .nilo/reports/task_test.md", instruct_output.getvalue())
             self.assertIn("nilo report import --task task_test --file .nilo/reports/task_test.md", instruct_output.getvalue())
 
     def test_task_update_updates_description_and_status_output(self) -> None:

@@ -237,6 +237,9 @@ def build_instruction(
 
 ## 完了報告一時ファイル
 - 完了報告 markdown は `.nilo/reports/{task["id"]}.md` に一時作成する
+- 取り込み前に `git status --short` と `git ls-files --others --exclude-standard` で untracked を含む差分を確認する
+- 変更ファイル一覧はパスだけの行にする（同じ行に説明文を付けない）
+- 取り込み前に `nilo report validate --task {task["id"]} --file .nilo/reports/{task["id"]}.md` で形式と changed_files を検査する
 - 取り込みは `nilo report import --task {task["id"]} --file .nilo/reports/{task["id"]}.md` で行う
 - import 成功後は DB を正本とし、一時ファイルは削除してよい
 

@@ -12,6 +12,22 @@ from .store import Store
 from .timeutil import now_iso
 
 
+def validate_agent_report(store: Store, task: dict, markdown: str, cwd: Path, evaluate_func=evaluate_evidence) -> dict:
+    if not markdown.strip():
+        raise ValueError("report body is empty")
+
+    files = extract_changed_files(markdown)
+    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd)
+    issues = _ignore_release_committed_file_extras(store, task["id"], issues)
+    status = _status_after_issue_filter(status, issues)
+    return {
+        "status": "present" if status == "evidence_submitted" else "failed",
+        "issues": issues,
+        "changed_files": files,
+        "metadata": metadata,
+    }
+
+
 def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd: Path, evaluate_func=evaluate_evidence) -> dict:
     if not markdown.strip():
         raise ValueError("report body is empty")
@@ -31,10 +47,7 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
 
     status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd)
     issues = _ignore_release_committed_file_extras(store, task["id"], issues)
-    if status == "needs_human_review" and not any(
-        issue.startswith("changed_files") or issue.startswith("git metadata") or issue.startswith("secret detected") for issue in issues
-    ):
-        status = "evidence_missing" if issues else "evidence_submitted"
+    status = _status_after_issue_filter(status, issues)
     snapshot = compact_snapshot(current_git_snapshot(cwd))
     display_status = "present" if status == "evidence_submitted" else "failed"
     check = {
@@ -72,6 +85,14 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
             )
 
     return {"report": report, "evidence_status": check, "evidence_check": check}
+
+
+def _status_after_issue_filter(status: str, issues: list[str]) -> str:
+    if status == "needs_human_review" and not any(
+        issue.startswith("changed_files") or issue.startswith("git metadata") or issue.startswith("secret detected") for issue in issues
+    ):
+        return "evidence_missing" if issues else "evidence_submitted"
+    return status
 
 
 def _ignore_release_committed_file_extras(store: Store, task_id: str, issues: list[str]) -> list[str]:
