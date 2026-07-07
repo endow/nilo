@@ -280,6 +280,7 @@ def cmd_release_publish(args: argparse.Namespace) -> None:
         if not run or run.get("recipe_name") != "release":
             raise SystemExit("active release recipe run not found")
         validate_public_operation_approval(args.approval, release_version_from_run(run))
+        _ensure_release_note_ready_for_publish(store, run, cwd)
         _ensure_release_publish_full_check(store, run, cwd, getattr(args, "timeout", 600.0))
         try:
             run, logs = execute_pending_public_operations(
@@ -358,6 +359,140 @@ def _record_release_publish_full_check(store: Store, run: dict[str, Any], verifi
     if reused:
         metadata["release_publish_full_check_reuse_reason"] = verification_row.get("reuse_reason", "current_full_check")
     store.update("recipe_runs", current["id"], {"metadata": metadata, "updated_at": now_iso()})
+
+
+def _ensure_release_note_ready_for_publish(store: Store, run: dict[str, Any], cwd: Path) -> None:
+    target_version = release_version_from_run(run).lstrip("v")
+    result = validate_release_note(cwd, target_version)
+    if result["ok"]:
+        _store_release_metadata(
+            store,
+            run,
+            {
+                "release_note_validation": {
+                    "status": "passed",
+                    "path": result["path"],
+                    "checked_at": now_iso(),
+                }
+            },
+        )
+        return
+    _pause_release_for_fix(
+        store,
+        run,
+        reason="release_note_invalid",
+        release_note_validation={
+            "status": "failed",
+            "path": result["path"],
+            "issues": result["issues"],
+            "checked_at": now_iso(),
+        },
+    )
+    lines = ["release note validation failed; public operations not executed; release recipe paused_for_fix"]
+    lines.append(f"release_note: {result['path']}")
+    lines.append("issues:")
+    for issue in result["issues"]:
+        lines.append(f"- {issue}")
+    lines.append("suggested action: edit the release note with concrete changes and verification evidence, then run nilo release resume")
+    raise SystemExit("\n".join(lines))
+
+
+def validate_release_note(cwd: Path, version: str) -> dict[str, Any]:
+    path = Path("docs") / "releases" / f"{version.lstrip('v')}.md"
+    note = cwd / path
+    issues: list[str] = []
+    if not note.exists():
+        return {"ok": False, "path": path.as_posix(), "issues": ["release note file does not exist"]}
+    text = note.read_text(encoding="utf-8").strip()
+    if not text:
+        return {"ok": False, "path": path.as_posix(), "issues": ["release note is empty"]}
+    normalized = _normalize_release_note_text(text)
+    if any(marker in normalized for marker in _release_note_template_markers()):
+        issues.append("release note still contains draft template instructions or placeholder text")
+    if not _has_concrete_release_note_section(text, {"変更点", "changes"}, _release_note_change_placeholders()):
+        issues.append("release note has no concrete changes under 変更点 / Changes")
+    if not _has_concrete_release_note_section(text, {"検証", "根拠", "verification", "evidence"}, _release_note_evidence_placeholders()):
+        issues.append("release note has no concrete verification evidence under 検証 / 根拠 / Verification / Evidence")
+    return {"ok": not issues, "path": path.as_posix(), "issues": issues}
+
+
+def _normalize_release_note_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _release_note_template_markers() -> list[str]:
+    return [
+        "このファイルは release prepare が作成する下書きです",
+        "具体的な変更点を記入する",
+        "実行した full check / changed check と結果を記入する",
+        "this file is a draft created by release prepare",
+        "describe the concrete changes in this release",
+        "record the full check / changed check command and result",
+    ]
+
+
+def _release_note_change_placeholders() -> set[str]:
+    return {
+        "具体的な変更点を記入する",
+        "describe the concrete changes in this release",
+    }
+
+
+def _release_note_evidence_placeholders() -> set[str]:
+    return {
+        "実行した full check / changed check と結果を記入する",
+        "record the full check / changed check command and result",
+        "公開は人間承認後に tag / push / github release を実行する",
+        "publishing remains gated by explicit human approval for tag, push, and github release creation",
+    }
+
+
+def _has_concrete_release_note_section(text: str, names: set[str], placeholders: set[str]) -> bool:
+    sections = _markdown_sections(text)
+    for _, title, body in sections:
+        if _normalize_heading(title) not in names:
+            continue
+        meaningful = _meaningful_release_note_lines(body, placeholders)
+        if meaningful:
+            return True
+    return False
+
+
+def _markdown_sections(text: str) -> list[tuple[int, str, str]]:
+    lines = text.splitlines()
+    sections: list[tuple[int, str, str]] = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^(#{2,6})\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        level = len(match.group(1))
+        title = match.group(2).strip()
+        end = len(lines)
+        for next_index in range(index + 1, len(lines)):
+            next_match = re.match(r"^(#{2,6})\s+(.+?)\s*$", lines[next_index])
+            if next_match and len(next_match.group(1)) <= level:
+                end = next_index
+                break
+        sections.append((level, title, "\n".join(lines[index + 1 : end])))
+    return sections
+
+
+def _normalize_heading(title: str) -> str:
+    return re.sub(r"\s+", " ", title.strip().lower())
+
+
+def _meaningful_release_note_lines(body: str, placeholders: set[str]) -> list[str]:
+    meaningful: list[str] = []
+    for raw_line in body.splitlines():
+        line = re.sub(r"^\s*[-*]\s*", "", raw_line).strip()
+        line = line.strip("。.")
+        if not line:
+            continue
+        normalized = _normalize_release_note_text(line)
+        if normalized in placeholders:
+            continue
+        meaningful.append(line)
+    return meaningful
 
 
 def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str, cwd: Path, *, resume: bool = False) -> dict[str, Any]:
@@ -481,6 +616,7 @@ def _pause_release_for_fix(
     failed_verification_id: str = "",
     managed_release_dirty: list[str] | None = None,
     unmanaged_dirty: list[str] | None = None,
+    **extra_metadata: Any,
 ) -> dict[str, Any]:
     current = store.get("recipe_runs", run["id"]) or run
     verification = verification_row or (store.get("verification_runs", failed_verification_id) if failed_verification_id else None) or {}
@@ -503,6 +639,7 @@ def _pause_release_for_fix(
         "managed_release_dirty": managed_release_dirty or [],
         "unmanaged_dirty": unmanaged_dirty or [],
         "resume_command": f"nilo release resume --project {current['project_id']}",
+        **extra_metadata,
     }
     store.update(
         "recipe_runs",

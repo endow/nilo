@@ -46,6 +46,7 @@ WORK_RELEASE_INTENT_PATTERNS = (
     r"\bpublish\s+(the\s+)?release\b",
     r"\brelease\s+(v?\d+(?:\.\d+){1,2}|this|it|now)\b",
     r"\b(v?\d+(?:\.\d+){1,2})\s*(を|の)?\s*(リリース|公開)",
+    r"リリースレシピ(を|の)?(準備|始め|実行)",
     r"リリース(準備|作業|フロー|を始め|実行)",
     r"リリースを(始め|実行)",
     r"公開(準備|作業|フロー)",

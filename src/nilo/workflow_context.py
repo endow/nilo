@@ -4,7 +4,7 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .cli_support import make_id
 from .timeutil import now_iso
@@ -249,6 +249,7 @@ def execute_pending_public_operations(
     cwd: Path,
     release_url: str = "",
     branch: str = "main",
+    preflight: Callable[[Any, dict[str, Any], Path], None] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     run = active_recipe_run(store, project_id)
     if not run or run.get("recipe_name") != "release":
@@ -271,6 +272,12 @@ def execute_pending_public_operations(
         raise ValueError(err or "git status failed")
     if out.strip():
         raise ValueError("working tree must be clean before executing public release operations")
+
+    if preflight is None:
+        from .cli_handlers.release import _ensure_release_note_ready_for_publish
+
+        preflight = _ensure_release_note_ready_for_publish
+    preflight(store, run, cwd)
 
     if run.get("pending_public_operations"):
         # Record explicit approval immediately before crossing public-operation gates.

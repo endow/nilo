@@ -99,6 +99,37 @@ def full_release_verification_row(task_id: str, root: Path, *, target_version: s
     return {"id": f"verification_full_{task_id}", "task_id": task_id, "evidence_check_id": None, **verified}
 
 
+def concrete_release_note(version: str = "0.3.1") -> str:
+    return f"""# v{version}
+
+## リリースノート（日本語）
+
+Nilo {version} は release workflow の安全柵を強化する patch release です。
+
+### 変更点
+
+- release publish 前に release note の具体的な変更点を検証するようにしました。
+
+### 検証
+
+- full check: `PYTHONPATH=src python tests/run_shards.py --all --jobs auto` exit_code=0
+- 変更範囲: `v0.3.0..v{version}`; 対象 commit: `abc1234`
+
+## Release Notes (English)
+
+Nilo {version} strengthens release workflow guardrails.
+
+### Changes
+
+- Validated concrete release note changes before release publish.
+
+### Verification
+
+- full check: `PYTHONPATH=src python tests/run_shards.py --all --jobs auto` exit_code=0
+- Change range: `v0.3.0..v{version}`; commits: `abc1234`
+"""
+
+
 def force_waiting_public_approval(store: Store, root: Path, project_id: str, task_id: str, *, target_version: str = "0.3.1") -> str:
     context = workflow_context(store, project_id)
     run = store.get("recipe_runs", context["recipe_run_id"])
@@ -493,7 +524,7 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
             base = run_git(root, "rev-parse", "HEAD")
 
             root.joinpath("docs/releases").mkdir(parents=True)
-            root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+            root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
             self.assertTrue(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
 
             run_git(root, "add", "docs/releases/0.3.1.md")
@@ -529,6 +560,13 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
             root.joinpath("tests").mkdir(exist_ok=True)
             root.joinpath("tests/test_runtime.py").write_text("def test_runtime():\n    assert True\n", encoding="utf-8")
             self.assertFalse(release_handler.release_only_non_execution_changes(root, "0.3.1", base))
+
+    def test_release_note_validation_accepts_concrete_0_6_0_through_0_6_4_notes(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        for version in ("0.6.0", "0.6.1", "0.6.2", "0.6.3", "0.6.4"):
+            with self.subTest(version=version):
+                result = release_handler.validate_release_note(repo_root, version)
+                self.assertTrue(result["ok"], result["issues"])
 
     def test_release_prepare_rejects_target_version_mismatch_for_active_run(self) -> None:
         with TemporaryDirectory() as directory:
@@ -829,7 +867,7 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 os.chdir(root)
                 self.create_project(db, root.name)
                 root.joinpath("docs/releases").mkdir(parents=True)
-                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
                 run_git(root, "add", "docs/releases/0.3.1.md")
                 run_git(root, "commit", "-m", "Add release notes")
                 recipe_output = io.StringIO()
@@ -904,7 +942,7 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 os.chdir(root)
                 self.create_project(db, root.name)
                 root.joinpath("docs/releases").mkdir(parents=True)
-                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
                 run_git(root, "add", "docs/releases/0.3.1.md")
                 run_git(root, "commit", "-m", "Release 0.3.1")
                 recipe_output = io.StringIO()
@@ -945,6 +983,127 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 os.environ["PATH"] = previous_path
                 os.chdir(previous_cwd)
 
+    def test_release_publish_blocks_unedited_release_note_before_full_check_or_public_operations(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                root.joinpath("docs/releases").mkdir(parents=True)
+                root.joinpath("docs/releases/0.3.1.md").write_text(release_handler._release_note_template(root, "0.3.1"), encoding="utf-8")
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Release 0.3.1")
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    run_id = force_waiting_public_approval(store, root, root.name, release_task_id)
+                finally:
+                    store.close()
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification") as full_check:
+                    with self.assertRaises(SystemExit) as raised:
+                        with redirect_stdout(output):
+                            main(["--db", str(db), "release", "publish", "--project", root.name, "--approval", "v0.3.1 を tag/push/release して"])
+                self.assertIn("release note validation failed", str(raised.exception))
+                self.assertIn("concrete changes", str(raised.exception))
+                full_check.assert_not_called()
+                self.assertFalse(root.joinpath(".git/release-tools.log").exists())
+                store = Store(db)
+                try:
+                    run = store.get("recipe_runs", run_id)
+                    metadata = run["metadata"]
+                    self.assertEqual(run["status"], "paused_for_fix")
+                    self.assertEqual(metadata["pause_reason"], "release_note_invalid")
+                    self.assertEqual(metadata["release_note_validation"]["status"], "failed")
+                    self.assertTrue(metadata["release_note_validation"]["issues"])
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_approve_public_execute_blocks_release_note_without_verification_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                root.joinpath("docs/releases").mkdir(parents=True)
+                root.joinpath("docs/releases/0.3.1.md").write_text(
+                    """# v0.3.1
+
+## リリースノート（日本語）
+
+### 変更点
+
+- publish 前の safety check を追加しました。
+
+## Release Notes (English)
+
+### Changes
+
+- Added a safety check before publish.
+""",
+                    encoding="utf-8",
+                )
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Release 0.3.1")
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+                store = Store(db)
+                try:
+                    store.insert("verification_runs", full_release_verification_row(release_task_id, root))
+                    run_id = force_waiting_public_approval(store, root, root.name, release_task_id)
+                finally:
+                    store.close()
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                with self.assertRaises(SystemExit) as raised:
+                    with redirect_stdout(io.StringIO()):
+                        main(
+                            [
+                                "--db",
+                                str(db),
+                                "recipe",
+                                "approve-public",
+                                "--project",
+                                root.name,
+                                "--approval",
+                                "v0.3.1 を tag/push/release して",
+                                "--execute",
+                            ]
+                        )
+                self.assertIn("release note validation failed", str(raised.exception))
+                self.assertIn("verification evidence", str(raised.exception))
+                self.assertFalse(root.joinpath(".git/release-tools.log").exists())
+                store = Store(db)
+                try:
+                    run = store.get("recipe_runs", run_id)
+                    self.assertEqual(run["status"], "paused_for_fix")
+                    self.assertEqual((run["metadata"] or {})["pause_reason"], "release_note_invalid")
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
     def test_release_publish_blocks_recipe_when_full_check_fails_before_public_operations(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -956,7 +1115,7 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 os.chdir(root)
                 self.create_project(db, root.name)
                 root.joinpath("docs/releases").mkdir(parents=True)
-                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
                 run_git(root, "add", "docs/releases/0.3.1.md")
                 run_git(root, "commit", "-m", "Release 0.3.1")
                 recipe_output = io.StringIO()
@@ -1091,7 +1250,7 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                     main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
                 release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
                 root.joinpath("docs/releases").mkdir(parents=True)
-                root.joinpath("docs/releases/0.3.1.md").write_text("release notes\n", encoding="utf-8")
+                root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
                 run_git(root, "add", "docs/releases/0.3.1.md")
                 run_git(root, "commit", "-m", "Release 0.3.1")
                 store = Store(db)

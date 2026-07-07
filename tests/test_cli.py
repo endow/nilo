@@ -1580,6 +1580,9 @@ variables:
                 japanese_particle_output = io.StringIO()
                 with redirect_stdout(japanese_particle_output):
                     main(["--db", str(db), "work", "リリースを実行する", "--dry-run"])
+                japanese_recipe_output = io.StringIO()
+                with redirect_stdout(japanese_recipe_output):
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--dry-run"])
                 english_output = io.StringIO()
                 with redirect_stdout(english_output):
                     main(["--db", str(db), "work", "prepare release v0.7.0", "--dry-run"])
@@ -1593,6 +1596,7 @@ variables:
             self.assertIn("recipe_reason: matched: explicit release intent", output.getvalue())
             self.assertIn("recipe: release", japanese_compact_output.getvalue())
             self.assertIn("recipe: release", japanese_particle_output.getvalue())
+            self.assertIn("recipe: release", japanese_recipe_output.getvalue())
             self.assertIn("recipe: release", english_output.getvalue())
             self.assertIn("recipe: release", english_debugging_output.getvalue())
 
@@ -1612,6 +1616,9 @@ variables:
                 release_word_output = io.StringIO()
                 with redirect_stdout(release_word_output):
                     main(["--db", str(db), "work", "ドキュメントをリリースする", "--dry-run"])
+                negated_release_recipe_output = io.StringIO()
+                with redirect_stdout(negated_release_recipe_output):
+                    main(["--db", str(db), "work", "リリースレシピをやめて、テストを実行して", "--dry-run"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -1619,6 +1626,7 @@ variables:
             self.assertNotIn("recipe: release", output.getvalue())
             self.assertIn("recipe: docs-update", release_word_output.getvalue())
             self.assertNotIn("recipe: release", release_word_output.getvalue())
+            self.assertNotIn("recipe: release", negated_release_recipe_output.getvalue())
 
     def test_facade_work_stops_on_multiple_active_tasks_unless_task_is_explicit(self) -> None:
         with TemporaryDirectory() as directory:
