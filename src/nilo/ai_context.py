@@ -11,7 +11,7 @@ from .project_language import project_primary_language
 from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
-from .workflow_context import workflow_context
+from .workflow_context import release_commit_aware_evidence_status, workflow_context
 
 
 def _ai_context_text_max_chars() -> int:
@@ -47,6 +47,8 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snap
     completion = active_task_completion(store, task_id)
     strict_evidence = snapshot_mode == "full"
     evidence = commit_aware_evidence_status(verification_run, snapshot, completion, strict=strict_evidence)
+    if evidence == "stale" and completion is None:
+        evidence = release_commit_aware_evidence_status(store, task_id, verification_run, snapshot, strict=strict_evidence)
     if evidence == "missing" and latest_report:
         evidence = "present"
     unresolved = unresolved_review_findings(store, task_id)

@@ -149,6 +149,79 @@ def mark_release_commit_recorded(
     return store.get("recipe_runs", run["id"])
 
 
+def release_commit_transition_metadata(store, task_id: str) -> dict[str, Any]:
+    from .snapshot import compact_snapshot
+
+    run = recipe_run_for_task(store, task_id, "release")
+    if not run:
+        return {}
+    metadata = run.get("metadata") or {}
+    if not metadata.get("commit_sha"):
+        return {}
+    verification = release_required_full_verification(store, task_id, run_metadata=metadata)
+    verification_snapshot = metadata.get("verification_snapshot") or compact_snapshot(verification or {})
+    pre_commit_snapshot = metadata.get("pre_commit_snapshot") or verification_snapshot
+    post_commit_snapshot = metadata.get("post_commit_snapshot") or {}
+    if not verification_snapshot or not pre_commit_snapshot or not post_commit_snapshot:
+        return {}
+    return {
+        "verified_snapshot": verification_snapshot,
+        "pre_commit_snapshot": pre_commit_snapshot,
+        "post_commit_snapshot": post_commit_snapshot,
+        "commit_sha": metadata.get("commit_sha", ""),
+        "commit_message": metadata.get("commit_message", ""),
+        "committed_from_verified_dirty_tree": True,
+        "verified_diff_hash": verification_snapshot.get("git_diff_hash", ""),
+        "committed_tree_hash": metadata.get("committed_tree_hash", ""),
+        "committed_files": metadata.get("committed_files") or [],
+    }
+
+
+def release_commit_aware_evidence_status(
+    store,
+    task_id: str,
+    verification_run: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+    *,
+    strict: bool = True,
+) -> str:
+    from .snapshot import commit_transition_evidence_status, evidence_status
+
+    transition = release_commit_transition_metadata(store, task_id)
+    if not transition:
+        return evidence_status(verification_run, current_snapshot, strict=strict)
+    status = commit_transition_evidence_status(verification_run, current_snapshot, transition, strict=strict)
+    if status == "current":
+        return status
+    run = recipe_run_for_task(store, task_id, "release")
+    required = release_required_full_verification(store, task_id, run_metadata=(run.get("metadata") or {}) if run else {})
+    if required and (not verification_run or required.get("id") != verification_run.get("id")):
+        required_status = commit_transition_evidence_status(required, current_snapshot, transition, strict=strict)
+        if required_status == "current":
+            return required_status
+    return status
+
+
+def release_commit_verified_verification(
+    store,
+    task_id: str,
+    verification_run: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+) -> dict[str, Any] | None:
+    from .snapshot import commit_transition_evidence_status
+
+    transition = release_commit_transition_metadata(store, task_id)
+    if not transition:
+        return None
+    if commit_transition_evidence_status(verification_run, current_snapshot, transition) == "current":
+        return verification_run
+    run = recipe_run_for_task(store, task_id, "release")
+    required = release_required_full_verification(store, task_id, run_metadata=(run.get("metadata") or {}) if run else {})
+    if required and commit_transition_evidence_status(required, current_snapshot, transition) == "current":
+        return required
+    return None
+
+
 def release_required_checks_passed(store, task_id: str, *, run_metadata: dict[str, Any] | None = None) -> bool:
     return release_required_full_verification(store, task_id, run_metadata=run_metadata) is not None
 

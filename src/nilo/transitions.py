@@ -161,6 +161,11 @@ def _latest_verified_completion_evidence(store: Store, task_id: str, cwd: Path) 
         raise TransitionError("verification_missing", "AI completion requires a current verification run", "run `nilo check` first")
     status = evidence_status(verification, snapshot)
     if status not in {"current", "recorded"}:
+        from .workflow_context import release_commit_aware_evidence_status, release_commit_verified_verification
+
+        status = release_commit_aware_evidence_status(store, task_id, verification, snapshot)
+        verification = release_commit_verified_verification(store, task_id, verification, snapshot) or verification
+    if status not in {"current", "recorded"}:
         raise TransitionError("verification_not_current", f"AI completion requires current evidence, got {status}")
     if verification.get("timed_out"):
         raise TransitionError("verification_timed_out", "AI completion cannot use a timed out verification run")
@@ -194,6 +199,10 @@ def _require_completion_evidence(store: Store, task: dict, verification: dict | 
         raise TransitionError("verification_missing", "completion requires a verification run for implementation tasks")
     status = evidence_status(verification, snapshot)
     if status not in {"current", "recorded"}:
+        from .workflow_context import release_commit_aware_evidence_status
+
+        status = release_commit_aware_evidence_status(store, task["id"], verification, snapshot)
+    if status not in {"current", "recorded"}:
         raise TransitionError("verification_not_current", f"completion requires current verification evidence, got {status}")
     if verification.get("timed_out"):
         raise TransitionError("verification_timed_out", "completion cannot use a timed out verification run")
@@ -223,6 +232,7 @@ def complete_task(
     previous_status = projected_task_status(store, task)
     latest_review = store.latest_for_task("review_results", task_id)
     _require_no_open_high_failure(store, task)
+    commit_transition: dict[str, Any] = {}
     if actor == "human":
         _require_human_decision(actor, human_confirm, decision_note, decision_source)
         latest_verification = store.latest_for_task("verification_runs", task_id)
@@ -230,6 +240,13 @@ def complete_task(
         if unresolved_review_findings(store, task_id):
             raise TransitionError("unresolved_review_findings", "completion blocked by unresolved review findings")
         _require_completion_evidence(store, task, latest_verification, snapshot)
+        from .workflow_context import release_commit_transition_metadata, release_commit_verified_verification
+
+        if evidence_status(latest_verification, snapshot) not in {"current", "recorded"}:
+            release_verified = release_commit_verified_verification(store, task_id, latest_verification, snapshot)
+            if release_verified:
+                latest_verification = release_verified
+                commit_transition = release_commit_transition_metadata(store, task_id)
     elif actor == "ai":
         if human_confirm or decision_source in HUMAN_DECISION_SOURCES:
             raise TransitionError("ai_human_decision_forbidden", "AI cannot create a human decision")
@@ -238,15 +255,23 @@ def complete_task(
             ids = ", ".join(item["id"] for item in unresolved[:5])
             raise TransitionError("unresolved_review_findings", f"AI completion blocked by unresolved review findings: {ids}")
         latest_verification, snapshot = _latest_verified_completion_evidence(store, task_id, cwd)
+        from .workflow_context import release_commit_transition_metadata, release_commit_verified_verification
+
+        release_verified = release_commit_verified_verification(store, task_id, latest_verification, snapshot)
+        if release_verified and release_verified.get("id") == latest_verification.get("id") and evidence_status(latest_verification, snapshot) not in {"current", "recorded"}:
+            commit_transition = release_commit_transition_metadata(store, task_id)
     else:
         raise TransitionError("invalid_actor", "actor must be human or ai")
     created_at = now_iso()
+    completed_snapshot = compact_snapshot(snapshot)
+    if commit_transition:
+        completed_snapshot["commit_transition"] = commit_transition
     row = {
         "id": make_id("completion"),
         "task_id": task_id,
         "actor": actor,
         "completed_by": actor,
-        "completed_snapshot": compact_snapshot(snapshot),
+        "completed_snapshot": completed_snapshot,
         "completion_note": reason,
         "accepted_verification_run_ids": [latest_verification["id"]] if latest_verification else [],
         "accepted_review_result_ids": [latest_review["id"]] if latest_review else [],

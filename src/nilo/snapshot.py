@@ -306,6 +306,17 @@ def commit_aware_evidence_status(
     return status
 
 
+def commit_transition_evidence_status(
+    verification_run: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+    commit_transition: dict[str, Any] | None,
+    *,
+    strict: bool = True,
+) -> str:
+    completion = {"completed_snapshot": {"commit_transition": commit_transition or {}}}
+    return commit_aware_evidence_status(verification_run, current_snapshot, completion, strict=strict)
+
+
 def review_result_status(review_result: dict[str, Any], current_snapshot: dict[str, Any]) -> str:
     if snapshots_match(record_snapshot(review_result, "based_on_snapshot"), compact_snapshot(current_snapshot)):
         return "current"

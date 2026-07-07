@@ -16,7 +16,7 @@ from ..task_analytics import project_task_analytics, task_analytics
 from ..task_logic import active_task_completion, completion_status, custom_split_task_specs, projected_task_status, require_ai_completion_evidence, split_task_specs
 from ..timeutil import now_iso
 from ..transitions import TransitionError, complete_task, invalidate_task_completion
-from ..workflow_context import mark_release_commit_recorded
+from ..workflow_context import mark_release_commit_recorded, release_commit_aware_evidence_status
 
 
 def cmd_task_create(args: argparse.Namespace) -> str:
@@ -282,7 +282,10 @@ def cmd_task_status(args: argparse.Namespace) -> None:
         if report:
             print(f"{field_label('latest_report')}: {report['id']} ({report['claimed_status']})")
         completion = active_task_completion(store, args.task)
-        print(f"{field_label('evidence_status')}: {status_label(commit_aware_evidence_status(verification_run, current_snapshot, completion))}")
+        evidence = commit_aware_evidence_status(verification_run, current_snapshot, completion)
+        if evidence == "stale" and completion is None:
+            evidence = release_commit_aware_evidence_status(store, args.task, verification_run, current_snapshot)
+        print(f"{field_label('evidence_status')}: {status_label(evidence)}")
         if verification_run:
             result = "timed_out" if verification_run["timed_out"] else f"exit_code={verification_run['exit_code']}"
             print(f"{field_label('latest_verification_run')}: {verification_run['id']} ({result})")

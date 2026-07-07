@@ -741,6 +741,189 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
             finally:
                 os.chdir(previous_cwd)
 
+    def test_release_commit_metadata_keeps_verified_dirty_tree_current_for_completion(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+
+                root.joinpath("tracked.txt").write_text("verified release change\n", encoding="utf-8")
+                full_verification = full_release_verification_row(release_task_id, root, target_version="0.3.1")
+                store = Store(db)
+                try:
+                    store.insert("verification_runs", full_verification)
+                    context = workflow_context(store, root.name)
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    metadata = {
+                        **(run["metadata"] or {}),
+                        "target_version": "0.3.1",
+                        "verification_snapshot": compact_snapshot(full_verification),
+                        "pre_commit_snapshot": compact_snapshot(full_verification),
+                        "required_full_check": {
+                            "status": "satisfied",
+                            "verification_id": full_verification["id"],
+                            "mode": "full",
+                            "git_head": full_verification["git_head"],
+                            "git_diff_hash": full_verification["git_diff_hash"],
+                            "working_tree_dirty": full_verification["working_tree_dirty"],
+                            "command": release_handler.RELEASE_FULL_CHECK_COMMAND,
+                        },
+                    }
+                    store.update("recipe_runs", run["id"], {"metadata": metadata, "updated_at": now_iso()})
+                finally:
+                    store.close()
+
+                run_git(root, "add", "tracked.txt")
+                run_git(root, "commit", "-m", "Release 0.3.1")
+                post_commit_snapshot = compact_snapshot(current_git_snapshot(root))
+                store = Store(db)
+                try:
+                    mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha=run_git(root, "rev-parse", "HEAD"),
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=post_commit_snapshot,
+                    )
+                finally:
+                    store.close()
+
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "task", "status", "--task", release_task_id, "--ai"])
+                self.assertIn("証跡: 提出あり (present)", status_output.getvalue())
+                self.assertIn("現在タスク完了診断: 完了可能 (completion_allowed)", status_output.getvalue())
+                self.assertNotIn("evidence_stale", status_output.getvalue())
+
+                completion_output = io.StringIO()
+                with redirect_stdout(completion_output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "complete",
+                            "--task",
+                            release_task_id,
+                            "--reason",
+                            "release verified dirty tree was committed",
+                            "--actor",
+                            "human",
+                            "--human-acceptance",
+                            "検証済み dirty tree 由来の commit として受け入れます。",
+                        ]
+                    )
+                self.assertIn("status: completed_by_user", completion_output.getvalue())
+                store = Store(db)
+                try:
+                    completion = store.latest_for_task("task_completions", release_task_id)
+                    self.assertEqual(completion["accepted_verification_run_ids"], [full_verification["id"]])
+                    self.assertFalse([item for item in audit_task(store, release_task_id, cwd=root) if item["severity"] == "error"])
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_fresh_post_release_verification_does_not_attach_stale_commit_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                recipe_output = io.StringIO()
+                with redirect_stdout(recipe_output):
+                    main(["--db", str(db), "recipe", "run", "release", "--project", root.name, "--var", "target_version=0.3.1"])
+                release_task_id = recipe_output.getvalue().strip().splitlines()[-1]
+
+                root.joinpath("tracked.txt").write_text("verified release change\n", encoding="utf-8")
+                full_verification = full_release_verification_row(release_task_id, root, target_version="0.3.1")
+                store = Store(db)
+                try:
+                    store.insert("verification_runs", full_verification)
+                    context = workflow_context(store, root.name)
+                    run = store.get("recipe_runs", context["recipe_run_id"])
+                    metadata = {
+                        **(run["metadata"] or {}),
+                        "target_version": "0.3.1",
+                        "verification_snapshot": compact_snapshot(full_verification),
+                        "pre_commit_snapshot": compact_snapshot(full_verification),
+                        "required_full_check": {
+                            "status": "satisfied",
+                            "verification_id": full_verification["id"],
+                            "mode": "full",
+                            "git_head": full_verification["git_head"],
+                            "git_diff_hash": full_verification["git_diff_hash"],
+                            "working_tree_dirty": full_verification["working_tree_dirty"],
+                            "command": release_handler.RELEASE_FULL_CHECK_COMMAND,
+                        },
+                    }
+                    store.update("recipe_runs", run["id"], {"metadata": metadata, "updated_at": now_iso()})
+                finally:
+                    store.close()
+
+                run_git(root, "add", "tracked.txt")
+                run_git(root, "commit", "-m", "Release 0.3.1")
+                store = Store(db)
+                try:
+                    updated = mark_release_commit_recorded(
+                        store,
+                        task_id=release_task_id,
+                        commit_sha=run_git(root, "rev-parse", "HEAD"),
+                        commit_message="Release 0.3.1",
+                        post_commit_snapshot=compact_snapshot(current_git_snapshot(root)),
+                    )
+                    metadata = {**(updated["metadata"] or {})}
+                    stale_pre_commit = {**(metadata["pre_commit_snapshot"] or {})}
+                    stale_pre_commit["git_diff_hash"] = "stale-release-metadata"
+                    metadata["pre_commit_snapshot"] = stale_pre_commit
+                    store.update("recipe_runs", updated["id"], {"metadata": metadata, "updated_at": now_iso()})
+                    latest = verification_row(release_task_id, root)
+                    latest["id"] = "verification_after_release_commit"
+                    store.insert("verification_runs", latest)
+                finally:
+                    store.close()
+
+                completion_output = io.StringIO()
+                with redirect_stdout(completion_output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "complete",
+                            "--task",
+                            release_task_id,
+                            "--reason",
+                            "fresh verification after release commit",
+                            "--actor",
+                            "human",
+                            "--human-acceptance",
+                            "release commit 後の最新検証を受け入れます。",
+                        ]
+                    )
+                self.assertIn("status: completed_by_user", completion_output.getvalue())
+                store = Store(db)
+                try:
+                    completion = store.latest_for_task("task_completions", release_task_id)
+                    self.assertEqual(completion["accepted_verification_run_ids"], ["verification_after_release_commit"])
+                    self.assertNotIn("commit_transition", completion["completed_snapshot"])
+                    self.assertFalse([item for item in audit_task(store, release_task_id, cwd=root) if item["severity"] == "error"])
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
     def test_release_recipe_context_blocks_unrelated_next_until_public_approval(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

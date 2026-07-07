@@ -13,6 +13,7 @@ from .snapshot import commit_aware_evidence_status, current_git_snapshot, eviden
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, is_task_completed_status, outcome_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
+from .workflow_context import release_commit_aware_evidence_status
 
 
 REVIEW_CLAIM_STALE_AFTER_SECONDS = 900
@@ -267,6 +268,17 @@ def roadmap_task_evidence(store: Store, task: dict, status: str, *, current_snap
             verification_status = "passed"
         else:
             verification_status = "failed"
+    completion = active_task_completion(store, task["id"])
+    latest_evidence_status = (
+        release_commit_aware_evidence_status(
+            store,
+            task["id"],
+            verification_run,
+            current_snapshot,
+        )
+        if completion is None
+        else commit_aware_evidence_status(verification_run, current_snapshot, completion)
+    )
     return {
         "task_id": task["id"],
         "title": task["title"],
@@ -274,7 +286,7 @@ def roadmap_task_evidence(store: Store, task: dict, status: str, *, current_snap
         "task_type": task["task_type"],
         "latest_report_id": report["id"] if report else "",
         "latest_evidence_check_id": "",
-        "latest_evidence_status": commit_aware_evidence_status(verification_run, current_snapshot, active_task_completion(store, task["id"])),
+        "latest_evidence_status": latest_evidence_status,
         "latest_verification_run_id": verification_run["id"] if verification_run else "",
         "latest_verification_status": verification_status,
         "latest_verification_source": verification_run.get("source", "nilo_executed") if verification_run else "",

@@ -102,7 +102,12 @@ def human_completion_note_is_suspicious(completion: dict) -> bool:
 def ai_completion_has_evidence(store, task_id: str) -> bool:
     verification_run = store.latest_for_task("verification_runs", task_id)
     completion = active_task_completion(store, task_id)
-    evidence = commit_aware_evidence_status(verification_run, current_git_snapshot(Path.cwd()), completion)
+    snapshot = current_git_snapshot(Path.cwd())
+    evidence = commit_aware_evidence_status(verification_run, snapshot, completion)
+    if evidence == "stale" and completion is None:
+        from .workflow_context import release_commit_aware_evidence_status
+
+        evidence = release_commit_aware_evidence_status(store, task_id, verification_run, snapshot)
     return evidence in {"current", "recorded", "present"}
 
 
