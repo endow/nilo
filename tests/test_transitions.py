@@ -92,6 +92,78 @@ class TransitionTests(unittest.TestCase):
         store.insert("tasks", task_row())
         return store
 
+    def test_ai_completion_blocks_latest_in_progress_review(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                store.insert("verification_runs", verification_row("task_test", root))
+                snapshot = current_git_snapshot(root)
+                store.insert(
+                    "review_requests",
+                    {
+                        "id": "review_pending",
+                        "task_id": "task_test",
+                        "requester": "codex",
+                        "reviewer": "codex",
+                        "status": "in_progress",
+                        "reason": "self review",
+                        "based_on_event_id": "verification_test",
+                        "based_on_snapshot": snapshot,
+                        "created_at": now_iso(),
+                        "updated_at": now_iso(),
+                    },
+                )
+                with self.assertRaises(TransitionError) as raised:
+                    complete_task(store, "task_test", actor="ai", reason="done", cwd=root)
+                self.assertEqual(raised.exception.code, "review_in_progress")
+            finally:
+                store.close()
+
+    def test_ai_completion_does_not_accept_result_from_another_review_request(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                store.insert("verification_runs", verification_row("task_test", root))
+                snapshot = current_git_snapshot(root)
+                for request_id, status in (("review_old", "completed"), ("review_latest", "failed")):
+                    store.insert(
+                        "review_requests",
+                        {
+                            "id": request_id,
+                            "task_id": "task_test",
+                            "requester": "codex",
+                            "reviewer": "codex",
+                            "status": status,
+                            "reason": "self review",
+                            "based_on_event_id": "verification_test",
+                            "based_on_snapshot": snapshot,
+                            "created_at": now_iso(),
+                            "updated_at": now_iso(),
+                        },
+                    )
+                store.insert(
+                    "review_results",
+                    {
+                        "id": "result_old",
+                        "task_id": "task_test",
+                        "review_request_id": "review_old",
+                        "reviewer": "codex",
+                        "verdict": "approved",
+                        "summary": "ok",
+                        "based_on_event_id": "verification_test",
+                        "based_on_snapshot": snapshot,
+                        "body_md": "# ReviewResult",
+                        "created_at": now_iso(),
+                    },
+                )
+                with self.assertRaises(TransitionError) as raised:
+                    complete_task(store, "task_test", actor="ai", reason="done", cwd=root)
+                self.assertEqual(raised.exception.code, "review_result_missing")
+            finally:
+                store.close()
+
     def test_rejected_outcome_cancels_active_recipe_run(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

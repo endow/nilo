@@ -31,7 +31,7 @@ from ..snapshot import compact_snapshot, current_git_snapshot, review_result_sta
 from ..store import Store
 from ..task_logic import is_task_completed_status, projected_task_status
 from ..timeutil import now_iso
-from ..transitions import TransitionError, import_review_result, update_review_finding
+from ..transitions import TransitionError, import_review_result, update_review_finding, waive_review_request
 
 
 def parse_git_status_porcelain_z(stdout: str) -> list[str]:
@@ -916,7 +916,28 @@ def cmd_review_withdraw(args: argparse.Namespace) -> None:
         store.close()
 
 
-REVIEW_TERMINAL_STATUSES = {"completed", "withdrawn"}
+def cmd_review_waive(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        try:
+            waive_review_request(
+                store,
+                args.review,
+                actor="human",
+                reason=args.reason,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+            )
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
+        print(f"review_request: {args.review}")
+        print("status: waived")
+        print(f"waiver_reason: {args.reason}")
+    finally:
+        store.close()
+
+
+REVIEW_TERMINAL_STATUSES = {"completed", "withdrawn", "waived"}
 REVIEW_WAITABLE_STATUSES = {"requested", "reviewer_unavailable", "claimed", "in_progress", "stale"}
 
 

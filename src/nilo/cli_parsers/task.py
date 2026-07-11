@@ -95,5 +95,6 @@ def register_task(sub: argparse._SubParsersAction, handlers: ModuleType) -> None
     invalidate = completion_sub.add_parser("invalidate")
     invalidate.add_argument("--completion", required=True)
     invalidate.add_argument("--reason", required=True)
-    invalidate.add_argument("--actor", required=True)
+    invalidate.add_argument("--actor", choices=["human"], required=True)
+    invalidate.add_argument("--human-confirm", action="store_true", help="Required to reopen a completed task.")
     invalidate.set_defaults(func=handlers.cmd_task_completion_invalidate)

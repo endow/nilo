@@ -39,6 +39,7 @@ from .quality import (
     cmd_review_status,
     cmd_review_template,
     cmd_review_wait,
+    cmd_review_waive,
     cmd_review_withdraw,
 )
 from .recipe import cmd_recipe_approve_public, cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show

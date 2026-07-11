@@ -2409,6 +2409,7 @@ variables:
                         "not actually approved by a human",
                         "--actor",
                         "human",
+                        "--human-confirm",
                     ]
                 )
             status_output = io.StringIO()
@@ -2422,6 +2423,81 @@ variables:
                 store.close()
             self.assertTrue(completion["invalidated_at"])
             self.assertEqual(completion["invalidation_reason"], "not actually approved by a human")
+
+    def test_task_completion_invalidate_requires_human_confirmation(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_done", "--title", "Done", "--type", "documentation"])
+            store = Store(db)
+            try:
+                store.insert(
+                    "task_completions",
+                    {
+                        "id": "completion_done",
+                        "task_id": "task_done",
+                        "actor": "human",
+                        "completed_by": "human",
+                        "completed_snapshot": {},
+                        "completion_note": "done",
+                        "accepted_verification_run_ids": [],
+                        "accepted_review_result_ids": [],
+                        "human_decision_note": "done",
+                        "completed_with_reservations": 0,
+                        "completed_at": now_iso(),
+                        "reason": "done",
+                        "created_at": now_iso(),
+                    },
+                )
+            finally:
+                store.close()
+
+            with self.assertRaises(SystemExit) as raised:
+                main(["--db", str(db), "task", "completion", "invalidate", "--completion", "completion_done", "--reason", "reopen", "--actor", "human"])
+            self.assertIn("human decision requires human_confirm=True", str(raised.exception))
+
+    def test_review_waiver_requires_human_confirmation_and_records_audit_event(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "Review waiver"])
+            store = Store(db)
+            try:
+                store.insert(
+                    "review_requests",
+                    {
+                        "id": "review_test",
+                        "task_id": "task_test",
+                        "requester": "codex",
+                        "reviewer": "human",
+                        "status": "requested",
+                        "reason": "review",
+                        "based_on_event_id": "",
+                        "based_on_snapshot": {},
+                        "created_at": now_iso(),
+                        "updated_at": now_iso(),
+                    },
+                )
+            finally:
+                store.close()
+
+            with self.assertRaises(SystemExit) as raised:
+                main(["--db", str(db), "review", "waive", "--review", "review_test", "--reason", "緊急修正"])
+            self.assertIn("human decision requires human_confirm=True", str(raised.exception))
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "review", "waive", "--review", "review_test", "--reason", "緊急修正", "--human-confirm"])
+
+            store = Store(db)
+            try:
+                request = store.get("review_requests", "review_test")
+                events = store.list_where("transition_events", "entity_id=?", ("review_test",))
+            finally:
+                store.close()
+            self.assertEqual(request["status"], "waived")
+            self.assertEqual(events[0]["transition"], "waive_review_request")
+            self.assertTrue(events[0]["human_confirmed"])
 
 
     def test_facade_status_non_verbose_uses_fast_path_only(self) -> None:

@@ -95,6 +95,7 @@ GROUPS = {
         "test_review_finding_update_*",
         "test_review_commented_status_has_project_next_action",
         "test_review_withdraw_*",
+        "test_review_waiver_*",
         "test_review_wait_*",
         "test_review_delegate_*",
         "test_review_handoff_*",

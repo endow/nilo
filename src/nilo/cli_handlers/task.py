@@ -554,7 +554,14 @@ def cmd_task_completion_invalidate(args: argparse.Namespace) -> None:
             record_nilo_issue_for_task(store, task["project_id"], task["id"], "task completion invalidate", exc, boundary)
             raise SystemExit(str(exc)) from exc
         try:
-            invalidate_task_completion(store, args.completion, actor=args.actor, reason=args.reason)
+            invalidate_task_completion(
+                store,
+                args.completion,
+                actor=args.actor,
+                reason=args.reason,
+                human_confirm=args.human_confirm,
+                decision_source="human_interactive",
+            )
         except TransitionError as exc:
             raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
         print("status: invalidated")

@@ -211,6 +211,31 @@ def _require_no_open_high_failure(store: Store, task: dict) -> None:
         raise TransitionError("open_high_failure", f"completion blocked by open high failure(s): {ids}")
 
 
+def _require_review_completion_ready(store: Store, task_id: str, snapshot: dict[str, Any]) -> dict | None:
+    """Reject completion when an initiated review has not reached usable evidence."""
+    request = store.latest_for_task("review_requests", task_id)
+    if not request:
+        return None
+    if request["status"] in {"requested", "claimed", "in_progress", "stale", "reviewer_unavailable"}:
+        raise TransitionError("review_in_progress", f"completion blocked while review request is in progress: {request['id']}")
+    if request["status"] == "waived":
+        return None
+    results = store.list_where(
+        "review_results",
+        "task_id=? AND review_request_id=?",
+        (task_id, request["id"]),
+    )
+    result = results[0] if results else None
+    if not result:
+        raise TransitionError("review_result_missing", "completion requires a valid ReviewResult for the initiated review")
+    reviewed_snapshot = result.get("based_on_snapshot") or {}
+    if not reviewed_snapshot:
+        raise TransitionError("review_snapshot_missing", "completion requires ReviewResult snapshot evidence")
+    if reviewed_snapshot.get("git_available") and snapshot.get("git_available") and not snapshots_match(reviewed_snapshot, snapshot):
+        raise TransitionError("review_stale", "completion blocked because the working diff changed after review")
+    return result
+
+
 def _require_completion_evidence(store: Store, task: dict, verification: dict | None, snapshot: dict[str, Any]) -> None:
     if task.get("task_type") != "implementation":
         return
@@ -278,6 +303,7 @@ def complete_task(
             ids = ", ".join(item["id"] for item in unresolved[:5])
             raise TransitionError("unresolved_review_findings", f"AI completion blocked by unresolved review findings: {ids}")
         latest_verification, snapshot = _latest_verified_completion_evidence(store, task_id, cwd)
+        latest_review = _require_review_completion_ready(store, task_id, snapshot) or latest_review
         from .workflow_context import release_commit_transition_metadata, release_commit_verified_verification
 
         release_verified = release_commit_verified_verification(store, task_id, latest_verification, snapshot)
@@ -362,8 +388,16 @@ def complete_task(
 complete_task = atomic_transition(complete_task)
 
 
-def invalidate_task_completion(store: Store, completion_id: str, *, actor: str, reason: str) -> TransitionResult:
-    _require_actor(actor)
+def invalidate_task_completion(
+    store: Store,
+    completion_id: str,
+    *,
+    actor: str,
+    reason: str,
+    human_confirm: bool = False,
+    decision_source: str = "",
+) -> TransitionResult:
+    _require_human_decision(actor, human_confirm, reason, decision_source)
     completion = store.get("task_completions", completion_id)
     if not completion:
         raise TransitionError("completion_not_found", f"task completion not found: {completion_id}")
@@ -380,6 +414,8 @@ def invalidate_task_completion(store: Store, completion_id: str, *, actor: str, 
         "task_completion",
         completion_id,
         actor=actor,
+        decision_source=decision_source,
+        human_confirmed=human_confirm,
         reason=reason,
         previous_state="active",
         new_state="invalidated",
@@ -389,6 +425,58 @@ def invalidate_task_completion(store: Store, completion_id: str, *, actor: str, 
 
 
 invalidate_task_completion = atomic_transition(invalidate_task_completion)
+
+
+def waive_review_request(
+    store: Store,
+    review_id: str,
+    *,
+    actor: str,
+    reason: str,
+    human_confirm: bool = False,
+    decision_source: str = "",
+) -> TransitionResult:
+    _require_human_decision(actor, human_confirm, reason, decision_source)
+    request = store.get("review_requests", review_id)
+    if not request:
+        raise TransitionError("review_request_not_found", f"review request not found: {review_id}")
+    if request["status"] == "completed":
+        raise TransitionError("review_already_completed", f"completed review cannot be waived: {review_id}")
+    waived_at = now_iso()
+    store.update(
+        "review_requests",
+        review_id,
+        {
+            "status": "waived",
+            "withdrawn_reason": reason,
+            "withdrawn_actor": actor,
+            "withdrawn_at": waived_at,
+            "updated_at": waived_at,
+        },
+    )
+    _event(
+        store,
+        "waive_review_request",
+        "review_request",
+        review_id,
+        actor=actor,
+        decision_source=decision_source,
+        human_confirmed=human_confirm,
+        reason=reason,
+        previous_state=request["status"],
+        new_state="waived",
+        related_ids={"task": request["task_id"]},
+    )
+    return _result(
+        "waive_review_request",
+        actor,
+        updated_ids={"review_request": review_id},
+        previous_status=request["status"],
+        new_status="waived",
+    )
+
+
+waive_review_request = atomic_transition(waive_review_request)
 
 
 def record_outcome_decision(
