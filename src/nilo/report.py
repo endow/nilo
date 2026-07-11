@@ -29,6 +29,8 @@ REQUIRED_SECTIONS = [
     ("6. 人間に確認してほしい点", ["人間に確認してほしい点"]),
 ]
 
+EXTENSIONLESS_FILE_NAMES = {"Makefile", "Dockerfile", "Containerfile", "LICENSE", "NOTICE", "README"}
+
 
 def parse_sections(markdown: str) -> dict[str, str]:
     matches = list(re.finditer(r"^#{2,3}\s+(.+?)\s*$", markdown, flags=re.MULTILINE))
@@ -64,19 +66,35 @@ def is_placeholder(value: str) -> bool:
 
 
 def is_probable_path(value: str) -> bool:
+    normalized = normalize_reported_path(value)
+    if normalized is None:
+        return False
+    return _is_probable_normalized_path(normalized)
+
+
+def normalize_reported_path(value: str) -> str | None:
     normalized = value.strip().strip("\"'").replace("\\", "/")
     if not normalized or re.search(r"[\r\n]", normalized):
-        return False
+        return None
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:/", normalized)
+        or any(part in ("", ".", "..") for part in normalized.split("/"))
+    ):
+        return None
+    return normalized
+
+
+def _is_probable_normalized_path(normalized: str) -> bool:
     has_whitespace = bool(re.search(r"\s", normalized))
-    if normalized.startswith(("./", "../")):
-        return _has_pathlike_leaf(normalized) if has_whitespace else True
-    if re.match(r"^[A-Za-z]:/", normalized):
-        return _has_pathlike_leaf(normalized) if has_whitespace else True
     if "/" in normalized:
-        if not all(part not in ("", ".", "..") for part in normalized.split("/")):
-            return False
         return _has_pathlike_leaf(normalized) if has_whitespace else True
     if re.match(r"^\.[A-Za-z0-9][A-Za-z0-9_.-]*$", normalized):
+        return True
+    if normalized in EXTENSIONLESS_FILE_NAMES:
         return True
     return bool(re.match(r"^[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+$", normalized))
 
@@ -85,7 +103,7 @@ def _has_pathlike_leaf(value: str) -> bool:
     leaf = value.rsplit("/", 1)[-1]
     return bool(
         re.search(r"\.[A-Za-z0-9_.-]+$", leaf)
-        or leaf in {"Makefile", "Dockerfile", "Containerfile", "LICENSE", "README"}
+        or leaf in EXTENSIONLESS_FILE_NAMES
     )
 
 
@@ -100,8 +118,9 @@ def extract_changed_files(markdown: str) -> list[str]:
         value = value.strip("`").strip("\"'")
         if not value or is_placeholder(value):
             continue
-        if is_probable_path(value):
-            files.append(value.replace("\\", "/"))
+        normalized = normalize_reported_path(value)
+        if normalized is not None and _is_probable_normalized_path(normalized):
+            files.append(normalized)
     return sorted(set(files))
 
 

@@ -67,6 +67,22 @@ class GuardTests(unittest.TestCase):
         report = VALID_REPORT.replace("- src/nilo/guard.py", "- src/nilo/Makefile")
         self.assertEqual(extract_changed_files(report), ["src/nilo/Makefile"])
 
+    def test_extract_changed_files_accepts_root_extensionless_files(self) -> None:
+        for path in ("LICENSE", "Makefile", "Dockerfile", "NOTICE", "README"):
+            with self.subTest(path=path):
+                report = VALID_REPORT.replace("- src/nilo/guard.py", f"- {path}")
+                self.assertEqual(extract_changed_files(report), [path])
+
+    def test_extract_changed_files_normalizes_leading_dot_slash(self) -> None:
+        report = VALID_REPORT.replace("- src/nilo/guard.py", "- ./LICENSE")
+        self.assertEqual(extract_changed_files(report), ["LICENSE"])
+
+    def test_extract_changed_files_rejects_non_local_paths(self) -> None:
+        for path in ("/tmp/LICENSE", "../LICENSE", "docs/../../LICENSE", "C:/repo/LICENSE"):
+            with self.subTest(path=path):
+                report = VALID_REPORT.replace("- src/nilo/guard.py", f"- {path}")
+                self.assertEqual(extract_changed_files(report), [])
+
     def test_extract_changed_files_accepts_dotfiles(self) -> None:
         report = VALID_REPORT.replace("- src/nilo/guard.py", "- .gitignore")
         self.assertEqual(extract_changed_files(report), [".gitignore"])
@@ -74,6 +90,10 @@ class GuardTests(unittest.TestCase):
     def test_extract_changed_files_accepts_paths_with_spaces(self) -> None:
         report = VALID_REPORT.replace("- src/nilo/guard.py", "- src/nilo/My Report.md")
         self.assertEqual(extract_changed_files(report), ["src/nilo/My Report.md"])
+
+    def test_extract_changed_files_accepts_extensionless_paths_below_directories_with_spaces(self) -> None:
+        report = VALID_REPORT.replace("- src/nilo/guard.py", "- legal notices/NOTICE")
+        self.assertEqual(extract_changed_files(report), ["legal notices/NOTICE"])
 
     def test_extract_changed_files_ignores_prose_with_path_and_spaces(self) -> None:
         report = VALID_REPORT.replace("- src/nilo/guard.py", "- src/nilo/My Report.md を修正")
