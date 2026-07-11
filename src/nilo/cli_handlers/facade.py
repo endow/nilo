@@ -62,6 +62,24 @@ WORK_RECIPE_ALIASES = {
     "document": "docs-update",
     "design": "basic-design",
 }
+
+WORK_READ_ONLY_PATTERNS = (
+    r"^(タスク|プロジェクト|ロードマップ|roadmap)(の)?(状態|状況)(を)?(教えて|見せて|確認して)?[。！？!?]*$",
+    r"^(状態|状況)(を)?(教えて|見せて|確認して)[。！？!?]*$",
+    r"^(what(?:'s| is) |show |check )?(the )?(task |project |roadmap )?(status|state)\??$",
+)
+
+
+def read_only_work_route(request: str) -> dict[str, str] | None:
+    """Route unambiguous inspection requests without creating lifecycle state."""
+    normalized = " ".join(request.strip().lower().split())
+    if not normalized:
+        return None
+    if any(re.fullmatch(pattern, normalized, flags=re.IGNORECASE) for pattern in WORK_READ_ONLY_PATTERNS):
+        if "roadmap" in normalized or "ロードマップ" in normalized:
+            return {"kind": "roadmap_status", "command": "nilo roadmap status --ai"}
+        return {"kind": "project_status", "command": "nilo status --ai"}
+    return None
 WORK_RECIPE_ACCEPTANCE = {
     "docs-update": [
         "対象読者が明確である",
@@ -422,6 +440,51 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
             payload = _work_stop_payload("project_not_found", project_id=project_id, next_commands=[f"nilo init --project {project_id}"])
             payload["project_boundary"] = boundary.to_dict()
             print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
+        read_only_route = None
+        if not getattr(args, "task", None) and not getattr(args, "check", None):
+            read_only_route = read_only_work_route(request)
+        if read_only_route:
+            if read_only_route["kind"] == "project_status":
+                data = project_ai_context(store, project_id, snapshot_mode="fast", verbose=False)
+                data["read_only"] = True
+                data["task_created"] = False
+                if getattr(args, "json", False):
+                    print(json.dumps(data, ensure_ascii=False, indent=2))
+                else:
+                    if boundary.should_print_text():
+                        for line in boundary.text_lines():
+                            print(line)
+                        print()
+                    print(render_ai_context_text(data, max_chars=AI_CONTEXT_TEXT_MAX_CHARS))
+                    print("task_created: false")
+                return
+            if read_only_route["kind"] == "roadmap_status":
+                from .roadmap import cmd_roadmap_status
+
+                cmd_roadmap_status(argparse.Namespace(db=args.db, project=project_id, ai=True, raw=False, debug=False))
+                print("task_created: false")
+                return
+            payload = {
+                "status": "read_only",
+                "project_id": project_id,
+                "request": request,
+                "route": read_only_route["kind"],
+                "next": [f"{read_only_route['command']} --project {project_id}"],
+                "project_boundary": boundary.to_dict(),
+            }
+            if boundary.should_print_text() and not getattr(args, "json", False):
+                for line in boundary.text_lines():
+                    print(line)
+                print()
+            if getattr(args, "json", False):
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print("status: read_only")
+                print(f"route: {payload['route']}")
+                print("task_created: false")
+                print("next:")
+                print(f"- {payload['next'][0]}")
             return
         workflow = workflow_context(store, project_id)
         if workflow.get("type") == "recipe_run":

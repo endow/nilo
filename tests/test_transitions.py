@@ -173,6 +173,36 @@ class TransitionTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_ai_completion_rejects_high_risk_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                task = store.get("tasks", "task_test")
+                task["risk_level"] = "high"
+                store.update("tasks", "task_test", task)
+                store.insert("verification_runs", verification_row("task_test", Path.cwd()))
+
+                with self.assertRaises(TransitionError) as ctx:
+                    complete_task(store, "task_test", actor="ai", reason="verified", cwd=Path.cwd())
+
+                self.assertEqual("human_completion_required", ctx.exception.code)
+            finally:
+                store.close()
+
+    def test_ai_completion_rejects_release_recipe_task_even_when_medium_risk(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                store.insert("recipe_runs", {"id": "recipe_test", "project_id": "project_test", "task_id": "task_test", "recipe_name": "release", "status": "active", "current_step": "verify", "completed_steps": [], "pending_steps": [], "pending_public_operations": [], "metadata": {}, "created_at": now_iso(), "updated_at": now_iso()})
+                store.insert("verification_runs", verification_row("task_test", Path.cwd()))
+                with self.assertRaises(TransitionError) as ctx:
+                    complete_task(store, "task_test", actor="ai", reason="verified", cwd=Path.cwd())
+                self.assertEqual("human_completion_required", ctx.exception.code)
+            finally:
+                store.close()
+
     def test_first_verification_records_missing_task_base_commit(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

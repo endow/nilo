@@ -145,6 +145,10 @@ def project_ai_context(
         pending_revisions = p.pending_roadmap_revisions(store, project_id)
         next_actions = p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
     failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
+    if current:
+        working_tree = "dirty" if current.get("git", {}).get("dirty") else "clean"
+    else:
+        working_tree = "dirty" if current_git_snapshot(cwd, mode=snapshot_mode)["working_tree_dirty"] else "clean"
     verbose_context = {
         "project_id": project_id,
         "project_name": project["name"],
@@ -152,6 +156,7 @@ def project_ai_context(
         "workflow_context": workflow,
         "current_task": current,
         "next_required_actions": next_actions,
+        "working_tree": working_tree,
         "failure_summary": {
             "open_failures": failure_summary["open_failure_count"],
             "high_open_failures": failure_summary["high_open_failure_count"],
@@ -196,6 +201,7 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
     latest_review = {"unresolved_count": 0, "unresolved_blocking_count": 0}
     write_context_token = ""
     latest_task_status_event_id = ""
+    working_tree = data.get("working_tree", "unknown")
     if current:
         task = current["task"]
         completion = current["completion"]
@@ -214,6 +220,7 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
         }
         write_context_token = current.get("write_context_token", "")
         latest_task_status_event_id = current.get("latest_task_status_event_id", "")
+        working_tree = "dirty" if current.get("git", {}).get("dirty") else "clean"
 
     next_actions = data.get("next_required_actions") or []
     next_action = next_actions[0] if next_actions else ""
@@ -235,6 +242,7 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
         "latest_review": latest_review,
         "write_context_token": write_context_token,
         "latest_task_status_event_id": latest_task_status_event_id,
+        "working_tree": working_tree,
         "failure_summary": data.get("failure_summary", {}),
         "required_commands": required_commands,
         "detail_commands": detail_commands,
@@ -264,6 +272,7 @@ def _compact_release_recipe_context(data: dict[str, Any], workflow: dict[str, An
             "title": task.get("title") or "release",
             "status": task.get("state") or status,
         },
+        "working_tree": "dirty" if current.get("git", {}).get("dirty") else "clean",
         "blockers": {"count": len(blockers), "items": blockers[:3]},
         "latest_verification": {
             "status": evidence.get("status", "none"),
@@ -541,21 +550,10 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
     action = data.get("next_action") or ""
     required.append("next_action:")
     required.append(f"- {_compact_next_action_text(action) if action else 'なし'}")
-    required.append("roadmap_response_rules:")
-    required.append("- まず実装タスクが残っているかを答える。")
-    required.append("- 次に roadmap commitment のクローズ状態を説明する。")
-    required.append("- 内部状態名は原則出さず、最後に次の人間判断を示す。")
-    required.append("overdrive_rules: 既定は現在依頼対象。unrelated task 前で停止し、報告は実装/テスト/Nilo帳票md/docs mdを分ける。")
+    required.append(f"working_tree: {data.get('working_tree', 'unknown')}")
     for key in ("reason", "failed_verification_id", "resume_command", "required_approval_text", "command_after_approval", "command"):
         if data.get(key):
             required.append(f"{key}: {data[key]}")
-
-    required.append("detail_commands:")
-    detail_commands = data.get("detail_commands", [])
-    if detail_commands:
-        required.extend(f"- {command}" for command in detail_commands)
-    else:
-        required.append("- none")
 
     blockers = data.get("blockers") or {}
     blocker_items = blockers.get("items") or []
@@ -576,17 +574,6 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
         f"unresolved={review.get('unresolved_count', 0)} "
         f"blocking={review.get('unresolved_blocking_count', 0)}"
     )
-
-    failure_summary = data.get("failure_summary") or {}
-    if failure_summary:
-        latest = failure_summary.get("latest_open_failure")
-        latest_text = "none" if not latest else f"{latest['task_id']} {latest['category']}"
-        required.append(
-            "failure_summary: "
-            f"open={failure_summary.get('open_failures', 0)} "
-            f"high={failure_summary.get('high_open_failures', 0)} "
-            f"latest={latest_text}"
-        )
 
     required.append("required_commands:")
     commands = data.get("required_commands") or []

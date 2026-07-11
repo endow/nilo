@@ -110,7 +110,8 @@ class StatusSurfaceRegressionTests(unittest.TestCase):
         status_body = status_output.getvalue()
         self.assertIn("active_task: task_surface [completion_needs_review] Status surface task", status_body)
         self.assertIn("latest_verification: status=missing", status_body)
-        self.assertIn("nilo task status --task task_surface --ai", status_body)
+        self.assertNotIn("detail_commands:", status_body)
+        self.assertIn("required_commands:", status_body)
 
         next_body = next_output.getvalue()
         self.assertIn("タスク: task_surface", next_body)

@@ -1521,6 +1521,71 @@ variables:
             self.assertIsNotNone(completion)
             self.assertIsNotNone(verification)
 
+    def test_facade_work_routes_read_only_status_without_creating_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "タスク状態を教えて"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("task_created: false", output.getvalue())
+            self.assertIn("active_task: none", output.getvalue())
+            self.assertIn("working_tree: clean", output.getvalue())
+            store = Store(db)
+            try:
+                self.assertEqual([], store.list_where("tasks", "project_id=?", (project_id,)))
+            finally:
+                store.close()
+
+    def test_facade_work_read_only_json_has_route_and_no_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "work", "roadmap status"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn(f"project_id: {project_id}", output.getvalue())
+            self.assertIn("roadmap_agent_state:", output.getvalue())
+            self.assertIn("task_created: false", output.getvalue())
+
+    def test_status_ai_fast_snapshot_reports_untracked_file_as_dirty(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+                (root / "untracked.txt").write_text("new", encoding="utf-8")
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "status", "--ai"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("working_tree: dirty", output.getvalue())
+
     def test_facade_work_does_not_select_release_recipe_for_meta_release_requests(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2351,7 +2416,8 @@ variables:
 
                 body = status_text.getvalue()
                 self.assertIn("active_task: none", body)
-                self.assertIn("detail_commands:", body)
+                self.assertNotIn("detail_commands:", body)
+                self.assertIn("required_commands:", body)
                 self.assertNotIn("現在タスク完了診断", body)
                 self.assertNotIn("完了可否", body)
             finally:
@@ -2418,7 +2484,8 @@ variables:
                 self.assertLessEqual(len(compact_body), AI_CONTEXT_TEXT_MAX_CHARS)
                 self.assertIn("active_task: task_compact_budget", compact_body)
                 self.assertIn("next_action:", compact_body)
-                self.assertIn("detail_commands:", compact_body)
+                self.assertNotIn("detail_commands:", compact_body)
+                self.assertIn("required_commands:", compact_body)
 
                 status_json = io.StringIO()
                 with redirect_stdout(status_json):
@@ -2463,7 +2530,8 @@ variables:
         self.assertLessEqual(len(body), AI_CONTEXT_TEXT_MAX_CHARS)
         self.assertIn("active_task: none", body)
         self.assertIn("next_action:", body)
-        self.assertIn("detail_commands:", body)
+        self.assertNotIn("detail_commands:", body)
+        self.assertIn("required_commands:", body)
 
     def test_ai_status_missing_project_exits_cleanly(self) -> None:
         with TemporaryDirectory() as directory:
@@ -3407,10 +3475,12 @@ variables:
             self.assertIn("nilo roadmap task-plan", body)
             self.assertNotIn("MCP lazy loading", body)
             self.assertNotIn("MCP が使えなければ CLI", body)
-            self.assertIn("最終完了/commit/force/roadmap close は人間が行う", body)
+            self.assertIn("通常変更は検証成功かつ unresolved review finding がなければ AI 完了可", body)
+            self.assertIn("高リスク変更、commit、force、roadmap close は人間が行う", body)
+            self.assertIn("読み取り専用依頼は Task 化せず", body)
             self.assertIn("`--human-acceptance`", body)
             self.assertIn("nilo help ai", body)
-            self.assertLess(len(body), 2400)
+            self.assertLess(len(body), 2500)
             self.assertNotIn("## 全コマンド一覧", body)
             self.assertNotIn("nilo project export-handson --project project_test --file HANDOFF.md", body)
             self.assertNotIn("nilo task create --project project_test", body)
@@ -3507,7 +3577,9 @@ variables:
             self.assertIn("nilo review status --task <task_id> --format json", body)
             self.assertIn("`review status` に `--project` は付けない", body)
             self.assertIn("大きな作業の扱い", body)
-            self.assertIn("最終完了/commit/force/roadmap close は人間が行う", body)
+            self.assertIn("通常変更は検証成功かつ unresolved review finding がなければ AI 完了可", body)
+            self.assertIn("高リスク変更、commit、force、roadmap close は人間が行う", body)
+            self.assertIn("読み取り専用依頼は Task 化せず", body)
             self.assertIn("roadmap close", body)
             present = [command for command in verbose_reference_only_commands if command in body]
             self.assertEqual([], present)

@@ -312,7 +312,8 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 {boundary_prompt}
 
 Normal work:
-- 通常依頼はまず `nilo work "<依頼内容>" --project {project_id}`。
+- 状態確認、説明、調査などの読み取り専用依頼は Task 化せず、対応する read-only command を直接使う。
+- 変更を伴う通常依頼はまず `nilo work "<依頼内容>" --project {project_id}`。
 - 停止時だけ `nilo status --ai --project {project_id}` -> `nilo next --project {project_id}` fallback。next は先頭 action だけ。
 - active recipe 中は recipe のみ。
 - 保存文面は primary_language={primary_language}。command/path/status/enum/JSONは原文。
@@ -321,7 +322,7 @@ Normal work:
 - evidence が stale / missing / failed の場合は完了扱いしない。
 - unresolved review finding がある場合は完了扱いしない。
 - 検証後は `nilo check --task <task_id> "..."`。`nilo work --check` は検証成功時に AI 完了報告まで記録するため、完了判断前の検証記録には使わない。
-- 最終完了/commit/force/roadmap close は人間が行う。`--human-acceptance`。
+- 通常変更は検証成功かつ unresolved review finding がなければ AI 完了可。高リスク変更、commit、force、roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
 - Claude レビューの通常導線は `nilo review claude --task <task_id>`。MCP は補助/高度用途で通常入口ではない。

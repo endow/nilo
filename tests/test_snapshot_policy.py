@@ -142,11 +142,11 @@ class SnapshotPolicyTests(unittest.TestCase):
             self.assertEqual(snapshot["snapshot_mode"], "fast")
             self.assertEqual(snapshot["git_diff_hash"], UNCOMPUTED_DIFF_HASH)
             self.assertFalse(snapshot["git_diff_hash_computed"])
-            self.assertEqual(snapshot["observed_paths"], ["README.md"])
+            self.assertEqual(snapshot["observed_paths"], ["README.md", "untracked.txt"])
             self.assertTrue(snapshot["working_tree_dirty"])
             self.assertNotIn("snapshot_hashed_paths", snapshot)
 
-    def test_fast_snapshot_uses_no_untracked_and_never_runs_git_diff(self) -> None:
+    def test_fast_snapshot_includes_untracked_and_never_runs_git_diff(self) -> None:
         calls = []
 
         def fake_git_output(args: list[str], cwd: Path) -> tuple[int, str, str]:
@@ -157,7 +157,7 @@ class SnapshotPolicyTests(unittest.TestCase):
             if args == ["rev-parse", "HEAD"]:
                 return 0, "abc123", ""
             if args[:4] == ["-c", "core.quotepath=false", "status", "--porcelain=v1"]:
-                self.assertEqual(args[4], "--untracked-files=no")
+                self.assertEqual(args[4], "--untracked-files=normal")
                 return 0, " M README.md", ""
             return 1, "", "unexpected command"
 
@@ -167,9 +167,9 @@ class SnapshotPolicyTests(unittest.TestCase):
         self.assertEqual(snapshot["git_head"], "abc123")
         self.assertEqual(snapshot["git_diff_hash"], UNCOMPUTED_DIFF_HASH)
         self.assertTrue(snapshot["working_tree_dirty"])
-        self.assertIn(["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=no"], calls)
+        self.assertIn(["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=normal"], calls)
 
-    def test_fast_snapshot_dirty_is_tracked_dirty_only(self) -> None:
+    def test_fast_snapshot_dirty_includes_untracked_files(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             init_repo(root)
@@ -177,8 +177,8 @@ class SnapshotPolicyTests(unittest.TestCase):
 
             snapshot = current_git_snapshot_fast(root)
 
-            self.assertFalse(snapshot["working_tree_dirty"])
-            self.assertEqual(snapshot["observed_paths"], [])
+            self.assertTrue(snapshot["working_tree_dirty"])
+            self.assertEqual(snapshot["observed_paths"], ["untracked.txt"])
 
     def test_full_snapshot_wrapper_uses_full_mode(self) -> None:
         with TemporaryDirectory() as directory:

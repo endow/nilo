@@ -69,7 +69,8 @@ def current_git_snapshot(cwd: Path, mode: str = SNAPSHOT_MODE_FULL) -> dict[str,
     if mode not in {SNAPSHOT_MODE_FULL, SNAPSHOT_MODE_FAST}:
         raise ValueError(f"unknown git snapshot mode: {mode}")
 
-    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "no"
+    # Fast snapshots skip content hashing, but still need an accurate dirty bit.
+    untracked = "all" if mode == SNAPSHOT_MODE_FULL else "normal"
     status_code, status, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", f"--untracked-files={untracked}"], cwd)
     if status_code != 0:
         return {

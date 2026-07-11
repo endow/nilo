@@ -295,9 +295,9 @@ class FailureLedgerTests(unittest.TestCase):
             with redirect_stdout(output):
                 main(["--db", str(db), "status", "--project", "project_test", "--ai"])
             body = output.getvalue()
-            self.assertIn("failure_summary: open=1", body)
-            self.assertIn("detail_commands:", body)
-            self.assertIn("nilo failure list --project project_test", body)
+            self.assertNotIn("failure_summary:", body)
+            self.assertNotIn("detail_commands:", body)
+            self.assertNotIn("nilo failure list --project project_test", body)
             self.assertNotIn("metadata_mismatch message metadata_mismatch message", body)
 
     def test_status_text_surfaces_use_japanese_labels_but_json_stays_machine_readable(self) -> None:
@@ -320,7 +320,7 @@ class FailureLedgerTests(unittest.TestCase):
             self.assertIn("active_task:", ai_body)
             self.assertIn("next_action:", ai_body)
             self.assertIn("latest_verification: status=missing", ai_body)
-            self.assertIn("detail_commands:", ai_body)
+            self.assertNotIn("detail_commands:", ai_body)
 
             verbose_ai_output = io.StringIO()
             with redirect_stdout(verbose_ai_output):

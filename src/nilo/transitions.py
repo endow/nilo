@@ -53,6 +53,26 @@ HUMAN_DECISION_SOURCES = {"human_interactive", "human_explicit"}
 TRUSTED_VERIFICATION_SOURCES = {"nilo_executed"}
 AI_ALLOWED_TODO_STATUSES = {"triaged", "ready", "ad_hoc_approved", "requires_roadmap", "blocked"}
 CLOSED_TODO_STATUSES = {"rejected", "deferred", "superseded", "converted_to_task"}
+HIGH_RISK_COMPLETION_TERMS = (
+    "db schema",
+    "database schema",
+    "schema migration",
+    "状態遷移",
+    "state transition",
+    "破壊的",
+    "destructive",
+    "本番公開",
+    "production publish",
+)
+
+
+def requires_human_completion(store: Store, task: dict) -> bool:
+    if task.get("risk_level") == "high":
+        return True
+    if store.list_where("recipe_runs", "task_id=? AND recipe_name='release'", (task["id"],)):
+        return True
+    text = f"{task.get('title', '')} {task.get('description', '')}".lower()
+    return any(term in text for term in HIGH_RISK_COMPLETION_TERMS)
 
 
 def _require_actor(actor: str) -> None:
@@ -249,6 +269,8 @@ def complete_task(
     elif actor == "ai":
         if human_confirm or decision_source in HUMAN_DECISION_SOURCES:
             raise TransitionError("ai_human_decision_forbidden", "AI cannot create a human decision")
+        if requires_human_completion(store, task):
+            raise TransitionError("human_completion_required", "high-risk task completion requires an explicit human decision")
         unresolved = unresolved_review_findings(store, task_id)
         if unresolved:
             ids = ", ".join(item["id"] for item in unresolved[:5])

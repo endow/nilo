@@ -417,7 +417,8 @@ class CliGitIntegrationTests(unittest.TestCase):
                 self.assertIn("active_task: task_ai [planned] AI compact", body)
                 self.assertIn("latest_verification: status=missing", body)
                 self.assertIn("latest_review: unresolved=1", body)
-                self.assertIn("detail_commands:", body)
+                self.assertNotIn("detail_commands:", body)
+                self.assertIn("required_commands:", body)
                 self.assertNotIn("完了可否", body)
                 self.assertLess(len(body), 1200)
 
@@ -812,7 +813,7 @@ class CliGitIntegrationTests(unittest.TestCase):
             self.assertIn("summarize_current_commitment", [item["action_id"] for item in summary["roadmap_agent_next_actions"]])
             self.assertEqual(len(summary["next_actions"]), 1)
             self.assertTrue(summary["next_actions"][0].startswith("task_assess: "))
-            self.assertIn("review the diff", summary["next_actions"][0])
+            self.assertIn("review dirty-tree verification metadata", summary["next_actions"][0])
             self.assertNotIn("close commitment", summary["next_actions"][0])
             self.assertNotIn("--actor ai", summary["next_actions"][0])
             self.assertNotIn("nilo roadmap discuss --project project_test", summary["next_actions"][0])
@@ -833,7 +834,7 @@ class CliGitIntegrationTests(unittest.TestCase):
             self.assertNotIn("action_id: close_roadmap_commitment", text_summary_body)
             self.assertNotIn("--actor ai", text_summary_body)
             self.assertIn("task_assess:", text_summary_body)
-            self.assertIn("review the diff", text_summary_body)
+            self.assertIn("review dirty-tree verification metadata", text_summary_body)
 
             status_output = io.StringIO()
             with redirect_stdout(status_output):
@@ -847,7 +848,7 @@ class CliGitIntegrationTests(unittest.TestCase):
             self.assertNotIn(".nilo/roadmap/project_test/roadmap_proposal.md", status_body)
             self.assertNotIn(str(proposal), status_body)
             self.assertNotIn("close commitment", status_body)
-            self.assertIn("review the diff", status_body)
+            self.assertIn("review dirty-tree verification metadata", status_body)
             self.assertNotIn("run nilo roadmap assess --project project_test for final human review", status_body)
 
             roadmap_status_output = io.StringIO()
