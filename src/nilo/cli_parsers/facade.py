@@ -100,3 +100,13 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     add_project_option(reject)
     add_task_option(reject)
     reject.set_defaults(func=handlers.cmd_facade_reject)
+
+    cancel = sub.add_parser("cancel", help="Cancel an unfinished task without recording completion or rejection.")
+    cancel.add_argument("reason")
+    add_project_option(cancel)
+    add_task_option(cancel)
+    cancel.add_argument("--actor", choices=["ai", "human"], required=True)
+    cancel.add_argument("--human-confirm", action="store_true")
+    cancel.add_argument("--decision-note", default="")
+    cancel.add_argument("--human-acceptance", default="", help="Human-written cancellation confirmation; implies --human-confirm.")
+    cancel.set_defaults(func=handlers.cmd_facade_cancel)

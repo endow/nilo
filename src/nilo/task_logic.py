@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 COMPLETED_STATUSES = {"completed_by_user", "completed_by_ai"}
-CLOSED_STATUSES = COMPLETED_STATUSES | {"rejected_by_user"}
+CLOSED_STATUSES = COMPLETED_STATUSES | {"rejected_by_user", "cancelled"}
 
 
 def outcome_status(decision: str) -> str:

@@ -468,6 +468,7 @@ TOP_LEVEL_COMMANDS = {
     "backups",
     "check",
     "done",
+    "cancel",
     "doctor",
     "evidence",
     "failure",

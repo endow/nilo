@@ -26,6 +26,7 @@ from ..snapshot import commit_aware_evidence_status, current_git_snapshot_fast, 
 from ..store import Store
 from ..task_logic import active_task_completion, completion_audit_issues, is_task_completed_status, projected_task_status
 from ..timeutil import now_iso
+from ..transitions import TransitionError, cancel_task
 from ..workflow_context import workflow_context
 from .task import cmd_task_complete, cmd_task_create
 from .workflow import cmd_outcome_record, cmd_report_import, cmd_verification_run
@@ -1410,4 +1411,19 @@ def cmd_facade_reject(args: argparse.Namespace) -> None:
             decision="rejected",
         )
     )
+    print("closed: true")
+
+
+def cmd_facade_cancel(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        task_id = resolve_task_id(args, store)
+        try:
+            human_acceptance = (args.human_acceptance or "").strip()
+            cancel_task(store, task_id, actor=args.actor, reason=args.reason, human_confirm=bool(args.human_confirm or human_acceptance), decision_note=(args.decision_note or human_acceptance))
+        except TransitionError as exc:
+            raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
+    finally:
+        store.close()
+    print("status: cancelled")
     print("closed: true")

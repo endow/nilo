@@ -8,6 +8,7 @@ from .facade import (
     cmd_facade_next,
     cmd_facade_queue,
     cmd_facade_reject,
+    cmd_facade_cancel,
     cmd_facade_report,
     cmd_facade_start,
     cmd_facade_status,

@@ -1487,6 +1487,33 @@ variables:
             self.assertIn(wanted_task_id, next_output.getvalue())
             self.assertNotIn(mistaken_task_id, next_output.getvalue())
 
+    def test_facade_cancel_closes_unfinished_task_without_failure_log(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_cancel", "--title", "Cancel me"])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "cancel", "--task", "task_cancel", "--actor", "ai", "誤って作成したため"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("status: cancelled", output.getvalue())
+            self.assertIn("closed: true", output.getvalue())
+            store = Store(db)
+            try:
+                task = store.get("tasks", "task_cancel")
+                self.assertEqual("cancelled", projected_task_status(store, task))
+                self.assertEqual([], store.list_where("failure_logs", "task_id=?", ("task_cancel",)))
+            finally:
+                store.close()
+
     def test_facade_work_creates_recipe_backed_task_and_records_check_completion(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

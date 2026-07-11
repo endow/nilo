@@ -13,6 +13,7 @@ from nilo.timeutil import now_iso
 from nilo.transitions import (
     TransitionError,
     accept_roadmap_revision,
+    cancel_task,
     complete_task,
     create_task_from_todo,
     import_agent_report,
@@ -650,6 +651,49 @@ class TransitionTests(unittest.TestCase):
                 stale_snapshot["git_diff_hash"] = "different"
                 status = projected_task_status(store, store.get("tasks", "task_test"), current_snapshot=stale_snapshot)
                 self.assertEqual(status, "completion_needs_review")
+            finally:
+                store.close()
+
+    def test_cancel_is_terminal_after_late_verification(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            try:
+                cancel_task(store, "task_test", actor="ai", reason="mistaken task")
+                store.insert("verification_runs", verification_row("task_test", Path.cwd()))
+                self.assertEqual("cancelled", projected_task_status(store, store.get("tasks", "task_test")))
+            finally:
+                store.close()
+
+    def test_cancel_rejects_completed_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            try:
+                store.insert("verification_runs", verification_row("task_test", Path.cwd()))
+                complete_task(store, "task_test", actor="ai", reason="done", cwd=Path.cwd())
+                with self.assertRaises(TransitionError) as ctx:
+                    cancel_task(store, "task_test", actor="ai", reason="too late")
+                self.assertEqual("task_already_closed", ctx.exception.code)
+            finally:
+                store.close()
+
+    def test_human_cancel_requires_confirmation(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            try:
+                with self.assertRaises(TransitionError) as ctx:
+                    cancel_task(store, "task_test", actor="human", reason="cancel")
+                self.assertEqual("human_confirm_required", ctx.exception.code)
+            finally:
+                store.close()
+
+    def test_cancel_rejects_active_recipe_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            try:
+                store.insert("recipe_runs", {"id": "recipe_cancel", "project_id": "project_test", "task_id": "task_test", "recipe_name": "release", "status": "active", "current_step": "verify", "completed_steps": [], "pending_steps": ["verify"], "pending_public_operations": [], "metadata": {}, "created_at": now_iso(), "updated_at": now_iso()})
+                with self.assertRaises(TransitionError) as ctx:
+                    cancel_task(store, "task_test", actor="ai", reason="cancel")
+                self.assertEqual("active_recipe_cannot_cancel", ctx.exception.code)
             finally:
                 store.close()
 

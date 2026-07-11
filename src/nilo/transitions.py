@@ -464,6 +464,35 @@ def record_outcome_decision(
 record_outcome_decision = atomic_transition(record_outcome_decision)
 
 
+def cancel_task(store: Store, task_id: str, *, actor: str, reason: str, human_confirm: bool = False, decision_note: str = "") -> TransitionResult:
+    _require_actor(actor)
+    if actor == "human":
+        _require_human_decision(actor, human_confirm, decision_note, "human_explicit")
+    elif human_confirm or decision_note:
+        raise TransitionError("ai_human_decision_forbidden", "AI cannot attach a human cancellation decision")
+    if not reason.strip():
+        raise TransitionError("reason_required", "task cancellation requires a reason")
+    task = store.get("tasks", task_id)
+    if not task:
+        raise TransitionError("task_not_found", f"task not found: {task_id}")
+    previous = projected_task_status(store, task)
+    from .task_logic import is_task_closed_status
+    from .workflow_context import recipe_run_for_task
+
+    if is_task_closed_status(previous):
+        raise TransitionError("task_already_closed", f"task is already closed: {task_id} ({previous})")
+    recipe_run = recipe_run_for_task(store, task_id)
+    if recipe_run and recipe_run.get("status") in {"active", "paused_for_fix", "waiting_public_approval"}:
+        raise TransitionError("active_recipe_cannot_cancel", "active recipe task cannot be cancelled; finish or explicitly reject the recipe")
+    cancellation_id = make_id("outcome")
+    store.insert("outcome_reviews", {"id": cancellation_id, "task_id": task_id, "agent_report_id": "", "evidence_check_id": "", "decision": "cancelled", "reason": reason, "concerns": [], "rework_required": False, "created_at": now_iso()})
+    _event(store, "cancel_task", "task", task_id, actor=actor, decision_source="human_explicit" if actor == "human" else "ai", human_confirmed=human_confirm, reason=reason, previous_state=previous, new_state="cancelled", related_ids={"outcome_review": cancellation_id})
+    return _result("cancel_task", actor, created_ids={"outcome_review": cancellation_id}, previous_status=previous, new_status="cancelled")
+
+
+cancel_task = atomic_transition(cancel_task)
+
+
 def accept_roadmap_revision(
     store: Store,
     revision_id: str,
