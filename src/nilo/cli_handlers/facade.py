@@ -479,7 +479,20 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
                 return
         elif len(active_tasks) == 1:
             task = active_tasks[0]
-            task_id = task["id"]
+            if not request:
+                task_id = task["id"]
+            else:
+                task["status"] = statuses.get(task["id"], task["status"])
+                quoted_request = shlex.quote(request)
+                payload = _work_stop_payload(
+                    "active_task_requires_explicit_selection",
+                    project_id=project_id,
+                    next_commands=[f"nilo work --task {task['id']} {quoted_request}"],
+                    tasks=[task],
+                )
+                payload["project_boundary"] = boundary.to_dict()
+                print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+                return
         elif len(active_tasks) > 1:
             for active_task in active_tasks:
                 active_task["status"] = statuses.get(active_task["id"], active_task["status"])

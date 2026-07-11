@@ -1655,6 +1655,32 @@ variables:
             self.assertIn("work_session: task_one", explicit.getvalue())
             self.assertIn("recipe: bugfix", explicit.getvalue())
 
+    def test_facade_work_requires_explicit_task_for_single_active_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_release", "--title", "Release work"])
+
+                stopped = io.StringIO()
+                with redirect_stdout(stopped):
+                    main(["--db", str(db), "work", "LICENSE parsing を直す"])
+                explicit = io.StringIO()
+                with redirect_stdout(explicit):
+                    main(["--db", str(db), "work", "Release work を続ける", "--task", "task_release"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("stopped: active_task_requires_explicit_selection", stopped.getvalue())
+            self.assertIn("nilo work --task task_release", stopped.getvalue())
+            self.assertNotIn("work_session: task_release", stopped.getvalue())
+            self.assertIn("work_session: task_release", explicit.getvalue())
+
     def test_facade_work_dry_run_json_does_not_write_task(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
