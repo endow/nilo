@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .gitmeta import changed_files_since
+from .gitmeta import EMPTY_TREE_COMMIT, changed_files_since
 from .report import declares_no_changed_files, section_value, parse_sections, validate_report_shape
 from .secret import detect_secret_issues
 
@@ -11,12 +11,15 @@ def evaluate_evidence(markdown: str, reported_files: list[str], base_commit: str
     issues = validate_report_shape(markdown)
     secret_issues = detect_secret_issues(markdown)
     issues.extend(secret_issues)
-    initial_untracked = (base_snapshot or {}).get("untracked_content_hashes", {})
-    actual_files, warnings = changed_files_since(base_commit, cwd, initial_untracked)
+    snapshot = base_snapshot or {}
+    effective_base_commit = EMPTY_TREE_COMMIT if base_commit is None and snapshot.get("unborn") is True else base_commit
+    initial_untracked = snapshot.get("untracked_content_hashes", {})
+    actual_files, warnings = changed_files_since(effective_base_commit, cwd, initial_untracked)
     metadata = {
         "reported_changed_files": reported_files,
         "actual_changed_files": sorted(actual_files),
         "git_warnings": warnings,
+        "effective_base_commit": effective_base_commit,
         "secret_issue_count": len(secret_issues),
     }
 

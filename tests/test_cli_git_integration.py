@@ -83,6 +83,13 @@ class CliGitIntegrationTests(unittest.TestCase):
                 with redirect_stdout(io.StringIO()):
                     main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                     main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "initial commit"])
+                # Simulate a task persisted by the legacy schema: the start
+                # snapshot knows the repository was unborn, but base_commit is null.
+                store = Store(db)
+                try:
+                    store.update("tasks", "task_test", {"base_commit": None})
+                finally:
+                    store.close()
                 files = ["LICENSE", "Dockerfile", "Makefile", "src/app.py"]
                 for path in files:
                     target = root / path
@@ -90,11 +97,18 @@ class CliGitIntegrationTests(unittest.TestCase):
                     target.write_text(f"{path}\n", encoding="utf-8")
                 with redirect_stdout(io.StringIO()):
                     main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_test", "--snapshot", "full"])
-                subprocess.run(["git", "add", *files], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                subprocess.run(["git", "add", *files, "preexisting.txt"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 subprocess.run(
                     ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"],
                     cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 )
+                store = Store(db)
+                try:
+                    verification = store.latest_for_task("verification_runs", "task_test")
+                finally:
+                    store.close()
+                self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "current")
+
                 report = root / ".nilo" / "reports" / "task_test.md"
                 report.parent.mkdir(parents=True, exist_ok=True)
                 report.write_text(self.completion_report(files), encoding="utf-8")

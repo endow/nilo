@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from nilo.gitmeta import EMPTY_TREE_COMMIT
 from nilo.guard import evaluate_evidence
 from nilo.report import claimed_status, declares_no_changed_files, extract_changed_files, validate_report_shape
 
@@ -39,6 +40,37 @@ python -m pytest
 
 
 class GuardTests(unittest.TestCase):
+    def test_unborn_snapshot_fills_missing_base_commit_with_empty_tree(self) -> None:
+        with patch("nilo.guard.changed_files_since", return_value=({"src/nilo/guard.py"}, [])) as changed:
+            status, issues, metadata = evaluate_evidence(
+                VALID_REPORT,
+                ["src/nilo/guard.py"],
+                None,
+                Path.cwd(),
+                {"unborn": True, "untracked_content_hashes": {}},
+            )
+
+        self.assertEqual(status, "evidence_submitted")
+        self.assertEqual(issues, [])
+        self.assertEqual(metadata["effective_base_commit"], EMPTY_TREE_COMMIT)
+        changed.assert_called_once_with(EMPTY_TREE_COMMIT, Path.cwd(), {})
+
+    def test_missing_base_commit_in_normal_repository_is_not_filled(self) -> None:
+        warning = "base_commit is missing; committed task changes cannot be compared"
+        with patch("nilo.guard.changed_files_since", return_value=(set(), [warning])) as changed:
+            status, issues, metadata = evaluate_evidence(
+                VALID_REPORT.replace("- src/nilo/guard.py", "- 変更ファイルなし"),
+                [],
+                None,
+                Path.cwd(),
+                {"unborn": False},
+            )
+
+        self.assertEqual(status, "needs_human_review")
+        self.assertIn(f"git metadata warning: {warning}", issues)
+        self.assertIsNone(metadata["effective_base_commit"])
+        changed.assert_called_once_with(None, Path.cwd(), {})
+
     def test_extract_changed_files(self) -> None:
         self.assertEqual(extract_changed_files(VALID_REPORT), ["src/nilo/guard.py"])
 
