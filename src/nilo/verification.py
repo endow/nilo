@@ -7,7 +7,7 @@ from pathlib import Path
 from subprocess import TimeoutExpired
 
 from .secret import detect_secret_issues, mask_secrets
-from .snapshot import UNCOMPUTED_DIFF_HASH, current_git_snapshot, snapshot_columns
+from .snapshot import UNCOMPUTED_DIFF_HASH, current_git_snapshot, git_changed_content_hash, git_patch_hash, snapshot_columns
 from .timeutil import now_iso
 
 
@@ -166,6 +166,8 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, s
             "working_tree_available": snapshot.get("git_available", False),
             "working_tree_dirty": snapshot.get("working_tree_dirty", False),
             "working_tree_files": snapshot.get("observed_paths", []),
+            "working_tree_patch_hash": git_patch_hash(cwd) if snapshot.get("working_tree_dirty") else "",
+            "working_tree_content_hash": git_changed_content_hash(cwd) if snapshot.get("working_tree_dirty") else "",
             "snapshot_mode": snapshot_mode_recorded,
             "requested_snapshot_mode": snapshot_mode,
             "git_diff_hash_computed": git_diff_hash_computed,

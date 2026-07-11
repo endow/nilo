@@ -15,6 +15,8 @@ from nilo.snapshot import (
     current_git_snapshot_fast,
     current_git_snapshot_full,
     evidence_status,
+    git_patch_hash,
+    git_changed_content_hash,
     max_snapshot_file_bytes,
 )
 
@@ -33,6 +35,85 @@ def init_repo(root: Path) -> None:
 
 
 class SnapshotPolicyTests(unittest.TestCase):
+    def test_fast_dirty_verification_remains_current_after_unchanged_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("verified\n", encoding="utf-8")
+            verified = current_git_snapshot_fast(root)
+            verification = {
+                **verified,
+                "cwd": str(root),
+                "exit_code": 0,
+                "timed_out": False,
+                "metadata": {"snapshot_mode": "fast", "git_diff_hash_computed": False, "working_tree_patch_hash": git_patch_hash(root)},
+            }
+            run_git(root, "add", "README.md")
+            run_git(root, "commit", "-m", "verified change")
+
+            self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "current")
+
+    def test_fast_dirty_verification_becomes_stale_when_content_changes_before_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("verified\n", encoding="utf-8")
+            verified = current_git_snapshot_fast(root)
+            verification = {
+                **verified,
+                "cwd": str(root),
+                "exit_code": 0,
+                "timed_out": False,
+                "metadata": {"snapshot_mode": "fast", "git_diff_hash_computed": False, "working_tree_patch_hash": git_patch_hash(root)},
+            }
+            (root / "README.md").write_text("changed after verification\n", encoding="utf-8")
+            run_git(root, "add", "README.md")
+            run_git(root, "commit", "-m", "different change")
+
+            self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "stale")
+
+    def test_fast_dirty_verification_with_untracked_file_remains_current_after_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "new.txt").write_text("verified new file\n", encoding="utf-8")
+            verified = current_git_snapshot(root)
+            verification = {
+                **verified,
+                "cwd": str(root),
+                "exit_code": 0,
+                "timed_out": False,
+                "metadata": {"snapshot_mode": "full", "working_tree_content_hash": git_changed_content_hash(root)},
+            }
+            run_git(root, "add", "new.txt")
+            run_git(root, "commit", "-m", "add verified file")
+
+            self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "current")
+
+    def test_deleted_untracked_file_prevents_false_current_after_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("verified tracked\n", encoding="utf-8")
+            (root / "new.txt").write_text("verified untracked\n", encoding="utf-8")
+            verified = current_git_snapshot(root)
+            verification = {
+                **verified,
+                "cwd": str(root),
+                "exit_code": 0,
+                "timed_out": False,
+                "metadata": {
+                    "snapshot_mode": "full",
+                    "working_tree_patch_hash": git_patch_hash(root),
+                    "working_tree_content_hash": git_changed_content_hash(root),
+                },
+            }
+            (root / "new.txt").unlink()
+            run_git(root, "add", "README.md")
+            run_git(root, "commit", "-m", "commit only tracked change")
+
+            self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "stale")
+
     def test_small_text_file_is_hashed_and_content_change_changes_hash(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

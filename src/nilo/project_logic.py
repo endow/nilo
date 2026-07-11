@@ -1523,7 +1523,7 @@ def latest_task_status_events_for_project(store: Store, project_id: str) -> dict
           UNION ALL
           SELECT i.task_id, i.id AS event_id, 'instruction' AS source, 'instruction_generated' AS status, i.created_at, i.rowid AS event_rowid, 30 AS priority FROM instructions i JOIN tasks t ON t.id=i.task_id WHERE t.project_id=?
           UNION ALL
-          SELECT r.task_id, r.id AS event_id, 'agent_report' AS source, 'agent_reported' AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
+          SELECT r.task_id, r.id AS event_id, 'agent_report' AS source, CASE WHEN EXISTS (SELECT 1 FROM failure_logs f WHERE f.related_id=r.id AND f.source='report_import' AND f.status='open') THEN 'needs_human_review' ELSE 'agent_reported' END AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
           UNION ALL
           SELECT rr.task_id, rr.id AS event_id, 'review_request' AS source, CASE
             WHEN rr.status='requested' THEN 'review_requested'
@@ -1543,7 +1543,7 @@ def latest_task_status_events_for_project(store: Store, project_id: str) -> dict
           SELECT c.task_id, c.id AS event_id, 'completion' AS source, CASE WHEN c.actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, c.created_at, c.rowid AS event_rowid, 70 AS priority FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE t.project_id=? AND COALESCE(c.invalidated_at, '')=''
         ),
         ranked AS (
-          SELECT task_id, event_id, source, status, created_at, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
+          SELECT task_id, event_id, source, status, created_at, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY CASE WHEN source='completion' THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
         )
         SELECT task_id, event_id, source, status, created_at FROM ranked WHERE rank=1
         """,
@@ -1566,7 +1566,7 @@ def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> t
           UNION ALL
           SELECT i.task_id, i.id AS event_id, 'instruction' AS source, 'instruction_generated' AS status, i.created_at, i.rowid AS event_rowid, 30 AS priority FROM instructions i JOIN tasks t ON t.id=i.task_id WHERE t.project_id=?
           UNION ALL
-          SELECT r.task_id, r.id AS event_id, 'agent_report' AS source, 'agent_reported' AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
+          SELECT r.task_id, r.id AS event_id, 'agent_report' AS source, CASE WHEN EXISTS (SELECT 1 FROM failure_logs f WHERE f.related_id=r.id AND f.source='report_import' AND f.status='open') THEN 'needs_human_review' ELSE 'agent_reported' END AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
           UNION ALL
           SELECT rr.task_id, rr.id AS event_id, 'review_request' AS source, CASE
             WHEN rr.status='requested' THEN 'review_requested'
@@ -1588,7 +1588,7 @@ def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> t
           SELECT e.entity_id AS task_id, e.id AS event_id, 'outcome' AS source, e.new_state AS status, e.created_at, e.rowid AS event_rowid, 75 AS priority FROM transition_events e JOIN tasks t ON t.id=e.entity_id WHERE t.project_id=? AND e.entity_type='task' AND e.transition='record_outcome_decision' AND e.new_state IN ('rejected', 'partial_accept', 'rework_required')
         ),
         ranked AS (
-          SELECT task_id, source, status, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
+          SELECT task_id, source, status, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY CASE WHEN source='completion' THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
         )
         SELECT task_id, source, status FROM ranked WHERE rank=1
         """,

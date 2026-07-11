@@ -9,6 +9,7 @@ from ..cli_support import make_id
 from ..display_labels import ai_value_label, bool_label, category_label, field_label, severity_label, status_label
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
+from ..gitmeta import head_commit
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, review_result_status
 from ..store import Store
@@ -43,7 +44,7 @@ def cmd_task_create(args: argparse.Namespace) -> str:
             "assigned_model_profile": args.model,
             "degradation_mode": args.degradation,
             "mode": args.mode,
-            "base_commit": None,
+            "base_commit": head_commit(Path.cwd()),
             "created_at": created_at,
         }
         store.insert("tasks", row)
@@ -589,7 +590,7 @@ def cmd_task_split(args: argparse.Namespace) -> None:
                 "assigned_model_profile": task["assigned_model_profile"],
                 "degradation_mode": task["degradation_mode"],
                 "mode": task.get("mode", "normal"),
-                "base_commit": None,
+                "base_commit": head_commit(Path.cwd()),
                 "created_at": now_iso(),
             }
             store.insert("tasks", row)

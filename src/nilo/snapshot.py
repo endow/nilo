@@ -136,6 +136,32 @@ def current_git_snapshot_full(cwd: Path) -> dict[str, Any]:
     return current_git_snapshot(cwd, mode=SNAPSHOT_MODE_FULL)
 
 
+def git_patch_hash(cwd: Path, base: str = "HEAD", target: str | None = None) -> str:
+    revision = f"{base}..{target}" if target else base
+    code, out, _ = git_output(["diff", "--binary", "--no-ext-diff", revision], cwd)
+    return hashlib.sha256(out.encode("utf-8", errors="replace")).hexdigest() if code == 0 else ""
+
+
+def git_changed_content_hash(cwd: Path, base: str | None = None, target: str | None = None) -> str:
+    if base and target:
+        code, out, _ = git_output(["diff", "--name-only", f"{base}..{target}"], cwd)
+        paths = sorted({line.strip() for line in out.splitlines() if line.strip()}) if code == 0 else []
+    else:
+        code, out, _ = git_output(["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"], cwd)
+        paths = sorted({porcelain_path(line) for line in out.splitlines() if porcelain_path(line)}) if code == 0 else []
+    if not paths:
+        return ""
+    hasher = hashlib.sha256()
+    for path in paths:
+        hasher.update(f"{path}\0".encode())
+        full_path = cwd / path
+        if full_path.is_file():
+            hasher.update(full_path.read_bytes())
+        else:
+            hasher.update(b"<deleted>")
+    return hasher.hexdigest()
+
+
 def snapshot_columns(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "git_head": snapshot.get("git_head"),
@@ -238,6 +264,8 @@ def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: d
         return "missing"
     if verification_run.get("timed_out") or verification_run.get("exit_code") not in (0, "0"):
         return "failed"
+    if verified_dirty_tree_was_committed_unchanged(verification_run, current_snapshot):
+        return "current"
     if snapshot_mode(verification_run) == "none":
         return "stale"
     if not snapshot_has_diff_hash(verification_run):
@@ -255,6 +283,26 @@ def evidence_status(verification_run: dict[str, Any] | None, current_snapshot: d
     if snapshots_match(record_snapshot(verification_run), compact_snapshot(current_snapshot)):
         return "current"
     return "stale"
+
+
+def verified_dirty_tree_was_committed_unchanged(verification_run: dict[str, Any], current_snapshot: dict[str, Any]) -> bool:
+    metadata = verification_run.get("metadata") if isinstance(verification_run.get("metadata"), dict) else {}
+    expected_hash = metadata.get("working_tree_patch_hash") or ""
+    expected_content_hash = metadata.get("working_tree_content_hash") or ""
+    verified_head = verification_run.get("git_head") or ""
+    current_head = current_snapshot.get("git_head") or ""
+    cwd_value = verification_run.get("cwd") or ""
+    if not (expected_hash or expected_content_hash) or not verified_head or not current_head or not cwd_value:
+        return False
+    if not verification_run.get("working_tree_dirty") or current_snapshot.get("working_tree_dirty"):
+        return False
+    cwd = Path(cwd_value)
+    code, parent, _ = git_output(["rev-parse", f"{current_head}^"], cwd)
+    if code != 0 or parent.strip() != verified_head:
+        return False
+    if expected_content_hash:
+        return git_changed_content_hash(cwd, verified_head, current_head) == expected_content_hash
+    return bool(expected_hash) and git_patch_hash(cwd, verified_head, current_head) == expected_hash
 
 
 def completion_commit_metadata(completion: dict[str, Any] | None) -> dict[str, Any]:

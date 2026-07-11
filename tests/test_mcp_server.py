@@ -1735,7 +1735,7 @@ MCP でも承認待ちの計画を人間向けに返す。
         self.assertEqual(report_result["operation"], "submit_agent_report")
         self.assertEqual(report_result["result"]["report"]["agent"], "codex")
         self.assertEqual(report_result["result"]["evidence_status"]["status"], "failed")
-        self.assertEqual(report_result["refreshed_context"]["task_context"]["status"], "agent_reported")
+        self.assertEqual(report_result["refreshed_context"]["task_context"]["status"], "needs_human_review")
         self.assertEqual(verification_result["operation"], "record_test_result")
         self.assertEqual(verification_result["result"]["verification_run"]["source"], "agent_reported")
         self.assertEqual(review_result["operation"], "request_task_review")

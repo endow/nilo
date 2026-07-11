@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from nilo.snapshot import current_git_snapshot, snapshot_columns
+from nilo.project_logic import fast_project_tasks_and_recorded_statuses
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
@@ -14,7 +15,9 @@ from nilo.transitions import (
     accept_roadmap_revision,
     complete_task,
     create_task_from_todo,
+    import_agent_report,
     import_review_result,
+    record_verification_run,
     resolve_failure,
     update_review_finding,
 )
@@ -132,6 +135,64 @@ class TransitionTests(unittest.TestCase):
                 events = store.list_where("transition_events", "transition='complete_task'")
                 self.assertEqual(len(events), 1)
                 self.assertEqual(events[0]["entity_id"], "task_test")
+            finally:
+                store.close()
+
+    def test_first_verification_records_missing_task_base_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                row = verification_row("task_test", Path.cwd())
+                self.assertIsNone(store.get("tasks", "task_test")["base_commit"])
+
+                record_verification_run(store, "task_test", row=row)
+
+                self.assertEqual(store.get("tasks", "task_test")["base_commit"], row["git_head"])
+            finally:
+                store.close()
+
+    def test_failed_report_does_not_project_agent_reported(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                result = import_agent_report(
+                    store,
+                    store.get("tasks", "task_test"),
+                    "report body",
+                    "ai",
+                    Path.cwd(),
+                    lambda *_: ("needs_human_review", ["git metadata warning: missing"], {}),
+                )
+
+                self.assertEqual(result.new_status, "needs_human_review")
+                self.assertEqual(projected_task_status(store, store.get("tasks", "task_test")), "needs_human_review")
+                self.assertIsNotNone(store.latest_for_task("agent_reports", "task_test"))
+            finally:
+                store.close()
+
+    def test_report_after_completion_does_not_reopen_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                cwd = Path.cwd()
+                store.insert("verification_runs", verification_row("task_test", cwd))
+                complete_task(store, "task_test", actor="human", reason="done", human_confirm=True, decision_source="human_interactive", decision_note="accepted", cwd=cwd)
+
+                import_agent_report(
+                    store,
+                    store.get("tasks", "task_test"),
+                    "report body",
+                    "ai",
+                    cwd,
+                    lambda *_: ("evidence_submitted", [], {}),
+                )
+
+                self.assertEqual(projected_task_status(store, store.get("tasks", "task_test")), "completed_by_user")
+                _, statuses = fast_project_tasks_and_recorded_statuses(store, "project_test")
+                self.assertEqual(statuses["task_test"], "completed_by_user")
             finally:
                 store.close()
 

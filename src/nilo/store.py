@@ -705,7 +705,7 @@ class Store:
               UNION ALL
               SELECT id AS event_id, 'instruction' AS source, 'instruction_generated' AS status, created_at, rowid AS event_rowid, 30 AS priority FROM instructions WHERE task_id=?
               UNION ALL
-              SELECT id AS event_id, 'agent_report' AS source, 'agent_reported' AS status, created_at, rowid AS event_rowid, 40 AS priority FROM agent_reports WHERE task_id=?
+              SELECT r.id AS event_id, 'agent_report' AS source, CASE WHEN EXISTS (SELECT 1 FROM failure_logs f WHERE f.related_id=r.id AND f.source='report_import' AND f.status='open') THEN 'needs_human_review' ELSE 'agent_reported' END AS status, r.created_at, r.rowid AS event_rowid, 40 AS priority FROM agent_reports r WHERE r.task_id=?
               UNION ALL
               SELECT id AS event_id, 'review_request' AS source, CASE
                 WHEN status='requested' THEN 'review_requested'
@@ -724,7 +724,7 @@ class Store:
               UNION ALL
               SELECT id AS event_id, 'completion' AS source, CASE WHEN actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, created_at, rowid AS event_rowid, 70 AS priority FROM task_completions WHERE task_id=? AND COALESCE(invalidated_at, '')=''
             )
-            ORDER BY created_at DESC, priority DESC, event_rowid DESC
+            ORDER BY CASE WHEN source='completion' THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC
             LIMIT 1
             """,
             (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),

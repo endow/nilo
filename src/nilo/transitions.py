@@ -835,8 +835,11 @@ import_review_result = atomic_transition(import_review_result)
 
 def record_verification_run(store: Store, task_id: str, *, row: dict, actor: str = "ai") -> TransitionResult:
     _require_actor(actor)
-    if not store.get("tasks", task_id):
+    task = store.get("tasks", task_id)
+    if not task:
         raise TransitionError("task_not_found", f"task not found: {task_id}")
+    if not task.get("base_commit") and row.get("git_head"):
+        store.update("tasks", task_id, {"base_commit": row["git_head"]})
     store.insert("verification_runs", row)
     _event(store, "record_verification_run", "task", task_id, actor=actor, reason=row.get("command", ""), new_state="verification_recorded", related_ids={"verification": row["id"]})
     return _result("record_verification_run", actor, created_ids={"verification_run": row["id"]}, new_status="verification_recorded")
@@ -849,13 +852,14 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
     _require_actor(agent)
     result = import_agent_report_body(store, task, markdown, agent, cwd, evaluate_evidence)
     report = store.latest_for_task("agent_reports", task["id"])
-    _event(store, "import_agent_report", "task", task["id"], actor=agent, reason="agent report import", new_state="agent_reported", related_ids={"agent_report": report["id"] if report else ""})
     evidence = result["evidence_status"]
+    report_status = "agent_reported" if evidence["status"] == "present" else "needs_human_review"
+    _event(store, "import_agent_report", "task", task["id"], actor=agent, reason="agent report import", new_state=report_status, related_ids={"agent_report": report["id"] if report else ""})
     return _result(
         "import_agent_report",
         agent,
         created_ids={"agent_report": report["id"] if report else ""},
-        new_status="agent_reported",
+        new_status=report_status,
         audit_notes=[evidence["status"]],
         warnings=evidence.get("issues", []),
     )

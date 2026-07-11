@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from ..cli_support import make_id
+from ..gitmeta import head_commit
 from ..project_language import project_primary_language, render_roadmap_proposal_from_todo, roadmap_proposal_texts
 from ..store import Store
 from ..timeutil import now_iso
@@ -191,7 +193,7 @@ def cmd_todo_start(args: argparse.Namespace) -> None:
             "assigned_model_profile": "",
             "degradation_mode": "normal",
             "mode": "normal",
-            "base_commit": None,
+            "base_commit": head_commit(Path.cwd()),
             "created_at": now_iso(),
         }
         create_task_from_todo(store, args.item, task=row, actor=args.actor, reason=f"converted to task {task_id}")

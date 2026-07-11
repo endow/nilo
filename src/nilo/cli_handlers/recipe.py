@@ -8,6 +8,7 @@ from typing import Any
 
 from ..cli_support import make_id
 from ..failure import deterministic_id
+from ..gitmeta import head_commit
 from ..project_language import human_readable_language_policy
 from ..recipe import RecipeSource, bump_patch, discover_recipes, recipe_to_json
 from ..store import Store
@@ -400,7 +401,7 @@ def _create_recipe_task(args: argparse.Namespace, project: str, source: RecipeSo
             "assigned_model_profile": "",
             "degradation_mode": "normal",
             "mode": "normal",
-            "base_commit": None,
+            "base_commit": head_commit(Path.cwd()),
             "created_at": created_at,
         }
         provenance_row = {

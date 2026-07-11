@@ -12,6 +12,7 @@ from ..cli import prompt_quality_review
 from ..claude_cli_review import claude_doctor, claude_review, dry_run_claude_review
 from ..cli_support import make_id, read_text_or_exit
 from ..instruction import build_autoscore_prompt, build_review_prompt
+from ..gitmeta import head_commit
 from ..quality import parse_quality_review
 from ..quality_logic import (
     normalize_required_scores,
@@ -584,7 +585,7 @@ def create_dirty_tree_review_task(store: Store, project_id: str, files: list[str
         "status": "planned",
         "assigned_model_profile": "",
         "degradation_mode": "normal",
-        "base_commit": None,
+        "base_commit": head_commit(Path.cwd()),
         "created_at": created_at,
     }
     store.insert("tasks", row)

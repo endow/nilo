@@ -22,7 +22,8 @@ def projected_task_status(store, task: dict, *, current_snapshot: dict | None = 
     latest = latest_event if latest_event is not None else store.latest_task_status_event(task["id"])
     if not latest:
         return task["status"]
-    if latest["source"] == "completion":
+    completion = active_task_completion(store, task["id"])
+    if completion:
         if completion_structural_issues(store, task):
             return "completion_needs_review"
         if current_snapshot is not None and snapshot_has_diff_hash(current_snapshot):
@@ -30,6 +31,7 @@ def projected_task_status(store, task: dict, *, current_snapshot: dict | None = 
 
             if task_completion_invalid(store, task["id"], current_snapshot=current_snapshot):
                 return "completion_needs_review"
+        return completion_status(completion.get("actor") or completion.get("completed_by") or "human")
     if latest["source"] == "review_finding_update" and not unresolved_review_findings(store, task["id"]):
         latest_review = store.latest_for_task("review_results", task["id"])
         if latest_review and latest_review["verdict"] == "approved":

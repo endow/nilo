@@ -3984,7 +3984,8 @@ variables:
             with redirect_stdout(after_report_output):
                 main(["--db", str(db), "next", "--project", "project_test"])
             after_report_body = after_report_output.getvalue()
-            self.assertIn("検証コマンドを実行して結果を記録してください。", after_report_body)
+            self.assertIn("状態: 人間の確認待ち", after_report_body)
+            self.assertIn("review evidence issues", after_report_body)
             self.assertNotIn("大きな作業の可能性", after_report_body)
 
             with redirect_stdout(io.StringIO()):
@@ -4420,7 +4421,7 @@ variables:
             self.assertIn("unexecuted_verifications:", body)
             self.assertIn("task_unverified: verification run not recorded", body)
             self.assertIn("commit_mapping:", body)
-            self.assertIn("task_verified [insufficient_git_metadata]", body)
+            self.assertIn("task_verified [same_head]", body)
             self.assertIn("task_unverified [unmapped]", body)
             self.assertIn("design_residue:", body)
             self.assertNotIn("docs/design.md 18.9 [resolved] implementation:", body)
@@ -7986,7 +7987,7 @@ close 済み commitment を表示できるようにした。
         with TemporaryDirectory() as directory:
             db = Path(directory) / "nilo.db"
 
-            with redirect_stdout(io.StringIO()), patch("nilo.cli_handlers.workflow.head_commit", return_value="create_head"):
+            with redirect_stdout(io.StringIO()), patch("nilo.cli_handlers.task.head_commit", return_value="create_head"), patch("nilo.cli_handlers.workflow.head_commit", return_value="instruct_head"):
                 main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
                 main(
                     [
@@ -8006,7 +8007,7 @@ close 済み commitment を表示できるようにした。
             store = Store(db)
             created_task = store.get("tasks", "task_test")
             store.close()
-            self.assertIsNone(created_task["base_commit"])
+            self.assertEqual(created_task["base_commit"], "create_head")
 
             with redirect_stdout(io.StringIO()), patch("nilo.cli_handlers.workflow.head_commit", return_value="instruct_head"):
                 main(["--db", str(db), "instruct", "--task", "task_test"])

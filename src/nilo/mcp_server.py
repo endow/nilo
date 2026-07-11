@@ -12,6 +12,7 @@ from .agent_report_import import import_agent_report
 from .ai_context import project_ai_context
 from .cli_support import make_id
 from .human_status import human_next_action_text, human_task_status
+from .gitmeta import head_commit
 from .mcp_identity import identity_matches_expected, mcp_identity, repository_mismatch_response
 from .project_boundary import (
     ProjectBoundaryError,
@@ -1608,7 +1609,7 @@ def mcp_create_task(store: Store, arguments: dict) -> dict:
         "status": "planned",
         "assigned_model_profile": "",
         "degradation_mode": "normal",
-        "base_commit": None,
+        "base_commit": head_commit(Path.cwd()),
         "created_at": created_at,
     }
     store.insert("tasks", row)
@@ -1906,7 +1907,7 @@ def mcp_create_task_from_todo(store: Store, arguments: dict) -> dict:
         "status": "planned",
         "assigned_model_profile": "",
         "degradation_mode": "normal",
-        "base_commit": None,
+        "base_commit": head_commit(Path.cwd()),
         "created_at": created_at,
     }
     try:
