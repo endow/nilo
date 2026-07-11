@@ -11,7 +11,7 @@ from .review import VALID_FINDING_STATUSES, parse_review_result
 from .secret import mask_secrets
 from .snapshot import compact_snapshot, current_git_snapshot, evidence_status, snapshots_match
 from .store import Store
-from .task_logic import completion_status, projected_task_status, unresolved_review_findings
+from .task_logic import completion_status, is_task_closed_status, projected_task_status, unresolved_review_findings
 from .timeutil import now_iso
 
 
@@ -249,6 +249,8 @@ def complete_task(
         raise TransitionError("task_not_found", f"task not found: {task_id}")
     _require_task_event(store, task_id, expected_task_event_id)
     previous_status = projected_task_status(store, task)
+    if is_task_closed_status(previous_status):
+        raise TransitionError("task_already_closed", f"task is already closed: {task_id} ({previous_status})")
     latest_review = store.latest_for_task("review_results", task_id)
     _require_no_open_high_failure(store, task)
     commit_transition: dict[str, Any] = {}

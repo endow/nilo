@@ -1501,11 +1501,19 @@ variables:
                 output = io.StringIO()
                 with redirect_stdout(output):
                     main(["--db", str(db), "cancel", "--task", "task_cancel", "--actor", "ai", "誤って作成したため"])
+                queue_output = io.StringIO()
+                with redirect_stdout(queue_output):
+                    main(["--db", str(db), "queue", "--project", project_id, "--json"])
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "status", "--project", project_id, "--ai", "--json"])
             finally:
                 os.chdir(previous_cwd)
 
             self.assertIn("status: cancelled", output.getvalue())
             self.assertIn("closed: true", output.getvalue())
+            self.assertEqual([], json.loads(queue_output.getvalue())["tasks"])
+            self.assertIsNone(json.loads(status_output.getvalue())["active_task"])
             store = Store(db)
             try:
                 task = store.get("tasks", "task_cancel")

@@ -1586,13 +1586,15 @@ def fast_project_tasks_and_recorded_statuses(store: Store, project_id: str) -> t
           SELECT c.task_id, c.id AS event_id, 'completion' AS source, CASE WHEN c.actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, c.created_at, c.rowid AS event_rowid, 70 AS priority FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE t.project_id=? AND COALESCE(c.invalidated_at, '')=''
           UNION ALL
           SELECT e.entity_id AS task_id, e.id AS event_id, 'outcome' AS source, e.new_state AS status, e.created_at, e.rowid AS event_rowid, 75 AS priority FROM transition_events e JOIN tasks t ON t.id=e.entity_id WHERE t.project_id=? AND e.entity_type='task' AND e.transition='record_outcome_decision' AND e.new_state IN ('rejected', 'partial_accept', 'rework_required')
+          UNION ALL
+          SELECT e.entity_id AS task_id, e.id AS event_id, 'cancellation' AS source, 'cancelled' AS status, e.created_at, e.rowid AS event_rowid, 80 AS priority FROM transition_events e JOIN tasks t ON t.id=e.entity_id WHERE t.project_id=? AND e.entity_type='task' AND e.transition='cancel_task'
         ),
         ranked AS (
-          SELECT task_id, source, status, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY CASE WHEN source='completion' THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
+          SELECT task_id, source, status, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY CASE WHEN source IN ('completion', 'cancellation') THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
         )
         SELECT task_id, source, status FROM ranked WHERE rank=1
         """,
-        (project_id,) * 10,
+        (project_id,) * 11,
     ).fetchall()
     statuses = {task["id"]: task["status"] for task in tasks}
     review_update_task_ids = [row["task_id"] for row in rows if row["source"] == "review_finding_update"]

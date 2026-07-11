@@ -661,6 +661,21 @@ class TransitionTests(unittest.TestCase):
                 cancel_task(store, "task_test", actor="ai", reason="mistaken task")
                 store.insert("verification_runs", verification_row("task_test", Path.cwd()))
                 self.assertEqual("cancelled", projected_task_status(store, store.get("tasks", "task_test")))
+                with self.assertRaises(TransitionError) as ctx:
+                    complete_task(store, "task_test", actor="ai", reason="late completion", cwd=Path.cwd())
+                self.assertEqual("task_already_closed", ctx.exception.code)
+            finally:
+                store.close()
+
+    def test_complete_rejects_duplicate_completion(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            try:
+                store.insert("verification_runs", verification_row("task_test", Path.cwd()))
+                complete_task(store, "task_test", actor="ai", reason="done", cwd=Path.cwd())
+                with self.assertRaises(TransitionError) as ctx:
+                    complete_task(store, "task_test", actor="ai", reason="done again", cwd=Path.cwd())
+                self.assertEqual("task_already_closed", ctx.exception.code)
             finally:
                 store.close()
 
