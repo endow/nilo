@@ -4,15 +4,18 @@
 
 ## 通常作業
 
-通常の作業入口は `nilo work` です。依頼文から task を作成または選択し、明確な場合は recipe 候補と acceptance を添えた短い作業セッションを出します。
+通常の作業入口は `nilo work` です。呼出側が副作用の有無を`--intent inspect|change`で宣言します。Niloは依頼文の特定語句からintentを推測しません。未指定かつwork optionがない場合は安全側で`inspect`となり、Taskを作成しません。
 
 ```bash
-nilo work "READMEを短く整理して"
-nilo work --recipe bugfix "review result import が落ちる問題を直して"
+nilo work "READMEを短く整理して" --intent change
+nilo work "現在の状態を説明して" --intent inspect
+nilo work --recipe bugfix "review result import が落ちる問題を直して" --intent change
 nilo check --task <task_id> "python -m unittest tests.test_cli"
 ```
 
-`nilo work --check` は、検証が成功した場合に AI の完了報告まで記録するショートカットです。完了判断前に検証だけを記録したい場合は `nilo check --task <task_id> "..."` を使います。
+`--intent inspect`は`--task`、`--recipe`、`--no-recipe`、`--check`と併用できません。`nilo work --check` は、検証が成功した場合に AI の完了報告まで記録するショートカットです。完了判断前に検証だけを記録したい場合は `nilo check --task <task_id> "..."` を使います。
+
+既存環境をこのintent契約へ更新した後は、`nilo agent install --project <project_id> --target all`を実行し、Codex／Claudeの生成済み運用ルールを再生成してください。旧ルールの`nilo work "<依頼>"`を残すと変更依頼がread-onlyになるため、upgrade時の再生成は必須です。
 
 `status`、`next`、`start`、`check`、`done` は補助/advanced/fallback の入口です。
 

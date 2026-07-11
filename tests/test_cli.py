@@ -1574,8 +1574,8 @@ variables:
                 os.chdir(previous_cwd)
 
             self.assertIn("task_created: false", output.getvalue())
-            self.assertIn("active_task: none", output.getvalue())
-            self.assertIn("working_tree: clean", output.getvalue())
+            self.assertIn("status: read_only", output.getvalue())
+            self.assertIn("request_preserved: true", output.getvalue())
             store = Store(db)
             try:
                 self.assertEqual([], store.list_where("tasks", "project_id=?", (project_id,)))
@@ -1598,9 +1598,122 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertIn(f"project_id: {project_id}", output.getvalue())
-            self.assertIn("roadmap_agent_state:", output.getvalue())
+            self.assertIn("status: read_only", output.getvalue())
+            self.assertIn("request_preserved: true", output.getvalue())
             self.assertIn("task_created: false", output.getvalue())
+
+    def test_facade_work_defaults_non_mutating_requests_to_read_only_without_domain_keywords(self) -> None:
+        requests = [
+            "未完了タスクはない？",
+            "未完了タスクが残っていないか確認する",
+            "今なに残ってる？",
+            "この構成について説明して",
+            "原因を調査して",
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                for request in requests:
+                    output = io.StringIO()
+                    with self.subTest(request=request), redirect_stdout(output):
+                        main(["--db", str(db), "work", request])
+                    self.assertIn("status: read_only", output.getvalue())
+                    self.assertIn("task_created: false", output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+            store = Store(db)
+            try:
+                self.assertEqual([], store.list_where("tasks", "project_id=?", (project_id,)))
+            finally:
+                store.close()
+
+    def test_facade_work_change_intent_alone_creates_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                mutating = io.StringIO()
+                with redirect_stdout(mutating):
+                    main(["--db", str(db), "work", "曖昧な依頼文", "--intent", "change"])
+                self.assertIn("status: created", mutating.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+            store = Store(db)
+            try:
+                self.assertEqual(1, len(store.list_where("tasks", "project_id=?", (project_id,))))
+            finally:
+                store.close()
+
+    def test_facade_work_never_infers_change_intent_from_mutating_language(self) -> None:
+        requests = [
+            "このバグを修正して",
+            "READMEを更新して",
+            "delete the obsolete file",
+        ]
+        for request in requests:
+            with self.subTest(request=request), TemporaryDirectory() as directory:
+                root = Path(directory)
+                db = root / "nilo.db"
+                project_id = root.name
+                previous_cwd = Path.cwd()
+                try:
+                    os.chdir(root)
+                    with redirect_stdout(io.StringIO()):
+                        main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                    inspection = io.StringIO()
+                    with redirect_stdout(inspection):
+                        main(["--db", str(db), "work", request])
+                    self.assertIn("status: read_only", inspection.getvalue())
+                    store = Store(db)
+                    try:
+                        self.assertEqual([], store.list_where("tasks", "project_id=?", (project_id,)))
+                    finally:
+                        store.close()
+
+                    change = io.StringIO()
+                    with redirect_stdout(change):
+                        main(["--db", str(db), "work", request, "--intent", "change"])
+                    self.assertIn("status: created", change.getvalue())
+                    store = Store(db)
+                    try:
+                        self.assertEqual(1, len(store.list_where("tasks", "project_id=?", (project_id,))))
+                    finally:
+                        store.close()
+                finally:
+                    os.chdir(previous_cwd)
+
+    def test_facade_work_rejects_inspect_intent_with_work_options(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            project_id = root.name
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
+                for option in (["--no-recipe"], ["--task", "task_missing"], ["--recipe", "bugfix"], ["--check", "python --version"]):
+                    with self.subTest(option=option), self.assertRaises(SystemExit) as raised:
+                        main(["--db", str(db), "work", "未完了タスクを確認", "--intent", "inspect", *option])
+                    self.assertIn("cannot be combined", str(raised.exception))
+            finally:
+                os.chdir(previous_cwd)
+            store = Store(db)
+            try:
+                self.assertEqual([], store.list_where("tasks", "project_id=?", (project_id,)))
+            finally:
+                store.close()
 
     def test_status_ai_fast_snapshot_reports_untracked_file_as_dirty(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1640,17 +1753,18 @@ variables:
                             str(db),
                             "work",
                             "release recipe の release note validation バグを修正する",
+                            "--intent", "change",
                             "--dry-run",
                         ]
                     )
 
                 task_output = io.StringIO()
                 with redirect_stdout(task_output):
-                    main(["--db", str(db), "work", "release note validation の修正タスクを作る", "--dry-run"])
+                    main(["--db", str(db), "work", "release note validation の修正タスクを作る", "--intent", "change", "--dry-run"])
 
                 english_bugfix_output = io.StringIO()
                 with redirect_stdout(english_bugfix_output):
-                    main(["--db", str(db), "work", "fix the release recipe bug", "--dry-run"])
+                    main(["--db", str(db), "work", "fix the release recipe bug", "--intent", "change", "--dry-run"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -1673,22 +1787,22 @@ variables:
                     main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
                 output = io.StringIO()
                 with redirect_stdout(output):
-                    main(["--db", str(db), "work", "0.7.0 のリリース準備を始める", "--dry-run"])
+                    main(["--db", str(db), "work", "0.7.0 のリリース準備を始める", "--intent", "change", "--dry-run"])
                 japanese_compact_output = io.StringIO()
                 with redirect_stdout(japanese_compact_output):
-                    main(["--db", str(db), "work", "0.7.0を公開", "--dry-run"])
+                    main(["--db", str(db), "work", "0.7.0を公開", "--intent", "change", "--dry-run"])
                 japanese_particle_output = io.StringIO()
                 with redirect_stdout(japanese_particle_output):
-                    main(["--db", str(db), "work", "リリースを実行する", "--dry-run"])
+                    main(["--db", str(db), "work", "リリースを実行する", "--intent", "change", "--dry-run"])
                 japanese_recipe_output = io.StringIO()
                 with redirect_stdout(japanese_recipe_output):
-                    main(["--db", str(db), "work", "リリースレシピを実行して", "--dry-run"])
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--intent", "change", "--dry-run"])
                 english_output = io.StringIO()
                 with redirect_stdout(english_output):
-                    main(["--db", str(db), "work", "prepare release v0.7.0", "--dry-run"])
+                    main(["--db", str(db), "work", "prepare release v0.7.0", "--intent", "change", "--dry-run"])
                 english_debugging_output = io.StringIO()
                 with redirect_stdout(english_debugging_output):
-                    main(["--db", str(db), "work", "release v0.7.0 after debugging the CI", "--dry-run"])
+                    main(["--db", str(db), "work", "release v0.7.0 after debugging the CI", "--intent", "change", "--dry-run"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -1712,13 +1826,13 @@ variables:
                     main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
                 output = io.StringIO()
                 with redirect_stdout(output):
-                    main(["--db", str(db), "work", "ドキュメントを公開する", "--dry-run"])
+                    main(["--db", str(db), "work", "ドキュメントを公開する", "--intent", "change", "--dry-run"])
                 release_word_output = io.StringIO()
                 with redirect_stdout(release_word_output):
-                    main(["--db", str(db), "work", "ドキュメントをリリースする", "--dry-run"])
+                    main(["--db", str(db), "work", "ドキュメントをリリースする", "--intent", "change", "--dry-run"])
                 negated_release_recipe_output = io.StringIO()
                 with redirect_stdout(negated_release_recipe_output):
-                    main(["--db", str(db), "work", "リリースレシピをやめて、テストを実行して", "--dry-run"])
+                    main(["--db", str(db), "work", "リリースレシピをやめて、テストを実行して", "--intent", "change", "--dry-run"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -1743,7 +1857,7 @@ variables:
 
                 stopped = io.StringIO()
                 with redirect_stdout(stopped):
-                    main(["--db", str(db), "work", "このバグを直して"])
+                    main(["--db", str(db), "work", "このバグを直して", "--intent", "change"])
                 explicit = io.StringIO()
                 with redirect_stdout(explicit):
                     main(["--db", str(db), "work", "このバグを直して", "--task", "task_one"])
@@ -1769,7 +1883,7 @@ variables:
 
                 stopped = io.StringIO()
                 with redirect_stdout(stopped):
-                    main(["--db", str(db), "work", "LICENSE parsing を直す"])
+                    main(["--db", str(db), "work", "LICENSE parsing を直す", "--intent", "change"])
                 explicit = io.StringIO()
                 with redirect_stdout(explicit):
                     main(["--db", str(db), "work", "Release work を続ける", "--task", "task_release"])
@@ -1793,7 +1907,7 @@ variables:
                     main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
                 output = io.StringIO()
                 with redirect_stdout(output):
-                    main(["--db", str(db), "work", "READMEを短く整理して", "--dry-run", "--json"])
+                    main(["--db", str(db), "work", "READMEを短く整理して", "--intent", "change", "--dry-run", "--json"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -1852,7 +1966,7 @@ variables:
                     store.close()
                 output = io.StringIO()
                 with redirect_stdout(output):
-                    main(["--db", str(db), "work", "別の依頼を進めて"])
+                    main(["--db", str(db), "work", "別の依頼を進めて", "--intent", "change"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -3513,6 +3627,8 @@ variables:
             self.assertIn("通常変更は検証成功かつ unresolved review finding がなければ AI 完了可", body)
             self.assertIn("高リスク変更、commit、force、roadmap close は人間が行う", body)
             self.assertIn("読み取り専用依頼は Task 化せず", body)
+            self.assertIn('nilo work "<依頼>" --intent change', body)
+            self.assertIn("`--intent inspect`", body)
             self.assertIn("`--human-acceptance`", body)
             self.assertIn("nilo help ai", body)
             self.assertLess(len(body), 2500)

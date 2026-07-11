@@ -336,7 +336,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.create_project(db, root.name)
                 work_output = io.StringIO()
                 with redirect_stdout(work_output):
-                    main(["--db", str(db), "work", "リリースレシピを実行して", "--project", root.name])
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--intent", "change", "--project", root.name])
                 work_task_id = next(line.split(":", 1)[1].strip() for line in work_output.getvalue().splitlines() if line.startswith("work_session:"))
 
                 output = io.StringIO()
@@ -373,7 +373,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 os.chdir(root)
                 self.create_project(db, root.name)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "work", "リリースレシピを実行して", "--project", root.name])
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--intent", "change", "--project", root.name])
                 store = Store(db)
                 try:
                     work_task = store.list_where("tasks", "project_id=?", (root.name,))[0]
@@ -437,7 +437,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 os.chdir(root)
                 self.create_project(db, root.name)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "work", "リリースレシピを実行して", "--project", root.name])
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--intent", "change", "--project", root.name])
                 store = Store(db)
                 try:
                     work_task = store.list_where("tasks", "project_id=?", (root.name,))[0]

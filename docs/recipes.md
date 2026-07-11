@@ -2,7 +2,7 @@
 
 Recipe は、よくある作業を同じやり方で始めるための仕組みです。
 
-通常は `nilo work` が依頼文から必要な recipe を選びます。`nilo recipe run` は、明示実行、recipe のデバッグ、release などの advanced path として残します。
+変更依頼では `nilo work --intent change` が依頼文から必要な recipe を選びます。読み取り依頼は`--intent inspect`を使います。`nilo recipe run` は、明示実行、recipe のデバッグ、release などの advanced path として残します。
 
 例:
 
@@ -20,7 +20,7 @@ README 更新用のレシピで進めて。
 ```
 
 ```bash
-nilo work "README 更新用のレシピで進めて"
+nilo work "README 更新用のレシピで進めて" --intent change
 ```
 
 ```text
@@ -40,7 +40,7 @@ nilo recipe run perf --project nilo
 通常作業では次のように始められます。
 
 ```bash
-nilo work "full check が重いので改善して" --project nilo
+nilo work "full check が重いので改善して" --intent change --project nilo
 ```
 
 `performance` と `performance-investigation` も `perf` の alias として使えます。完了契約には、改善対象、測定条件、改善前ベースライン、ボトルネック分析、変更内容、改善後再計測、比較結果、正しさ検証、副作用確認が含まれます。

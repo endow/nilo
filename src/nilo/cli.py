@@ -313,7 +313,7 @@ def build_agent_instruction_block(project: dict, target: str = "codex") -> str:
 
 Normal work:
 - 状態確認、説明、調査などの読み取り専用依頼は Task 化せず、対応する read-only command を直接使う。
-- 変更を伴う通常依頼はまず `nilo work "<依頼内容>" --project {project_id}`。
+- 変更依頼は `nilo work "<依頼>" --intent change --project {project_id}`。質問・確認等は `--intent inspect` でTask化しない。特定語句でintentを推測しない。
 - 停止時だけ `nilo status --ai --project {project_id}` -> `nilo next --project {project_id}` fallback。next は先頭 action だけ。
 - active recipe 中は recipe のみ。
 - 保存文面は primary_language={primary_language}。command/path/status/enum/JSONは原文。

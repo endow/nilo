@@ -7,12 +7,12 @@
 AI は作業開始時に、対象 repository で次を確認します。
 
 ```bash
-nilo work "<依頼内容>" --project <project_id>
+nilo work "<依頼内容>" --intent change --project <project_id>
 nilo status --ai --project <project_id>
 nilo next --project <project_id>
 ```
 
-通常の開発依頼ではまず `nilo work` を使います。`status --ai` と `next` は、`work` が停止した時や背景情報を確認したい時の fallback です。
+通常の変更依頼では`nilo work --intent change`、読み取り依頼では`--intent inspect`を使います。`status --ai` と `next` は、`work` が停止した時や背景情報を確認したい時の fallback です。
 
 Active task がある場合に `nilo next` を使う時は、先頭 action に従います。Active recipe 中の next は recipe の指示だけを対象にします。
 

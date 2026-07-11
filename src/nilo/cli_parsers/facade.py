@@ -21,6 +21,7 @@ def register_facade(sub: argparse._SubParsersAction, handlers: ModuleType) -> No
     add_task_option(work)
     work.add_argument("--recipe")
     work.add_argument("--no-recipe", action="store_true")
+    work.add_argument("--intent", choices=["inspect", "change"], default="", help="Declare whether the request is read-only or may create/change work state. Unspecified defaults to inspect unless an explicit work option is present.")
     work.add_argument("--check")
     work.add_argument("--mode", choices=["quick", "targeted", "full"], default="targeted")
     work.add_argument("--snapshot", choices=["fast", "full", "none", "audit"], default="fast")
