@@ -128,7 +128,20 @@ def closed_roadmap_commitments(store: Store, project_id: str) -> list[dict]:
 
 
 def pending_roadmap_revisions(store: Store, project_id: str) -> list[dict]:
-    return store.list_where("roadmap_revisions", "project_id=? AND status='pending'", (project_id,))
+    pending = store.list_where("roadmap_revisions", "project_id=? AND status='pending'", (project_id,))
+    accepted = store.list_where("roadmap_revisions", "project_id=? AND status='accepted'", (project_id,))
+    accepted_versions: dict[tuple[str, str], str] = {}
+    for revision in accepted:
+        source_path = revision.get("source_path", "")
+        if source_path:
+            key = (source_path, revision.get("body_md", ""))
+            accepted_versions[key] = max(accepted_versions.get(key, ""), revision["created_at"])
+    return [
+        revision
+        for revision in pending
+        if not revision.get("source_path")
+        or accepted_versions.get((revision["source_path"], revision.get("body_md", "")), "") <= revision["created_at"]
+    ]
 
 
 def pending_roadmap_revision_summaries(store: Store, project_id: str) -> list[dict]:

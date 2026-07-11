@@ -12686,6 +12686,99 @@ close 済み commitment を表示できるようにした。
             self.assertIn("状態: 理解確認報告あり", output.getvalue())
 
 
+    def test_status_ai_ignores_pending_revision_superseded_by_later_accepted_revision(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "proposal.md"
+            proposal.write_text(
+                """# Duplicate proposal
+
+## Intent
+同一proposalの重複pendingを抑止する。
+
+## Success Criteria
+- status案内が実態と一致する
+
+## Non Goals
+- 既存revisionの削除
+
+## Autonomy Scope
+- 表示判定
+
+## Review Gates
+- 人間承認
+
+## Evidence Policy
+- テスト
+""",
+                encoding="utf-8",
+            )
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                second = io.StringIO()
+                with redirect_stdout(second):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(line.split(": ", 1)[1] for line in second.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "latest", "--actor", "human", "--human-confirm", "--decision-note", "latest proposal accepted"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+            body = output.getvalue()
+            self.assertIn("作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。", body)
+            self.assertNotIn("作業計画を確認し、これで進めてよいか判断してください。", body)
+
+    def test_status_ai_keeps_distinct_pending_revision_from_same_source_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "proposal.md"
+
+            def write_proposal(title: str) -> None:
+                proposal.write_text(
+                    f"""# {title}
+
+## Intent
+{title}を扱う。
+
+## Success Criteria
+- {title}を完了する
+
+## Non Goals
+- 範囲外変更
+
+## Autonomy Scope
+- 実装
+
+## Review Gates
+- 人間承認
+
+## Evidence Policy
+- テスト
+""",
+                    encoding="utf-8",
+                )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                write_proposal("Pending A")
+                main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                write_proposal("Accepted B")
+                imported = io.StringIO()
+                with redirect_stdout(imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(line.split(": ", 1)[1] for line in imported.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "Bを採用", "--actor", "human", "--human-confirm", "--decision-note", "Bを採用"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+            self.assertIn("作業計画を確認し、これで進めてよいか判断してください。", output.getvalue())
+
+
 def wait_for_dispatch_capable_reviewer(db: Path, reviewer: str) -> None:
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
