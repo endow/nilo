@@ -42,7 +42,7 @@ from .quality import (
     cmd_review_withdraw,
 )
 from .recipe import cmd_recipe_approve_public, cmd_recipe_doctor, cmd_recipe_list, cmd_recipe_run, cmd_recipe_show
-from .release import cmd_release_prepare, cmd_release_publish, cmd_release_resume, cmd_release_run
+from .release import cmd_release_cancel, cmd_release_prepare, cmd_release_publish, cmd_release_resume, cmd_release_run
 from .roadmap import (
     cmd_roadmap_accept,
     cmd_roadmap_adopt,

@@ -1137,13 +1137,11 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                         }
                     )
                 elif workflow.get("status") == "paused_for_fix":
-                    failed = bool(workflow.get("failed_verification_id"))
                     action.update(
                         {
-                            "next_action": "create_separate_bugfix_task" if failed else "resolve_recipe_blocker",
+                            "next_action": "fix_in_current_release_task",
                             "blocked_recipe": workflow.get("recipe_name", ""),
                             "blocked_reason": workflow.get("blocked_reason", workflow.get("reason", "")),
-                            "must_not_fix_inside_recipe": failed,
                             "failed_verification_id": workflow.get("failed_verification_id", ""),
                             "failed_summary_path": workflow.get("failed_summary_path", ""),
                             "failed_shards": workflow.get("failed_shards", []),
@@ -1181,16 +1179,13 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                         print(f"execute_after_approval: {workflow['public_execution_command']}")
             elif workflow.get("status") == "paused_for_fix":
                 if workflow.get("failed_verification_id"):
-                    print("- release recipe は verification 失敗で停止しています。")
-                    print("- release task 内で修正を続けないでください。")
-                    print("- 別 task を作成して failed verification を修正してください。")
-                    print("推奨:")
-                    print(f"- nilo task create --project {project_id} --title \"Fix release verification failure\" --type implementation --risk medium")
-                    print("- 修正後に full check を成功させる")
-                    print("- working tree clean 後に release recipe を resume する")
-                    print("- next_action: create_separate_bugfix_task")
+                    print("- リリース検証が失敗しました。")
+                    print("- リリースTaskは修正待ちとして継続しています。")
+                    print("- 同じリリースTask内で原因を修正してください。")
+                    print("- 修正後に release resume を実行してください。")
+                    print("- next_action: fix_in_current_release_task")
                 else:
-                    print("- next_action: fix_and_resume")
+                    print("- next_action: fix_in_current_release_task")
                 if workflow.get("reason"):
                     print(f"reason: {workflow['reason']}")
                 if workflow.get("blocked_reason"):

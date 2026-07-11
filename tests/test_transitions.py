@@ -13,6 +13,7 @@ from nilo.timeutil import now_iso
 from nilo.transitions import (
     TransitionError,
     accept_roadmap_revision,
+    cancel_recipe_run,
     cancel_task,
     complete_task,
     create_task_from_todo,
@@ -709,6 +710,38 @@ class TransitionTests(unittest.TestCase):
                 with self.assertRaises(TransitionError) as ctx:
                     cancel_task(store, "task_test", actor="ai", reason="cancel")
                 self.assertEqual("active_recipe_cannot_cancel", ctx.exception.code)
+            finally:
+                store.close()
+
+    def test_cancel_recipe_run_closes_both_sides_and_is_idempotent(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            try:
+                store.insert("recipe_runs", {"id": "recipe_cancel", "project_id": "project_test", "task_id": "task_test", "recipe_name": "release", "status": "paused_for_fix", "current_step": "paused_for_fix", "completed_steps": [], "pending_steps": ["fix_and_resume"], "pending_public_operations": [], "metadata": {}, "created_at": now_iso(), "updated_at": now_iso()})
+                result = cancel_recipe_run(
+                    store,
+                    recipe_run_id="recipe_cancel",
+                    actor="human",
+                    reason="今回のリリースを取りやめる",
+                    human_confirmed=True,
+                    decision_source="human_explicit",
+                    decision_note="ユーザーが明示的に中止した",
+                )
+                self.assertEqual(result.new_status, "cancelled")
+                self.assertEqual(store.get("recipe_runs", "recipe_cancel")["status"], "cancelled")
+                self.assertEqual(projected_task_status(store, store.get("tasks", "task_test")), "cancelled")
+                before = len(store.list_where("transition_events", "1=1"))
+                repeated = cancel_recipe_run(
+                    store,
+                    recipe_run_id="recipe_cancel",
+                    actor="human",
+                    reason="今回のリリースを取りやめる",
+                    human_confirmed=True,
+                    decision_source="human_explicit",
+                    decision_note="ユーザーが明示的に中止した",
+                )
+                self.assertIn("idempotent_noop", repeated.audit_notes)
+                self.assertEqual(len(store.list_where("transition_events", "1=1")), before)
             finally:
                 store.close()
 

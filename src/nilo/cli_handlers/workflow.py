@@ -451,7 +451,7 @@ def cmd_help_ai(args: argparse.Namespace) -> None:
                 "- When a recipe/workflow is active, generic continuation commands such as \"進めて\", \"続けて\", or \"next\" continue that workflow only.",
                 "- Do not switch to unrelated project tasks unless the user explicitly asks to proceed to another task.",
                 "- For release recipes, tag/push/GitHub release/package publish are public operations and require explicit user approval.",
-                "- If a release recipe is blocked by verification failure, do not fix inside it; create a separate bugfix task, pass full check, then resume release.",
+                "- If a release recipe is blocked by verification failure, fix it inside the current release task, pass full check, then resume release; do not create another task.",
                 "- Do not treat commit-created git head changes as stale evidence if the commit was created by Nilo from the verified dirty tree.",
                 "- Do not treat stale, missing, or failed evidence as complete.",
                 "- Do not treat unresolved review findings as complete.",

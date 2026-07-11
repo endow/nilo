@@ -26,6 +26,14 @@ ACTIVE_RECIPE_RUN_STATUSES = {"active", "paused_for_fix", "waiting_public_approv
 PUBLIC_OPERATION_APPROVAL_TEXT = '"v{version} を tag/push/release して"'
 
 
+def _atomic_store_operation(func):
+    def wrapper(store, *args, **kwargs):
+        with store.transaction():
+            return func(store, *args, **kwargs)
+
+    return wrapper
+
+
 def create_recipe_run(
     store,
     *,
@@ -312,29 +320,23 @@ def approve_pending_public_operations(
         "github_release_url": release_url,
         "public_operations_completed": pending,
     }
-    completion_id = _record_release_task_completion_if_needed(
+    store.update("recipe_runs", run["id"], {"metadata": metadata, "updated_at": now_iso()})
+    from .transitions import complete_recipe_run
+
+    complete_recipe_run(
         store,
-        task_id=run["task_id"],
-        approval=approval,
-        metadata=metadata,
+        recipe_run_id=run["id"],
+        actor="human",
+        reason="release publish completed",
+        decision_source="human_explicit",
+        human_confirmed=True,
+        decision_note=approval,
         cwd=Path.cwd(),
     )
-    if completion_id:
-        metadata["release_task_completion_id"] = completion_id
-    store.update(
-        "recipe_runs",
-        run["id"],
-        {
-            "status": "completed",
-            "current_step": "complete",
-            "completed_steps": RELEASE_STEPS,
-            "pending_steps": [],
-            "pending_public_operations": [],
-            "metadata": metadata,
-            "updated_at": now_iso(),
-        },
-    )
     return store.get("recipe_runs", run["id"])
+
+
+approve_pending_public_operations = _atomic_store_operation(approve_pending_public_operations)
 
 
 def validate_public_operation_approval(approval: str, version: str) -> None:
@@ -478,69 +480,6 @@ def recover_missing_release_public_operations(store, *, project_id: str, cwd: Pa
     recovered_metadata["public_operations_recovered"] = True
     store.update("recipe_runs", recovered["id"], {"metadata": recovered_metadata, "updated_at": now_iso()})
     return store.get("recipe_runs", recovered["id"])
-
-
-def _record_release_task_completion_if_needed(store, *, task_id: str, approval: str, metadata: dict[str, Any], cwd: Path) -> str:
-    from .snapshot import compact_snapshot, current_git_snapshot
-    from .task_logic import active_task_completion
-
-    if active_task_completion(store, task_id):
-        return ""
-    verification = release_required_full_verification(store, task_id, run_metadata=metadata)
-    now = now_iso()
-    snapshot = compact_snapshot(current_git_snapshot(cwd))
-    commit_transition = {
-        "verified_snapshot": metadata.get("verification_snapshot") or compact_snapshot(verification or {}),
-        "pre_commit_snapshot": metadata.get("pre_commit_snapshot") or metadata.get("verification_snapshot") or compact_snapshot(verification or {}),
-        "post_commit_snapshot": metadata.get("post_commit_snapshot") or snapshot,
-        "commit_sha": metadata.get("commit_sha", ""),
-        "commit_message": metadata.get("commit_message", ""),
-        "committed_from_verified_dirty_tree": True,
-        "verified_diff_hash": (metadata.get("verification_snapshot") or verification or {}).get("git_diff_hash", ""),
-        "committed_tree_hash": metadata.get("committed_tree_hash", ""),
-        "committed_files": metadata.get("committed_files") or [],
-    }
-    completion_id = make_id("completion")
-    store.insert(
-        "task_completions",
-        {
-            "id": completion_id,
-            "task_id": task_id,
-            "actor": "human",
-            "completed_by": "human",
-            "completed_snapshot": {**snapshot, "commit_transition": commit_transition},
-            "completion_note": "release publish completed",
-            "accepted_verification_run_ids": [verification["id"]] if verification else [],
-            "accepted_review_result_ids": [],
-            "human_decision_note": approval,
-            "completed_with_reservations": False,
-            "decision_source": "human_explicit",
-            "human_confirmed": True,
-            "completed_at": now,
-            "reason": "release publish completed",
-            "created_at": now,
-        },
-    )
-    store.insert(
-        "transition_events",
-        {
-            "id": make_id("transition"),
-            "transition": "complete_task",
-            "entity_type": "task",
-            "entity_id": task_id,
-            "actor": "human",
-            "decision_source": "human_explicit",
-            "human_confirmed": True,
-            "reason": "release publish completed",
-            "previous_state": "",
-            "new_state": "completed_by_user",
-            "related_ids": {"completion": completion_id, "release_publish": "approved_public_operations"},
-            "snapshot": snapshot,
-            "warnings": [],
-            "created_at": now,
-        },
-    )
-    return completion_id
 
 
 def _git_value_or_empty(cwd: Path, args: list[str]) -> str:

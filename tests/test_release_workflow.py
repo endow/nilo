@@ -1677,18 +1677,19 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next", "--project", root.name])
                 next_body = next_output.getvalue()
-                self.assertIn("verification 失敗で停止", next_body)
-                self.assertIn("別 task", next_body)
-                self.assertIn("next_action: create_separate_bugfix_task", next_body)
+                self.assertIn("リリース検証が失敗", next_body)
+                self.assertIn("同じリリースTask内", next_body)
+                self.assertNotIn("別 task", next_body)
+                self.assertIn("next_action: fix_in_current_release_task", next_body)
 
                 next_ai = io.StringIO()
                 with redirect_stdout(next_ai):
                     main(["--db", str(db), "next", "--ai", "--project", root.name])
                 data = json.loads(next_ai.getvalue())
-                self.assertEqual(data["next_action"], "create_separate_bugfix_task")
+                self.assertEqual(data["next_action"], "fix_in_current_release_task")
                 self.assertEqual(data["blocked_recipe"], "release")
                 self.assertEqual(data["blocked_reason"], "failed_verification")
-                self.assertTrue(data["must_not_fix_inside_recipe"])
+                self.assertNotIn("must_not_fix_inside_recipe", data)
             finally:
                 os.environ["PATH"] = previous_path
                 os.chdir(previous_cwd)
@@ -1920,8 +1921,8 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next", "--project", root.name])
                 body = next_output.getvalue()
-                self.assertIn("verification 失敗で停止", body)
-                self.assertIn("next_action: create_separate_bugfix_task", body)
+                self.assertIn("リリース検証が失敗", body)
+                self.assertIn("next_action: fix_in_current_release_task", body)
                 self.assertIn("resume_command: nilo release resume --project", body)
             finally:
                 os.chdir(previous_cwd)

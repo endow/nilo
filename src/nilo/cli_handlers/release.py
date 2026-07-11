@@ -14,9 +14,9 @@ from ..project_boundary import resolve_project_boundary
 from ..recipe import discover_recipes
 from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
-from ..task_logic import projected_task_status
+from ..task_logic import is_task_closed_status, projected_task_status
 from ..timeutil import now_iso
-from ..transitions import TransitionError, record_verification_run
+from ..transitions import TransitionError, cancel_recipe_run, record_verification_run
 from ..version_advisor import advise_version_bump
 from ..verification import run_local_verification
 from ..workflow_context import (
@@ -40,6 +40,31 @@ def cmd_release_prepare(args: argparse.Namespace) -> None:
 
 def cmd_release_resume(args: argparse.Namespace) -> None:
     _release_prepare_or_resume(args, resume=True)
+
+
+def cmd_release_cancel(args: argparse.Namespace) -> None:
+    store = Store(_resolved_db_path(args.db, Path.cwd()))
+    try:
+        run = active_recipe_run(store, args.project)
+        if not run or run.get("recipe_name") != "release":
+            raise SystemExit("active release recipe run not found")
+        try:
+            cancel_recipe_run(
+                store,
+                recipe_run_id=run["id"],
+                actor="human",
+                reason=args.reason,
+                human_confirmed=args.human_confirm,
+                decision_source="human_explicit",
+                decision_note=args.reason,
+            )
+        except TransitionError as exc:
+            raise SystemExit(exc.message) from exc
+        print("release_recipe: cancelled")
+        print(f"recipe_run: {run['id']}")
+        print(f"task: {run['task_id']}")
+    finally:
+        store.close()
 
 
 def cmd_release_run(args: argparse.Namespace) -> None:
@@ -512,6 +537,11 @@ def _ensure_release_run(store: Store, args: argparse.Namespace, project_id: str,
     if run:
         if run.get("recipe_name") != "release":
             raise SystemExit("another recipe is already active")
+        task = store.get("tasks", run.get("task_id", ""))
+        if not task or task.get("project_id") != project_id:
+            raise SystemExit("active release recipe task is missing or belongs to another project")
+        if is_task_closed_status(projected_task_status(store, task)):
+            raise SystemExit("active release recipe task is already closed; run state audit before resuming")
         if resume and run.get("status") != "paused_for_fix":
             raise SystemExit(f"release recipe is not paused_for_fix: {run.get('status')}")
         if not resume and run.get("status") == "paused_for_fix":

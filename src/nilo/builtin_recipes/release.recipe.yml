@@ -18,6 +18,11 @@ instruction: |
   agent は commit、tag、push、GitHub release 作成、force option 使用を行わない。
   明示承認後は、tag、push、GitHub release 作成手順を人間に戻すのではなく、
   Nilo の release public-operation 実行経路を使う。
+
+  検証に失敗した場合も、このリリースTaskをopenのまま維持し、同じTask内で原因を
+  修正して `nilo release resume` を実行する。修正Taskや子Taskを自動作成しない。
+  公開操作には人間の明示承認が必要であり、完了または中止時にはrecipe runとTaskを
+  同じトランザクションで同時に閉じる。
 acceptance:
   - プロジェクトの version source が {target_version} に更新されている。
   - 変更後も builtin recipe とリリースドキュメントが有効である。
@@ -25,6 +30,8 @@ acceptance:
   - リリースノート草稿に、主な変更、検証、必要な upgrade/install notes が含まれている。
   - GitHub release 実行用のリリースノート草稿が日本語先、英語後で書かれている。
   - GitHub release の次手順は承認ゲート付きで、承認済みの tag、push、release 作成を Nilo が実行できる。
+  - 検証失敗は同じリリースTask内で修正され、新しい修正Taskや子Taskが作成されない。
+  - 完了時はrecipe runと対応Taskが同時にcompletedになる。
 variables:
   target_version:
     type: string
@@ -49,6 +56,7 @@ completion_contract:
     - 検証コマンド出力が記録されている
     - 日本語先、英語後のリリースノート草稿本文が含まれている
     - GitHub release 実行メモが含まれている
+    - recipe runと対応Taskが原子的に同時完了する
 tags:
   - release
   - github

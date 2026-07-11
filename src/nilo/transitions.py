@@ -495,6 +495,171 @@ def cancel_task(store: Store, task_id: str, *, actor: str, reason: str, human_co
 cancel_task = atomic_transition(cancel_task)
 
 
+def complete_recipe_run(
+    store: Store,
+    *,
+    recipe_run_id: str,
+    actor: str,
+    reason: str,
+    decision_source: str,
+    human_confirmed: bool,
+    cwd: Path,
+    decision_note: str = "",
+) -> TransitionResult:
+    """Close a recipe run and its owning task as one idempotent transition."""
+    run = store.get("recipe_runs", recipe_run_id)
+    if not run:
+        raise TransitionError("recipe_run_not_found", f"recipe run not found: {recipe_run_id}")
+    task = store.get("tasks", run["task_id"])
+    if not task or task.get("project_id") != run.get("project_id"):
+        raise TransitionError("recipe_task_mismatch", "recipe run task is missing or belongs to another project")
+    task_status = projected_task_status(store, task)
+    task_closed = is_task_closed_status(task_status)
+    run_completed = run.get("status") == "completed"
+    if task_closed and task_status not in {"completed_by_ai", "completed_by_user"}:
+        raise TransitionError("recipe_task_invalid_closed_state", f"recipe task is closed as {task_status}, not completed")
+    if run_completed and task_closed:
+        return _result(
+            "complete_recipe_run",
+            actor,
+            previous_status="completed",
+            new_status="completed",
+            audit_notes=["idempotent_noop"],
+        )
+    metadata = run.get("metadata") or {}
+    if run.get("recipe_name") == "release":
+        required = metadata.get("required_full_check") or {}
+        from .workflow_context import release_required_full_verification
+
+        full_verification = release_required_full_verification(store, task["id"], run_metadata=metadata)
+        if required.get("status") != "satisfied" and not full_verification:
+            raise TransitionError("release_full_check_missing", "release completion requires a satisfied full check")
+        if not metadata.get("public_operations_completed") or not metadata.get("github_release_url"):
+            raise TransitionError("release_publish_evidence_missing", "release completion requires completed public operations and a release URL")
+    recovery: list[str] = []
+    completion_id = ""
+    if not task_closed:
+        completed = complete_task(
+            store,
+            task["id"],
+            actor=actor,
+            reason=reason,
+            human_confirm=human_confirmed,
+            decision_source=decision_source,
+            decision_note=decision_note or reason,
+            cwd=cwd,
+        )
+        completion_id = completed.created_ids.get("task_completion", "")
+        if run_completed:
+            recovery.append("recovered_open_task_for_completed_recipe")
+    if not run_completed:
+        recovery.extend(["recovered_active_recipe_for_completed_task"] if task_closed else [])
+        updated_metadata = {**metadata}
+        if completion_id:
+            updated_metadata["release_task_completion_id"] = completion_id
+        if recovery:
+            updated_metadata["completion_recovery"] = recovery
+        store.update(
+            "recipe_runs",
+            recipe_run_id,
+            {
+                "status": "completed",
+                "current_step": "complete",
+                "completed_steps": [
+                    "prepare_version", "run_required_checks", "commit", "tag", "push_main",
+                    "push_tag", "create_github_release", "verify_release", "complete",
+                ],
+                "pending_steps": [],
+                "pending_public_operations": [],
+                "metadata": updated_metadata,
+                "updated_at": now_iso(),
+            },
+        )
+        _event(
+            store,
+            "complete_recipe_run",
+            "recipe_run",
+            recipe_run_id,
+            actor=actor,
+            decision_source=decision_source,
+            human_confirmed=human_confirmed,
+            reason=reason,
+            previous_state=run.get("status", ""),
+            new_state="completed",
+            related_ids={"task": task["id"], "task_completion": completion_id},
+            warnings=recovery,
+        )
+    return _result(
+        "complete_recipe_run",
+        actor,
+        created_ids={"task_completion": completion_id} if completion_id else {},
+        updated_ids={"recipe_run": recipe_run_id},
+        previous_status=run.get("status"),
+        new_status="completed",
+        audit_notes=recovery,
+    )
+
+
+complete_recipe_run = atomic_transition(complete_recipe_run)
+
+
+def cancel_recipe_run(
+    store: Store,
+    *,
+    recipe_run_id: str,
+    actor: str,
+    reason: str,
+    human_confirmed: bool = False,
+    decision_source: str = "",
+    decision_note: str = "",
+) -> TransitionResult:
+    """Cancel a recipe run and close its owning task atomically."""
+    run = store.get("recipe_runs", recipe_run_id)
+    if not run:
+        raise TransitionError("recipe_run_not_found", f"recipe run not found: {recipe_run_id}")
+    task = store.get("tasks", run["task_id"])
+    if not task or task.get("project_id") != run.get("project_id"):
+        raise TransitionError("recipe_task_mismatch", "recipe run task is missing or belongs to another project")
+    task_status = projected_task_status(store, task)
+    if is_task_closed_status(task_status) and task_status not in {"rejected", "cancelled", "deferred"}:
+        raise TransitionError("recipe_task_invalid_closed_state", f"recipe task is closed as {task_status}, not cancelled")
+    if run.get("status") == "cancelled" and is_task_closed_status(task_status):
+        return _result("cancel_recipe_run", actor, previous_status="cancelled", new_status="cancelled", audit_notes=["idempotent_noop"])
+    current = store.get("recipe_runs", recipe_run_id) or run
+    recovery: list[str] = []
+    if current.get("status") == "cancelled" and not is_task_closed_status(task_status):
+        recovery.append("recovered_open_task_for_cancelled_recipe")
+    elif current.get("status") != "cancelled" and is_task_closed_status(task_status):
+        recovery.append("recovered_active_recipe_for_cancelled_task")
+    if current.get("status") != "cancelled":
+        store.update("recipe_runs", recipe_run_id, {
+            "status": "cancelled", "current_step": "cancelled", "pending_steps": [],
+            "pending_public_operations": [],
+            "metadata": {**(current.get("metadata") or {}), "cancellation_reason": reason},
+            "updated_at": now_iso(),
+        })
+        _event(store, "cancel_recipe_run", "recipe_run", recipe_run_id, actor=actor,
+               decision_source=decision_source, human_confirmed=human_confirmed, reason=reason,
+               previous_state=current.get("status", ""), new_state="cancelled", related_ids={"task": task["id"]}, warnings=recovery)
+    if not is_task_closed_status(task_status):
+        cancel_task(
+            store,
+            task["id"],
+            actor=actor,
+            reason=reason,
+            human_confirm=human_confirmed,
+            decision_note=decision_note or reason,
+        )
+        if recovery:
+            _event(store, "recover_cancelled_recipe_task", "recipe_run", recipe_run_id, actor=actor,
+                   decision_source=decision_source, human_confirmed=human_confirmed, reason=reason,
+                   previous_state="cancelled_with_open_task", new_state="cancelled", related_ids={"task": task["id"]}, warnings=recovery)
+    return _result("cancel_recipe_run", actor, updated_ids={"recipe_run": recipe_run_id, "task": task["id"]}, previous_status=run.get("status"), new_status="cancelled", audit_notes=recovery)
+
+
+cancel_recipe_run = atomic_transition(cancel_recipe_run)
+
+
 def accept_roadmap_revision(
     store: Store,
     revision_id: str,

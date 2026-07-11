@@ -27,6 +27,12 @@ def register_release(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     resume.add_argument("--timeout", type=float, default=600.0)
     resume.set_defaults(func=handlers.cmd_release_resume)
 
+    cancel = release_sub.add_parser("cancel")
+    cancel.add_argument("--project", required=True)
+    cancel.add_argument("--reason", required=True)
+    cancel.add_argument("--human-confirm", action="store_true")
+    cancel.set_defaults(func=handlers.cmd_release_cancel)
+
     publish = release_sub.add_parser("publish")
     publish.add_argument("--project", required=True)
     publish.add_argument("--approval", required=True, help="Explicit approval text, e.g. v0.5.1 を tag/push/release して")

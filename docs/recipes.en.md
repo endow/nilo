@@ -67,4 +67,8 @@ When a minor version is recommended, Nilo prints the reason and the rerun comman
 nilo recipe run release --project nilo --var target_version=0.2.0
 ```
 
+The release task created at the start owns preparation, failure fixes, re-verification, publication, and completion or cancellation. A failed verification pauses the run as `paused_for_fix`; fix it in that same task and run `nilo release resume --project <project_id>`. Nilo does not create a separate fix task or child task. To abandon the release, use `nilo release cancel --project <project_id> --reason <reason> --human-confirm`. Publication still requires explicit human approval.
+
+Recipe YAML instructions, acceptance criteria, and completion contracts are declarative documentation. They do not turn `steps` into a generic execution engine; release-specific orchestration controls the state and public operations. Completion and cancellation close the recipe run and its task in one transaction.
+
 For recipe design boundaries, see [design.md](design.md).

@@ -80,7 +80,7 @@ def project_status_from_inputs(store: Store, project: dict, tasks: list[dict], s
                 action += f"; after approval run: {workflow['public_execution_command']}"
             next_actions = [action]
         elif workflow.get("status") == "paused_for_fix" and workflow.get("failed_verification_id"):
-            next_actions = [f"release recipe blocked by failed verification; create a separate bugfix task, then resume with: {workflow.get('resume_command', '')}"]
+            next_actions = [f"release verification failed; fix it in the current release task, then resume with: {workflow.get('resume_command', '')}"]
         else:
             next_actions = [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
     elif not active_tasks:

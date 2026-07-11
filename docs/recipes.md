@@ -67,4 +67,8 @@ Minor が推奨される場合、Nilo は理由と再実行コマンドを表示
 nilo recipe run release --project nilo --var target_version=0.2.0
 ```
 
+release recipeは、開始時に作成した一つのリリースTaskが、準備、失敗修正、再検証、公開、完了または中止までを所有します。検証失敗時は`paused_for_fix`となりますが、別Taskや子Taskは作らず、同じTask内で修正して`nilo release resume --project <project_id>`を実行します。取りやめる場合は`nilo release cancel --project <project_id> --reason <理由> --human-confirm`を使います。公開には引き続き人間の明示承認が必要です。
+
+recipe YAMLのinstruction、acceptance、completion contractは宣言的な説明と受入条件です。`steps`を汎用実行エンジンとして解釈するものではなく、releaseの状態制御と公開操作はrelease専用オーケストレーションが担います。完了または中止時はrecipe runと対応Taskを一つのトランザクションで閉じます。
+
 Recipe の設計境界は [design.md](design.md) を参照してください。

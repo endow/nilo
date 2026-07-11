@@ -5,7 +5,7 @@ from typing import Any
 
 from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, review_result_status
 from .store import Store
-from .task_logic import active_task_completion, unresolved_review_findings
+from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
 
 
 VALID_TASK_STATUSES = {"planned"}
@@ -311,7 +311,19 @@ def audit_workflow(store: Store, project_id: str, *, cwd: Path | None = None) ->
         "project_id=? AND status IN ('active', 'paused_for_fix', 'waiting_public_approval')",
         (project_id,),
     )
+    if len(active_runs) > 1:
+        findings.append(_finding("multiple_active_recipe_runs", "project has multiple active recipe runs", severity="error", entity_type="project", entity_id=project_id))
     for run in active_runs:
+        task = store.get("tasks", run["task_id"])
+        if not task:
+            findings.append(_finding("active_recipe_task_missing", "active recipe run has no corresponding task", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+            continue
+        task_status = projected_task_status(store, task)
+        if is_task_closed_status(task_status):
+            findings.append(_finding("active_recipe_task_closed", "active recipe run is linked to a closed task", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+        metadata = run.get("metadata") or {}
+        if run.get("status") == "paused_for_fix" and metadata.get("next_action") in {"create_separate_bugfix_task", "create_child_task"}:
+            findings.append(_finding("paused_recipe_requests_separate_task", "paused release recipe requests creation of a separate task", severity="error", entity_type="recipe_run", entity_id=run["id"]))
         if run["status"] == "waiting_public_approval" and not (run.get("pending_public_operations") or []):
             findings.append(_finding("recipe_waiting_public_without_pending_operations", "recipe run waits for public approval but has no pending operations", severity="error", entity_type="recipe_run", entity_id=run["id"]))
         tasks = store.list_where("tasks", "project_id=?", (project_id,))
@@ -343,6 +355,11 @@ def audit_workflow(store: Store, project_id: str, *, cwd: Path | None = None) ->
         (project_id,),
     )
     for run in completed_release_runs:
+        task = store.get("tasks", run["task_id"])
+        if not task:
+            findings.append(_finding("completed_recipe_task_missing", "completed recipe run has no corresponding task", severity="error", entity_type="recipe_run", entity_id=run["id"]))
+        elif not is_task_closed_status(projected_task_status(store, task)):
+            findings.append(_finding("completed_recipe_task_open", "completed recipe run is linked to an open task", severity="error", entity_type="recipe_run", entity_id=run["id"]))
         snapshot = current_git_snapshot(cwd)
         if snapshot.get("working_tree_dirty"):
             findings.append(_finding("release_recipe_completed_with_dirty_tree", "release recipe is completed but working tree is dirty", severity="error", entity_type="recipe_run", entity_id=run["id"]))
