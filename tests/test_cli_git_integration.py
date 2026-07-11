@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import unittest
@@ -630,7 +629,7 @@ class CliGitIntegrationTests(unittest.TestCase):
                 main(["--db", str(db), "roadmap", "assess", "--project", "project_test"])
             body = output.getvalue()
             self.assertIn("# ロードマップ状態", body)
-            self.assertIn(f"## Phase 2.5 Roadmap Projection", body)
+            self.assertIn("## Phase 2.5 Roadmap Projection", body)
             self.assertIn("- 作業タスク: 残作業あり", body)
             self.assertIn("- ロードマップ: 追加検証待ち", body)
             self.assertIn("検証記録の確認が必要です", body)

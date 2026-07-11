@@ -21,12 +21,11 @@ from ..quality_logic import (
     validate_required_scores,
 )
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
-from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
+from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template
 from ..review_dispatcher import dispatch_review, doctor_reviewer_config, init_reviewer_config, quick_review
 from ..review_lifecycle import insert_review_request, update_review_request
 from ..reviewer_registry import ReviewerResolutionError, resolve_reviewer, resolve_review_request_target, reviewer_is_registered_available
 from ..reviewer_registry import reviewer_prepare_status
-from ..secret import mask_secrets
 from ..snapshot import compact_snapshot, current_git_snapshot, review_result_status
 from ..store import Store
 from ..task_logic import is_task_completed_status, projected_task_status

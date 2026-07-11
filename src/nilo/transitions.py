@@ -7,7 +7,6 @@ from typing import Any
 
 from .agent_report_import import import_agent_report as import_agent_report_body
 from .cli_support import make_id
-from .failure import FAILURE_STATUSES
 from .review import VALID_FINDING_STATUSES, parse_review_result
 from .secret import mask_secrets
 from .snapshot import compact_snapshot, current_git_snapshot, evidence_status, snapshots_match

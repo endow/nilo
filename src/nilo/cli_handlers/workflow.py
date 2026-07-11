@@ -33,7 +33,7 @@ from ..project_boundary import (
 )
 from ..snapshot import compact_snapshot, current_git_snapshot, evidence_status
 from ..store import Store
-from ..task_logic import active_task_completion, completion_audit_issues, outcome_status, unresolved_review_findings
+from ..task_logic import outcome_status, unresolved_review_findings
 from ..timeutil import now_iso
 from ..transitions import (
     TransitionError,
@@ -714,7 +714,7 @@ def cmd_understanding_import(args: argparse.Namespace) -> None:
             "created_at": now_iso(),
         }
         store.insert("understanding_checks", row)
-        print(f"status: understanding_reported")
+        print("status: understanding_reported")
         print(f"understanding_check: {row['id']}")
     finally:
         store.close()

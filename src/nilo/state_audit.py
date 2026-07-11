@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, evidence_status, review_result_status
+from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, review_result_status
 from .store import Store
 from .task_logic import active_task_completion, unresolved_review_findings
 

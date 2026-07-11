@@ -10,18 +10,16 @@ from ..display_labels import ai_value_label, bool_label, category_label, field_l
 from ..failure import deterministic_id
 from ..human_status import human_next_action_text
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
-from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, evidence_status, review_result_status
+from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, review_result_status
 from ..store import Store
 from ..task_analytics import project_task_analytics, task_analytics
-from ..task_logic import active_task_completion, completion_status, custom_split_task_specs, projected_task_status, require_ai_completion_evidence, split_task_specs
+from ..task_logic import active_task_completion, completion_status, custom_split_task_specs, projected_task_status, split_task_specs
 from ..timeutil import now_iso
 from ..transitions import TransitionError, complete_task, invalidate_task_completion
 from ..workflow_context import mark_release_commit_recorded, release_commit_aware_evidence_status
 
 
 def cmd_task_create(args: argparse.Namespace) -> str:
-    from .. import cli as c
-
     store = Store(args.db)
     try:
         project = store.get("projects", args.project)
@@ -557,15 +555,13 @@ def cmd_task_completion_invalidate(args: argparse.Namespace) -> None:
             invalidate_task_completion(store, args.completion, actor=args.actor, reason=args.reason)
         except TransitionError as exc:
             raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
-        print(f"status: invalidated")
+        print("status: invalidated")
         print(f"task_completion: {args.completion}")
     finally:
         store.close()
 
 
 def cmd_task_split(args: argparse.Namespace) -> None:
-    from .. import cli as c
-
     store = Store(args.db)
     try:
         task = store.get("tasks", args.task)

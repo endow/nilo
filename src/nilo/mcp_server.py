@@ -28,7 +28,7 @@ from .project_language import (
     render_roadmap_proposal_from_todo,
     roadmap_proposal_texts,
 )
-from .review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template, parse_review_result
+from .review import build_review_context, build_review_result_template
 from .review_dispatcher import DispatchError, dispatch_review
 from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
 from .reviewer_registry import (
@@ -46,7 +46,6 @@ from .reviewer_registry import (
     resolve_review_request_target,
     reviewer_is_claude_code_e2e_capable,
     reviewer_is_dispatch_capable,
-    reviewer_is_fresh,
     reviewer_is_registered_available,
 )
 from .secret import detect_secret_issues, mask_secrets

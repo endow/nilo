@@ -11255,7 +11255,7 @@ close 済み commitment を表示できるようにした。
             store = Store(db)
             try:
                 finding = store.latest_for_task("review_findings", "task_test")
-                finding_update_seen_event_id = store.latest_task_status_event("task_test")["event_id"]
+                _ = store.latest_task_status_event("task_test")["event_id"]
             finally:
                 store.close()
 

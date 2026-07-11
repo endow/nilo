@@ -8,7 +8,7 @@ from .display_labels import ai_value_label, category_label, field_label, severit
 from .failure import compact_failure_message, list_failure_logs, summarize_failure_logs
 from .human_status import human_next_action_text
 from .project_language import project_primary_language
-from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status
+from .snapshot import commit_aware_evidence_status, current_git_snapshot
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
 from .workflow_context import release_commit_aware_evidence_status, workflow_context

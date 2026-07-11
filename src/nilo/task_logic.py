@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, evidence_status, snapshot_has_diff_hash
+from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, snapshot_has_diff_hash
 from pathlib import Path
 
 

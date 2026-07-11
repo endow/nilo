@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import io
-from contextlib import redirect_stdout
 
 from ..cli_support import make_id
 from ..project_language import project_primary_language, render_roadmap_proposal_from_todo, roadmap_proposal_texts
@@ -14,7 +12,6 @@ from ..transitions import (
     promote_todo_to_roadmap_proposal,
     triage_todo,
 )
-from .task import cmd_task_create
 
 
 TODO_KINDS = ["user_request", "discovered_issue", "follow_up", "cleanup", "question", "roadmap_candidate"]

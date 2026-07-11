@@ -195,9 +195,7 @@ def cmd_roadmap_adopt(args: argparse.Namespace) -> None:
         proposal = c.parse_roadmap_proposal(markdown)
         if not proposal["title"]:
             raise SystemExit("roadmap adopt rejected malformed proposal: missing top-level # title")
-        created_at = now_iso()
         commitment_id = make_id("commitment")
-        revision_id = make_id("roadmap_rev")
         candidate_commitment = {
             "id": commitment_id,
             "project_id": project["id"],
@@ -234,8 +232,6 @@ def cmd_roadmap_adopt(args: argparse.Namespace) -> None:
 
 
 def cmd_roadmap_accept(args: argparse.Namespace) -> None:
-    from .. import cli as c
-
     store = Store(args.db)
     try:
         revision = store.get("roadmap_revisions", args.revision)
@@ -539,8 +535,6 @@ def cmd_roadmap_discuss(args: argparse.Namespace) -> None:
 
 
 def cmd_roadmap_task_plan(args: argparse.Namespace) -> None:
-    from .. import cli as c
-
     store = Store(args.db)
     try:
         commitment = store.get("roadmap_commitments", args.commitment)

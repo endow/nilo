@@ -10,7 +10,6 @@ from typing import Any
 from .failure import record_failure_log
 from .gitmeta import git_output, porcelain_path
 from .snapshot import compact_snapshot, current_git_snapshot
-from .timeutil import now_iso
 
 
 PROJECT_BINDING_PATH = ".nilo/project.json"

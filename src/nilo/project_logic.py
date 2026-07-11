@@ -5,11 +5,10 @@ import re
 from pathlib import Path
 
 from .design_residue import parse_design_residue
-from .display_labels import field_label, status_label
-from .human_status import human_next_action_text, human_project_work_state, human_task_status
+from .human_status import human_project_work_state
 from .review_lifecycle import update_review_request
 from .reviewer_registry import latest_reviewer_row, reviewer_availability, reviewer_is_registered_available
-from .snapshot import commit_aware_evidence_status, current_git_snapshot, evidence_status, review_result_status
+from .snapshot import commit_aware_evidence_status, current_git_snapshot, review_result_status
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, is_task_completed_status, outcome_status, projected_task_status, unresolved_blocking_review_findings
 from .timeutil import iso_age_seconds, now_iso
@@ -1463,8 +1462,6 @@ def refresh_review_dispatch_state(
 def next_action_for_review_request(store: Store, request: dict) -> str:
     status = request["status"]
     reviewer = request["reviewer"]
-    task = store.get("tasks", request["task_id"]) or {}
-    project_id = task.get("project_id") or "<project>"
     registration = latest_reviewer_row(store, reviewer)
     availability = reviewer_availability(registration)
     if status == "requested":

@@ -11,8 +11,6 @@ from ..timeutil import now_iso
 
 
 def cmd_project_create(args: argparse.Namespace) -> None:
-    from .. import cli as c
-
     store = Store(args.db)
     try:
         created_at = now_iso()

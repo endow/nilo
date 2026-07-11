@@ -23,6 +23,12 @@ classifiers = [
   "Topic :: Software Development",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=9,<10",
+  "ruff>=0.15,<0.16",
+]
+
 [project.scripts]
 nilo = "nilo.cli:main"
 
@@ -35,3 +41,18 @@ nilo = ["builtin_recipes/*.recipe.yml"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# CLI handlers are resolved dynamically from this registry by attribute name.
+"src/nilo/cli_handlers/registry.py" = ["F401"]
+# This compatibility facade intentionally re-exports helpers used by handlers.
+"src/nilo/cli.py" = ["E402", "F401"]
+# These executable test modules adjust sys.path before importing local packages.
+"tests/run_cli_group.py" = ["E402"]
+"tests/test_backup.py" = ["E402"]
+"tests/test_cli.py" = ["E402"]
+"tests/test_cli_git_integration.py" = ["E402"]
+"tests/test_task_analytics.py" = ["E402"]
+"tests/test_version_advisor.py" = ["E402"]
+"tests/test_view_model.py" = ["E402"]
+"tests/test_view_server.py" = ["E402"]
