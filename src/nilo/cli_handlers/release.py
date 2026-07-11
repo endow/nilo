@@ -157,6 +157,16 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
             )
             _raise_unmanaged_dirty(_classify_dirty_files(cwd, managed_files), project_id)
         if not dirty_files:
+            if verification_mode == "full":
+                run_metadata = {
+                    **(run.get("metadata") or {}),
+                    "verification_snapshot": compact_snapshot(verification_row),
+                    "pre_commit_snapshot": compact_snapshot(pre_commit_snapshot),
+                    "post_commit_snapshot": compact_snapshot(pre_commit_snapshot),
+                    "required_full_check": _required_full_check_metadata(verification_row, reused=True),
+                }
+                store.update("recipe_runs", run["id"], {"metadata": run_metadata, "updated_at": now_iso()})
+                run = store.get("recipe_runs", run["id"]) or run
             recovered = mark_release_commit_recorded(
                 store,
                 task_id=run["task_id"],

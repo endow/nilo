@@ -413,6 +413,28 @@ def record_outcome_decision(
         actor=actor,
         snapshot=compact_snapshot(current_git_snapshot(cwd or Path.cwd())),
     )
+    if decision in {"rejected", "deferred"}:
+        from .workflow_context import recipe_run_for_task
+
+        recipe_run = recipe_run_for_task(store, task_id)
+        if recipe_run and recipe_run.get("status") in {"active", "paused_for_fix", "waiting_public_approval"}:
+            metadata = {
+                **(recipe_run.get("metadata") or {}),
+                "cancelled_by_outcome": decision,
+                "cancellation_reason": reason,
+            }
+            store.update(
+                "recipe_runs",
+                recipe_run["id"],
+                {
+                    "status": "cancelled",
+                    "current_step": "cancelled",
+                    "pending_steps": [],
+                    "pending_public_operations": [],
+                    "metadata": metadata,
+                    "updated_at": now_iso(),
+                },
+            )
     _event(store, "record_outcome_decision", "task", task_id, actor=actor, reason=reason, previous_state=previous, new_state=decision, related_ids={"failure": failure["id"]})
     return _result("record_outcome_decision", actor, created_ids={"failure": failure["id"]}, previous_status=previous, new_status=decision)
 

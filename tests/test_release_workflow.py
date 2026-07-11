@@ -279,6 +279,51 @@ class ReleaseWorkflowTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_release_prepare_promotes_post_commit_full_check_on_clean_tree(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ), patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(io.StringIO()):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                store = Store(db)
+                try:
+                    run = workflow_context(store, root.name)
+                    full = full_release_verification_row(run["task_id"], root)
+                    store.insert("verification_runs", full)
+                finally:
+                    store.close()
+
+                output = io.StringIO()
+                with patch("nilo.cli_handlers.release.run_local_verification") as verification_check, patch(
+                    "nilo.cli_handlers.release._run_lightweight_post_commit_checks"
+                ):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+                verification_check.assert_not_called()
+                self.assertIn("full_check: reused", output.getvalue())
+                self.assertIn("recipe_run: waiting_public_approval", output.getvalue())
+                store = Store(db)
+                try:
+                    run = workflow_context(store, root.name)
+                    self.assertEqual(run["status"], "waiting_public_approval")
+                    recipe_run = store.list_where("recipe_runs", "task_id=?", (run["task_id"],))[0]
+                    self.assertEqual(recipe_run["metadata"]["required_full_check"]["status"], "satisfied")
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
     def test_release_prepare_adopts_existing_work_release_task(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

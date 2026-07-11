@@ -18,6 +18,7 @@ from nilo.transitions import (
     import_agent_report,
     import_review_result,
     record_verification_run,
+    record_outcome_decision,
     resolve_failure,
     update_review_finding,
 )
@@ -88,6 +89,40 @@ class TransitionTests(unittest.TestCase):
         store.insert("projects", project_row())
         store.insert("tasks", task_row())
         return store
+
+    def test_rejected_outcome_cancels_active_recipe_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = self.make_store(root)
+            try:
+                store.insert(
+                    "recipe_runs",
+                    {
+                        "id": "recipe_test",
+                        "project_id": "project_test",
+                        "task_id": "task_test",
+                        "recipe_name": "release",
+                        "status": "active",
+                        "current_step": "run_required_checks",
+                        "completed_steps": ["commit"],
+                        "pending_steps": ["run_required_checks", "tag"],
+                        "pending_public_operations": [{"operation": "create_tag", "target": "v1.0.0"}],
+                        "metadata": {},
+                        "created_at": now_iso(),
+                        "updated_at": now_iso(),
+                    },
+                )
+
+                record_outcome_decision(store, "task_test", decision="rejected", actor="human", reason="中止", cwd=root)
+
+                run = store.get("recipe_runs", "recipe_test")
+                self.assertEqual(run["status"], "cancelled")
+                self.assertEqual(run["current_step"], "cancelled")
+                self.assertEqual(run["pending_steps"], [])
+                self.assertEqual(run["pending_public_operations"], [])
+                self.assertEqual(run["metadata"]["cancellation_reason"], "中止")
+            finally:
+                store.close()
 
     def test_ai_completion_rejects_missing_evidence(self) -> None:
         with TemporaryDirectory() as directory:
