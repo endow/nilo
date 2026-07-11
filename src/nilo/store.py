@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   degradation_mode TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'normal',
   base_commit TEXT,
+  base_snapshot TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );
 
@@ -487,6 +488,7 @@ JSON_COLUMNS = {
     "rendered_fields",
     "recipe_snapshot",
     "snapshot",
+    "base_snapshot",
     "related_ids",
     "warnings",
     "completed_steps",
@@ -510,6 +512,7 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("tasks", "roadmap_commitment_id", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "roadmap_item_id", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'normal'"),
+    ("tasks", "base_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
     ("overdrive_runs", "summary", "TEXT NOT NULL DEFAULT ''"),
     ("overdrive_runs", "summary_json", "TEXT NOT NULL DEFAULT '{}'"),
     ("overdrive_runs", "scope", "TEXT NOT NULL DEFAULT 'task'"),

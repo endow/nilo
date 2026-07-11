@@ -17,7 +17,7 @@ def validate_agent_report(store: Store, task: dict, markdown: str, cwd: Path, ev
         raise ValueError("report body is empty")
 
     files = extract_changed_files(markdown)
-    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd)
+    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd, task.get("base_snapshot", {}))
     issues = _ignore_release_committed_file_extras(store, task["id"], issues)
     status = _status_after_issue_filter(status, issues)
     return {
@@ -45,7 +45,7 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
     }
     store.insert("agent_reports", report)
 
-    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd)
+    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd, task.get("base_snapshot", {}))
     issues = _ignore_release_committed_file_extras(store, task["id"], issues)
     status = _status_after_issue_filter(status, issues)
     snapshot = compact_snapshot(current_git_snapshot(cwd))

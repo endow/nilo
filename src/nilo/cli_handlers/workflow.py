@@ -20,7 +20,7 @@ from ..cli import (
 from ..cli_support import make_id, read_text_or_exit
 from ..display_labels import field_label
 from ..failure import record_failure_log, summarize_failure_logs
-from ..gitmeta import git_output, head_commit
+from ..gitmeta import EMPTY_TREE_COMMIT, git_output, head_commit, task_base_snapshot
 from ..guard import evaluate_evidence
 from ..instruction import build_instruction, build_understanding_prompt
 from ..project_model import default_project_row
@@ -588,7 +588,11 @@ def cmd_instruct(args: argparse.Namespace) -> None:
         if requires_understanding_gate(task) and not understanding_approved(store, task["id"]):
             raise SystemExit("understanding check approval required before instruction generation")
 
-        store.update("tasks", task["id"], {"base_commit": head_commit(Path.cwd())})
+        if task.get("base_commit") != EMPTY_TREE_COMMIT:
+            store.update("tasks", task["id"], {
+                "base_commit": head_commit(Path.cwd()),
+                "base_snapshot": task.get("base_snapshot") or task_base_snapshot(Path.cwd()),
+            })
         task = store.get("tasks", task["id"])
 
         boundary = resolve_project_boundary(db_path=args.db)

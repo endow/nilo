@@ -292,16 +292,20 @@ def verified_dirty_tree_was_committed_unchanged(verification_run: dict[str, Any]
     verified_head = verification_run.get("git_head") or ""
     current_head = current_snapshot.get("git_head") or ""
     cwd_value = verification_run.get("cwd") or ""
-    if not (expected_hash or expected_content_hash) or not verified_head or not current_head or not cwd_value:
+    if not (expected_hash or expected_content_hash) or not current_head or not cwd_value:
         return False
     if not verification_run.get("working_tree_dirty") or current_snapshot.get("working_tree_dirty"):
         return False
     cwd = Path(cwd_value)
     code, parent, _ = git_output(["rev-parse", f"{current_head}^"], cwd)
-    if code != 0 or parent.strip() != verified_head:
+    if verified_head:
+        if code != 0 or parent.strip() != verified_head:
+            return False
+    elif code == 0:
         return False
     if expected_content_hash:
-        return git_changed_content_hash(cwd, verified_head, current_head) == expected_content_hash
+        base = verified_head or "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        return git_changed_content_hash(cwd, base, current_head) == expected_content_hash
     return bool(expected_hash) and git_patch_hash(cwd, verified_head, current_head) == expected_hash
 
 

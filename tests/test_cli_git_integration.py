@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from nilo.ai_context import AI_CONTEXT_TEXT_MAX_CHARS
 from nilo.cli import git_changed_files, main
 from nilo.cli_handlers.quality import parse_git_status_porcelain_z
+from nilo.snapshot import current_git_snapshot, evidence_status
 from nilo.store import Store
 from nilo.timeutil import now_iso
 
@@ -29,6 +30,10 @@ from tests.test_cli import REPORT, register_test_reviewer
 
 
 class CliGitIntegrationTests(unittest.TestCase):
+    def completion_report(self, files: list[str]) -> str:
+        changed = "\n".join(f"- {path}" for path in files)
+        return REPORT.replace("- src/nilo/cli.py", changed)
+
     def write_pyproject_version(self, root: Path, version: str) -> None:
         root.joinpath("pyproject.toml").write_text(
             f'[project]\nname = "sample"\nversion = "{version}"\n',
@@ -63,6 +68,86 @@ class CliGitIntegrationTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+
+    def test_unborn_task_report_accepts_unchanged_verified_initial_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            db = Path(directory) / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                # This file predates the task and must not become a task change.
+                root.joinpath("preexisting.txt").write_text("before\n", encoding="utf-8")
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "initial commit"])
+                files = ["LICENSE", "Dockerfile", "Makefile", "src/app.py"]
+                for path in files:
+                    target = root / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(f"{path}\n", encoding="utf-8")
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_test", "--snapshot", "full"])
+                subprocess.run(["git", "add", *files], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                subprocess.run(
+                    ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"],
+                    cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                report = root / ".nilo" / "reports" / "task_test.md"
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text(self.completion_report(files), encoding="utf-8")
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "report", "validate", "--task", "task_test", "--file", str(report)])
+                self.assertIn("status: present", output.getvalue())
+
+                status_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "task", "status", "--task", "task_test", "--ai"])
+                self.assertNotIn("evidence_stale", status_output.getvalue())
+
+                report.write_text(self.completion_report([*files, "preexisting.txt"]), encoding="utf-8")
+                with self.assertRaises(SystemExit):
+                    main(["--db", str(db), "report", "validate", "--task", "task_test", "--file", str(report)])
+
+                root.joinpath("preexisting.txt").write_text("changed during task\n", encoding="utf-8")
+                subprocess.run(["git", "add", "preexisting.txt"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                subprocess.run(
+                    ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "change preexisting"],
+                    cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "report", "validate", "--task", "task_test", "--file", str(report)])
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_unborn_verified_tree_changed_before_initial_commit_is_stale(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            db = Path(directory) / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "stale initial commit"])
+                root.joinpath("app.py").write_text("verified\n", encoding="utf-8")
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_test", "--snapshot", "full"])
+                root.joinpath("app.py").write_text("changed\n", encoding="utf-8")
+                self.commit_file_change(root, "app.py", "changed\n", "initial")
+                store = Store(db)
+                try:
+                    verification = store.latest_for_task("verification_runs", "task_test")
+                finally:
+                    store.close()
+                self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "stale")
+            finally:
+                os.chdir(previous_cwd)
 
     def test_task_status_ai_allows_fast_snapshot_verification_evidence(self) -> None:
         with TemporaryDirectory() as directory:

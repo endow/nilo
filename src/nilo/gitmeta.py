@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
 from pathlib import Path
 
 REPORT_STAGING_PREFIX = ".nilo/reports/"
+EMPTY_TREE_COMMIT = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 def git_output(args: list[str], cwd: Path) -> tuple[int, str, str]:
@@ -21,6 +23,28 @@ def git_output(args: list[str], cwd: Path) -> tuple[int, str, str]:
 def head_commit(cwd: Path) -> str | None:
     code, out, _ = git_output(["rev-parse", "HEAD"], cwd)
     return out if code == 0 else None
+
+
+def task_base_commit(cwd: Path) -> str | None:
+    """Return an explicit comparison base, including for an unborn branch."""
+    code, inside, _ = git_output(["rev-parse", "--is-inside-work-tree"], cwd)
+    if code != 0 or inside.strip().lower() != "true":
+        return None
+    return head_commit(cwd) or EMPTY_TREE_COMMIT
+
+
+def task_base_snapshot(cwd: Path) -> dict:
+    code, out, _ = git_output(["ls-files", "--others", "--exclude-standard"], cwd)
+    files = sorted(line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()) if code == 0 else []
+    return {
+        "unborn": head_commit(cwd) is None,
+        "untracked_files": files,
+        "untracked_content_hashes": {
+            path: hashlib.sha256((cwd / path).read_bytes()).hexdigest()
+            for path in files
+            if (cwd / path).is_file()
+        },
+    }
 
 
 def working_tree_state(cwd: Path) -> dict:
@@ -61,7 +85,7 @@ def porcelain_path(line: str) -> str:
     return value
 
 
-def changed_files_since(base_commit: str | None, cwd: Path) -> tuple[set[str], list[str]]:
+def changed_files_since(base_commit: str | None, cwd: Path, initial_untracked: dict[str, str] | None = None) -> tuple[set[str], list[str]]:
     files: set[str] = set()
     warnings: list[str] = []
 
@@ -86,6 +110,14 @@ def changed_files_since(base_commit: str | None, cwd: Path) -> tuple[set[str], l
             continue
         files.update(normalized for line in out.splitlines() if (normalized := line.strip().replace("\\", "/")) and not is_report_staging_file(normalized))
 
+    # Files that already existed untracked when the task began are not task
+    # changes merely because an initial commit later included them.
+    unchanged_initial = {
+        path
+        for path, expected_hash in (initial_untracked or {}).items()
+        if (cwd / path).is_file() and hashlib.sha256((cwd / path).read_bytes()).hexdigest() == expected_hash
+    }
+    files.difference_update(unchanged_initial)
     return files, warnings
 
 

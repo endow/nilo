@@ -7,11 +7,12 @@ from .report import declares_no_changed_files, section_value, parse_sections, va
 from .secret import detect_secret_issues
 
 
-def evaluate_evidence(markdown: str, reported_files: list[str], base_commit: str | None, cwd: Path) -> tuple[str, list[str], dict]:
+def evaluate_evidence(markdown: str, reported_files: list[str], base_commit: str | None, cwd: Path, base_snapshot: dict | None = None) -> tuple[str, list[str], dict]:
     issues = validate_report_shape(markdown)
     secret_issues = detect_secret_issues(markdown)
     issues.extend(secret_issues)
-    actual_files, warnings = changed_files_since(base_commit, cwd)
+    initial_untracked = (base_snapshot or {}).get("untracked_content_hashes", {})
+    actual_files, warnings = changed_files_since(base_commit, cwd, initial_untracked)
     metadata = {
         "reported_changed_files": reported_files,
         "actual_changed_files": sorted(actual_files),
