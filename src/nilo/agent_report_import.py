@@ -17,7 +17,8 @@ def validate_agent_report(store: Store, task: dict, markdown: str, cwd: Path, ev
         raise ValueError("report body is empty")
 
     files = extract_changed_files(markdown)
-    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd, task.get("base_snapshot", {}))
+    base_snapshot = _report_base_snapshot(store, task, cwd)
+    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd, base_snapshot)
     issues = _ignore_release_committed_file_extras(store, task["id"], issues)
     status = _status_after_issue_filter(status, issues)
     return {
@@ -45,7 +46,8 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
     }
     store.insert("agent_reports", report)
 
-    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd, task.get("base_snapshot", {}))
+    base_snapshot = _report_base_snapshot(store, task, cwd)
+    status, issues, metadata = evaluate_func(markdown, files, task["base_commit"], cwd, base_snapshot)
     issues = _ignore_release_committed_file_extras(store, task["id"], issues)
     status = _status_after_issue_filter(status, issues)
     snapshot = compact_snapshot(current_git_snapshot(cwd))
@@ -85,6 +87,29 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
             )
 
     return {"report": report, "evidence_status": check, "evidence_check": check}
+
+
+def _report_base_snapshot(store: Store, task: dict, cwd: Path) -> dict:
+    snapshot = task.get("base_snapshot") or {}
+    if task.get("base_commit") is not None or "unborn" in snapshot:
+        return snapshot
+    for run in store.list_where("verification_runs", "task_id=?", (task["id"],)):
+        metadata = run.get("metadata") or {}
+        mode = metadata.get("snapshot_mode") or metadata.get("requested_snapshot_mode")
+        run_cwd = run.get("cwd") or ""
+        try:
+            same_repository = bool(run_cwd) and Path(run_cwd).resolve() == cwd.resolve()
+        except OSError:
+            same_repository = False
+        if (
+            run.get("source") == "nilo_executed"
+            and run.get("git_head") is None
+            and metadata.get("working_tree_available") is True
+            and mode in {"fast", "full", "audit"}
+            and same_repository
+        ):
+            return {**snapshot, "unborn": True, "unborn_inferred_from_verification_run": run["id"]}
+    return snapshot
 
 
 def _status_after_issue_filter(status: str, issues: list[str]) -> str:

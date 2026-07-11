@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from nilo.agent_report_import import _report_base_snapshot
 from nilo.gitmeta import EMPTY_TREE_COMMIT
 from nilo.guard import evaluate_evidence
 from nilo.report import claimed_status, declares_no_changed_files, extract_changed_files, validate_report_shape
@@ -40,6 +41,39 @@ python -m pytest
 
 
 class GuardTests(unittest.TestCase):
+    def test_legacy_empty_snapshot_infers_unborn_from_git_aware_verification(self) -> None:
+        store = unittest.mock.Mock()
+        store.list_where.return_value = [
+            {
+                "id": "verification_unborn",
+                "source": "nilo_executed",
+                "git_head": None,
+                "cwd": str(Path.cwd()),
+                "metadata": {"working_tree_available": True, "snapshot_mode": "full"},
+            }
+        ]
+
+        snapshot = _report_base_snapshot(store, {"id": "task_test", "base_commit": None, "base_snapshot": {}}, Path.cwd())
+
+        self.assertTrue(snapshot["unborn"])
+        self.assertEqual(snapshot["unborn_inferred_from_verification_run"], "verification_unborn")
+
+    def test_legacy_empty_snapshot_does_not_infer_unborn_from_none_snapshot(self) -> None:
+        store = unittest.mock.Mock()
+        store.list_where.return_value = [
+            {
+                "id": "verification_none",
+                "source": "nilo_executed",
+                "git_head": None,
+                "cwd": str(Path.cwd()),
+                "metadata": {"working_tree_available": True, "snapshot_mode": "none"},
+            }
+        ]
+
+        snapshot = _report_base_snapshot(store, {"id": "task_test", "base_commit": None, "base_snapshot": {}}, Path.cwd())
+
+        self.assertEqual(snapshot, {})
+
     def test_unborn_snapshot_fills_missing_base_commit_with_empty_tree(self) -> None:
         with patch("nilo.guard.changed_files_since", return_value=({"src/nilo/guard.py"}, [])) as changed:
             status, issues, metadata = evaluate_evidence(

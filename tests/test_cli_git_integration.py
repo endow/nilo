@@ -163,6 +163,45 @@ class CliGitIntegrationTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_legacy_empty_snapshot_infers_unborn_from_verification_for_report_validation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            db = Path(directory) / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_legacy", "--title", "legacy unborn"])
+                store = Store(db)
+                try:
+                    store.update("tasks", "task_legacy", {"base_commit": None, "base_snapshot": {}})
+                finally:
+                    store.close()
+
+                root.joinpath("app.py").write_text("verified\n", encoding="utf-8")
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "check", f'"{sys.executable}" -c "print(1)"', "--task", "task_legacy", "--snapshot", "full"])
+                self.commit_file_change(root, "app.py", "verified\n", "initial")
+                store = Store(db)
+                try:
+                    verification = store.latest_for_task("verification_runs", "task_legacy")
+                finally:
+                    store.close()
+                self.assertEqual(evidence_status(verification, current_git_snapshot(root)), "current")
+
+                report = root / ".nilo" / "reports" / "task_legacy.md"
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text(self.completion_report(["app.py"]), encoding="utf-8")
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "report", "validate", "--task", "task_legacy", "--file", str(report)])
+                self.assertIn("status: present", output.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
     def test_task_status_ai_allows_fast_snapshot_verification_evidence(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
