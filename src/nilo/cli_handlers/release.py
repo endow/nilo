@@ -14,6 +14,7 @@ from ..project_boundary import resolve_project_boundary
 from ..recipe import discover_recipes
 from ..snapshot import compact_snapshot, current_git_snapshot
 from ..store import Store
+from ..task_logic import projected_task_status
 from ..timeutil import now_iso
 from ..transitions import TransitionError, record_verification_run
 from ..version_advisor import advise_version_bump
@@ -558,6 +559,12 @@ def _adopt_release_work_task(store: Store, project_id: str, source: Any, rendere
         acceptance = task.get("acceptance_criteria") or []
         if any(str(item).strip().lower() == "recipe: release" for item in acceptance):
             candidates.append(task)
+    instructed = [task for task in candidates if projected_task_status(store, task) == "instruction_generated"]
+    if len(instructed) == 1:
+        candidates = instructed
+    elif len(candidates) > 1:
+        statuses = ", ".join(f"{task['id']}={projected_task_status(store, task)}" for task in candidates)
+        print(f"- adoption_skipped: ambiguous release work tasks ({statuses})")
     if len(candidates) != 1:
         return None
     task = candidates[0]

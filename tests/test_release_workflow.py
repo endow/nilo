@@ -18,7 +18,7 @@ from nilo.snapshot import compact_snapshot, current_git_snapshot, snapshot_colum
 from nilo.state_audit import audit_task
 from nilo.state_audit import audit_workflow
 from nilo.store import Store
-from nilo.task_logic import projected_task_status
+from nilo.task_logic import active_task_completion, projected_task_status
 from nilo.timeutil import now_iso
 from nilo.workflow_context import approve_pending_public_operations, mark_release_commit_recorded, public_operations_for_release, workflow_context
 
@@ -356,6 +356,116 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     task = store.get("tasks", work_task_id)
                     self.assertEqual(task["title"], "リリース 0.3.1")
                     self.assertTrue(store.latest_for_task("recipe_task_provenance", work_task_id))
+                finally:
+                    store.close()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_release_publish_completes_instructed_work_task_without_replacing_stale_planned_task(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            previous_path = os.environ.get("PATH", "")
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--project", root.name])
+                store = Store(db)
+                try:
+                    work_task = store.list_where("tasks", "project_id=?", (root.name,))[0]
+                    stale = {**work_task, "id": "task_stale_release", "title": "古いリリース受付"}
+                    store.insert("tasks", stale)
+                finally:
+                    store.close()
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "instruct", "--task", work_task["id"]])
+
+                output = io.StringIO()
+                with patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ), patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                self.assertIn(f"adopted_task: {work_task['id']}", output.getvalue())
+                root.joinpath("docs/releases/0.3.1.md").write_text(concrete_release_note(), encoding="utf-8")
+                run_git(root, "add", "docs/releases/0.3.1.md")
+                run_git(root, "commit", "-m", "Complete release notes")
+                store = Store(db)
+                try:
+                    runs = store.list_where("recipe_runs", "project_id=? AND recipe_name='release'", (root.name,))
+                    self.assertEqual(runs[0]["task_id"], work_task["id"])
+                    self.assertFalse(store.list_where("recipe_runs", "task_id=?", (stale["id"],)))
+                    store.insert("verification_runs", full_release_verification_row(work_task["id"], root))
+                    run_id = force_waiting_public_approval(store, root, root.name, work_task["id"])
+                    self.assertEqual(store.get("recipe_runs", run_id)["status"], "waiting_public_approval")
+                finally:
+                    store.close()
+
+                fake_bin = install_fake_release_tools(root)
+                os.environ["PATH"] = f"{fake_bin}{os.pathsep}{previous_path}"
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "release", "publish", "--project", root.name, "--approval", "v0.3.1 を tag/push/release して"])
+
+                store = Store(db)
+                try:
+                    self.assertTrue(active_task_completion(store, work_task["id"]))
+                    self.assertEqual(projected_task_status(store, work_task), "completed_by_user")
+                    self.assertEqual(projected_task_status(store, stale), "planned")
+                    runs = store.list_where("recipe_runs", "project_id=? AND recipe_name='release'", (root.name,))
+                    self.assertEqual(len(runs), 1)
+                    self.assertEqual(runs[0]["task_id"], work_task["id"])
+                finally:
+                    store.close()
+            finally:
+                os.environ["PATH"] = previous_path
+                os.chdir(previous_cwd)
+
+    def test_release_prepare_reports_ambiguous_candidates_when_projected_status_changed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            self.write_release_project_files(root, "0.3.0")
+            db = root / ".git" / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                self.create_project(db, root.name)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "work", "リリースレシピを実行して", "--project", root.name])
+                store = Store(db)
+                try:
+                    work_task = store.list_where("tasks", "project_id=?", (root.name,))[0]
+                    stale = {**work_task, "id": "task_stale_release", "title": "古いリリース受付"}
+                    store.insert("tasks", stale)
+                finally:
+                    store.close()
+
+                output = io.StringIO()
+                with patch(
+                    "nilo.cli_handlers.release.projected_task_status",
+                    side_effect=lambda store, task: "review_commented" if task["id"] == work_task["id"] else "planned",
+                ), patch(
+                    "nilo.cli_handlers.release.run_local_verification",
+                    side_effect=lambda command, cwd, timeout, **kwargs: release_verification_result(cwd, command=command, snapshot_mode=kwargs.get("snapshot_mode", "fast")),
+                ), patch("nilo.cli_handlers.release._run_lightweight_post_commit_checks"):
+                    with redirect_stdout(output):
+                        main(["--db", str(db), "release", "prepare", "--project", root.name, "--target-version", "0.3.1"])
+
+                text = output.getvalue()
+                self.assertIn("adoption_skipped: ambiguous release work tasks", text)
+                self.assertIn(f"{work_task['id']}=review_commented", text)
+                self.assertIn(f"{stale['id']}=planned", text)
+                store = Store(db)
+                try:
+                    runs = store.list_where("recipe_runs", "project_id=? AND recipe_name='release'", (root.name,))
+                    self.assertEqual(len(runs), 1)
+                    self.assertNotIn(runs[0]["task_id"], {work_task["id"], stale["id"]})
                 finally:
                     store.close()
             finally:
