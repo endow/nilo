@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, review_result_status
+from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, review_result_status, verified_dirty_tree_was_committed_unchanged
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
 
@@ -101,6 +101,14 @@ def audit_task(
             )
         if evidence == "current":
             completed_snapshot = {}
+    accepted_verifications = completion.get("accepted_verification_run_ids") or []
+    if (
+        evidence == "current"
+        and verification
+        and verification.get("id") in accepted_verifications
+        and verified_dirty_tree_was_committed_unchanged(verification, snapshot)
+    ):
+        completed_snapshot = {}
     if completed_snapshot and completed_snapshot.get("git_diff_hash") != snapshot.get("git_diff_hash"):
         findings.append(_finding("completion_snapshot_changed", "completion snapshot differs from current snapshot", severity="error", entity_type="task_completion", entity_id=completion["id"]))
     high_failures = store.list_where("failure_logs", "task_id=? AND status='open' AND severity='high'", (task_id,))

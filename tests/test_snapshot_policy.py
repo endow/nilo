@@ -18,7 +18,11 @@ from nilo.snapshot import (
     git_patch_hash,
     git_changed_content_hash,
     max_snapshot_file_bytes,
+    snapshot_columns,
 )
+from nilo.state_audit import task_completion_invalid
+from nilo.store import Store
+from nilo.timeutil import now_iso
 
 
 def run_git(cwd: Path, *args: str) -> None:
@@ -34,7 +38,71 @@ def init_repo(root: Path) -> None:
     run_git(root, "commit", "-m", "initial")
 
 
+def insert_completion_evidence(store: Store, root: Path, verified: dict) -> None:
+    verification = {
+        "id": "verification_test", "task_id": "task_test", "evidence_check_id": None,
+        "source": "nilo_executed", "command": "pytest", "cwd": str(root), "stdout": "", "stderr": "",
+        "exit_code": 0, "timed_out": False, "timeout_seconds": 1.0, **snapshot_columns(verified),
+        "metadata": {"snapshot_mode": "full", "working_tree_content_hash": git_changed_content_hash(root)},
+        "started_at": now_iso(), "finished_at": now_iso(), "created_at": now_iso(),
+    }
+    store.insert("projects", {"id": "project_test", "name": "Test", "tech_stack": [], "rules": [], "default_completion_criteria": [], "available_models": [], "fallback_models": [], "requires_local_execution": False, "created_at": now_iso()})
+    store.insert("tasks", {"id": "task_test", "project_id": "project_test", "title": "Work", "description": "", "acceptance_criteria": [], "parent_task_id": None, "split_index": None, "task_type": "implementation", "risk_level": "medium", "requires_understanding_check": False, "roadmap_commitment_id": "", "roadmap_item_id": "", "status": "planned", "assigned_model_profile": "", "degradation_mode": "normal", "mode": "normal", "base_commit": verified.get("git_head"), "base_snapshot": {}, "created_at": now_iso()})
+    store.insert("verification_runs", verification)
+    store.insert("task_completions", {"id": "completion_test", "task_id": "task_test", "actor": "ai", "completed_by": "ai", "completed_snapshot": compact_snapshot(verified), "completion_note": "done", "accepted_verification_run_ids": ["verification_test"], "accepted_review_result_ids": [], "human_decision_note": "", "completed_with_reservations": False, "decision_source": "", "human_confirmed": False, "completed_at": now_iso(), "reason": "done", "created_at": now_iso()})
+
+
 class SnapshotPolicyTests(unittest.TestCase):
+    def test_completion_remains_valid_after_verified_dirty_tree_is_committed_normally(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("verified\n", encoding="utf-8")
+            verified = current_git_snapshot(root)
+            store = Store(root / ".git" / "nilo.db")
+            try:
+                insert_completion_evidence(store, root, verified)
+                run_git(root, "add", "README.md")
+                run_git(root, "commit", "-m", "verified change")
+
+                self.assertFalse(task_completion_invalid(store, "task_test", cwd=root))
+            finally:
+                store.close()
+
+    def test_completion_is_invalid_when_committed_content_differs_from_verified_tree(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("verified\n", encoding="utf-8")
+            verified = current_git_snapshot(root)
+            store = Store(root / ".git" / "nilo.db")
+            try:
+                insert_completion_evidence(store, root, verified)
+                (root / "README.md").write_text("different\n", encoding="utf-8")
+                run_git(root, "add", "README.md")
+                run_git(root, "commit", "-m", "different change")
+
+                self.assertTrue(task_completion_invalid(store, "task_test", cwd=root))
+            finally:
+                store.close()
+
+    def test_completion_is_invalid_when_dirty_change_follows_unchanged_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_repo(root)
+            (root / "README.md").write_text("verified\n", encoding="utf-8")
+            verified = current_git_snapshot(root)
+            store = Store(root / ".git" / "nilo.db")
+            try:
+                insert_completion_evidence(store, root, verified)
+                run_git(root, "add", "README.md")
+                run_git(root, "commit", "-m", "verified change")
+                (root / "README.md").write_text("additional dirty change\n", encoding="utf-8")
+
+                self.assertTrue(task_completion_invalid(store, "task_test", cwd=root))
+            finally:
+                store.close()
+
     def test_fast_dirty_verification_remains_current_after_unchanged_commit(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
