@@ -1554,7 +1554,7 @@ MCP でも承認待ちの計画を人間向けに返す。
 
         self.assertTrue(instruction_result["instruction_exists"])
         self.assertEqual(instruction_result["instruction"]["id"], "instruction_test")
-        self.assertIsNone(task_after["base_commit"])
+        self.assertEqual(task_after["base_commit"], task["base_commit"])
         self.assertEqual(len(instructions_after), 1)
         self.assertEqual(status_result["latest"]["instructions"]["id"], "instruction_test")
 
