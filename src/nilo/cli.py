@@ -325,7 +325,7 @@ Normal work:
 - 通常変更は検証成功かつ unresolved review finding がなければ AI 完了可。高リスク変更、commit、force、roadmap close は人間が行う。`--human-acceptance`。
 
 Review handoff:
-- Claude レビューの通常導線は `nilo review claude --task <task_id>`。MCP は補助/高度用途で通常入口ではない。
+- Claude レビューは現在のユーザー依頼で明示された場合だけ `nilo review claude --task <task_id> --user-requested`。AI の自発作成・起動は禁止。MCP も通常入口ではない。
 - ReviewResult は stdout で受け、Nilo が import する。
 - `nilo review dispatch` / `quick` / `delegate` / reviewer worker orchestration は legacy/advanced/fallback。
 - review help に従う。例: `nilo review status --task <task_id> --format json`。`review status` に `--project` は付けない。
@@ -499,6 +499,7 @@ TOP_LEVEL_COMMANDS = {
     "upgrade",
     "verification",
     "view",
+    "work",
     "workspace",
 }
 
@@ -543,7 +544,7 @@ def route_natural_language_intent(argv: list[str]) -> bool:
         print(f"task: {task_id}")
         if reviewer == "claude-code":
             print("review_handoff: use Claude CLI direct review")
-            print(f"cli_command: nilo review claude --task {task_id} --project {project_id}")
+            print(f"cli_command: nilo review claude --task {task_id} --project {project_id} --user-requested")
         else:
             print("review_handoff: codex direct review is not implemented; use legacy/advanced review dispatch if needed")
     else:

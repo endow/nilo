@@ -465,6 +465,10 @@ def cmd_review_doctor(args: argparse.Namespace) -> None:
 
 
 def cmd_review_claude(args: argparse.Namespace) -> None:
+    if not args.dry_run and not args.user_requested:
+        raise SystemExit(
+            "Claude review requires an explicit user request; rerun with --user-requested only when the current user request asks for this review"
+        )
     store = Store(args.db)
     try:
         kwargs = {
@@ -748,6 +752,11 @@ def cmd_review_human_launch_claude(args: argparse.Namespace) -> None:
         print_human_runner_command(args)
         print("claude_status: skipped (dry-run)")
         return
+
+    if not args.user_requested:
+        raise SystemExit(
+            "Claude review requires an explicit user request; rerun with --user-requested only when the current user request asks for this review"
+        )
 
     delegate_args = argparse.Namespace(
         db=args.db,

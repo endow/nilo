@@ -3707,7 +3707,7 @@ variables:
             self.assertIn("`--intent inspect`", body)
             self.assertIn("`--human-acceptance`", body)
             self.assertIn("nilo help ai", body)
-            self.assertLess(len(body), 2500)
+            self.assertLess(len(body), 2600)
             self.assertNotIn("## 全コマンド一覧", body)
             self.assertNotIn("nilo project export-handson --project project_test --file HANDOFF.md", body)
             self.assertNotIn("nilo task create --project project_test", body)
@@ -3841,7 +3841,9 @@ variables:
             self.assertIn("@.nilo/agent-instructions.md", claude)
             self.assertIn("nilo help ai", runtime)
             self.assertIn("MCP identity guard", runtime)
-            self.assertIn("Claude レビューの通常導線は `nilo review claude --task <task_id>`", runtime)
+            self.assertIn("Claude レビューは現在のユーザー依頼で明示された場合だけ", runtime)
+            self.assertIn("--user-requested", runtime)
+            self.assertIn("自発作成・起動は禁止", runtime)
             self.assertIn("ReviewResult は stdout で受け、Nilo が import する", runtime)
             self.assertIn("legacy/advanced/fallback", runtime)
             self.assertIn("nilo review status --task <task_id> --format json", runtime)
@@ -10813,7 +10815,7 @@ close 済み commitment を表示できるようにした。
                 )
                 output = io.StringIO()
                 with patch("subprocess.run", return_value=completed) as run_mock, redirect_stdout(output):
-                    main(["--db", str(db), "review", "human-launch-claude", "--project", "project_test", "--task", "task_test"])
+                    main(["--db", str(db), "review", "human-launch-claude", "--project", "project_test", "--task", "task_test", "--user-requested"])
             finally:
                 os.chdir(previous_cwd)
 
@@ -10879,7 +10881,7 @@ close 済み commitment を表示できるようにした。
         self.assertEqual(dispatches, [])
         body = output.getvalue()
         self.assertIn("review_handoff: use Claude CLI direct review", body)
-        self.assertIn(f"cli_command: nilo review claude --task task_test --project {root.name}", body)
+        self.assertIn(f"cli_command: nilo review claude --task task_test --project {root.name} --user-requested", body)
         self.assertIn("reviewer: claude-code", body)
         self.assertIn("task: task_test", body)
         self.assertIn('"reason": "Cluade Codeにレビューしてもらって"', body)
@@ -10895,6 +10897,48 @@ close 済み commitment を表示できるようにした。
             },
         )
         self.assertIn("legacy_fallback: `nilo review dispatch` and MCP reviewer worker orchestration are advanced/fallback paths", body)
+
+    def test_review_claude_requires_explicit_user_request_before_starting_process(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "guarded review"])
+
+            with patch("subprocess.run") as run_mock:
+                with self.assertRaisesRegex(SystemExit, "explicit user request"):
+                    main(["--db", str(db), "review", "claude", "--task", "task_test"])
+                with self.assertRaisesRegex(SystemExit, "explicit user request"):
+                    main(["--db", str(db), "review", "human-launch-claude", "--project", "project_test", "--task", "task_test"])
+
+            run_mock.assert_not_called()
+
+    def test_review_claude_dry_run_does_not_require_user_request_confirmation(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_test", "--title", "dry-run review"])
+            output = io.StringIO()
+            with patch("subprocess.run") as run_mock, redirect_stdout(output):
+                main(["--db", str(db), "review", "claude", "--task", "task_test", "--dry-run"])
+
+            run_mock.assert_not_called()
+            self.assertIn("claude_status: dry_run", output.getvalue())
+
+    def test_work_request_mentioning_claude_review_is_not_routed_as_review_intent(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "work", "Claudeレビューの無断起動を防ぐ", "--intent", "change", "--project", "project_test", "--dry-run"])
+
+            body = output.getvalue()
+            self.assertIn("status: dry_run", body)
+            self.assertNotIn("review_handoff:", body)
 
     def test_review_quick_imports_parseable_review_result(self) -> None:
         with TemporaryDirectory() as directory:
