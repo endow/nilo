@@ -1,5 +1,7 @@
 # レビュー実行基盤の再設計
 
+> 実装状況: 本設計の共通状態モデル、coordinator、direct CLI/MCP 入口、fallback policy、remote lease/reaper、provider adapter registry は実装済み。実装履歴は `3cc44b9` から `5faf854` を参照。
+
 ## 目的
 
 Claude、Codex、Grokなどのreviewerへ、利用者が1回の操作でレビューを依頼できるようにする。reviewerのrate limit、quota枯渇、timeout、異常終了、MCP切断が発生しても、レビュー依頼を`claimed`や`in_progress`のまま残さない。
