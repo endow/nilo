@@ -63,6 +63,10 @@ WORK_RECIPE_ALIASES = {
     "document": "docs-update",
     "design": "basic-design",
 }
+WORK_PATH_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
+WORK_DOCUMENT_PATH_UPDATE_SUFFIX = re.compile(r"^(?:を|の)?(?:更新|編集|追記|整理|書き換え|修正)")
+WORK_DOCUMENT_PATH_UPDATE_PREFIX = re.compile(r"(?:\bupdate|\bedit|\brevise)\s+(?:the\s+)?$")
+WORK_DOCUMENT_PATH_SUFFIXES = (".md", ".mdx", ".rst", ".adoc", ".txt")
 
 def read_only_work_route(request: str) -> dict[str, str] | None:
     """Route a caller-declared inspection without inferring intent from domain words."""
@@ -110,11 +114,15 @@ def infer_work_recipe_candidate(request: str, *, explicit_recipe: str | None = N
         explicit_recipe = WORK_RECIPE_ALIASES.get(explicit_recipe, explicit_recipe)
         return {"recipe": explicit_recipe, "confidence": "explicit", "reason": "--recipe", "ambiguous_candidates": []}
     lowered = request.lower()
+    document_path_update = _work_document_path_is_update_target(lowered)
+    keyword_source = WORK_PATH_TOKEN_PATTERN.sub(" ", lowered)
     matches = []
     for recipe, keywords in WORK_RECIPE_KEYWORDS.items():
-        hits = [keyword for keyword in keywords if _work_keyword_matches(lowered, keyword)]
+        hits = [keyword for keyword in keywords if _work_keyword_matches(keyword_source, keyword)]
         if hits:
             matches.append({"recipe": recipe, "score": len(hits), "reason": ", ".join(hits[:3])})
+    if document_path_update and not any(match["recipe"] == "docs-update" for match in matches):
+        matches.append({"recipe": "docs-update", "score": 1, "reason": "document path update"})
     release_reason = _work_release_intent_reason(lowered)
     if release_reason:
         matches.append({"recipe": "release", "score": 2, "reason": release_reason})
@@ -142,6 +150,18 @@ def _work_keyword_matches(lowered_request: str, keyword: str) -> bool:
     if lowered_keyword.isascii() and lowered_keyword.replace(" ", "").isalpha():
         return re.search(rf"(?<![a-z0-9_-]){re.escape(lowered_keyword)}(?![a-z0-9_-])", lowered_request) is not None
     return lowered_keyword in lowered_request
+
+
+def _work_document_path_is_update_target(lowered_request: str) -> bool:
+    for match in WORK_PATH_TOKEN_PATTERN.finditer(lowered_request):
+        path_token = match.group(0)
+        if not (path_token.startswith("docs/") or path_token.endswith(WORK_DOCUMENT_PATH_SUFFIXES)):
+            continue
+        if WORK_DOCUMENT_PATH_UPDATE_SUFFIX.search(lowered_request[match.end() :]):
+            return True
+        if WORK_DOCUMENT_PATH_UPDATE_PREFIX.search(lowered_request[: match.start()]):
+            return True
+    return False
 
 
 def _work_release_intent_reason(lowered_request: str) -> str:

@@ -1775,6 +1775,74 @@ variables:
             self.assertIn("recipe: bugfix", english_bugfix_output.getvalue())
             self.assertNotIn("recipe: release", english_bugfix_output.getvalue())
 
+    def test_facade_work_prioritizes_implementation_action_over_referenced_docs_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", root.name])
+
+                implementation_output = io.StringIO()
+                with redirect_stdout(implementation_output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "work",
+                            "docs/internal/review-execution-design.mdを元に共通レビュー実行基盤を実装する",
+                            "--intent",
+                            "change",
+                            "--dry-run",
+                        ]
+                    )
+
+                build_output = io.StringIO()
+                with redirect_stdout(build_output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "work",
+                            "docs/internal/review-execution-design.mdを元に共通レビュー実行基盤を構築する",
+                            "--intent",
+                            "change",
+                            "--dry-run",
+                        ]
+                    )
+
+                docs_output = io.StringIO()
+                with redirect_stdout(docs_output):
+                    main(["--db", str(db), "work", "docs/commands.mdの説明を更新する", "--intent", "change", "--dry-run"])
+
+                direct_path_update_output = io.StringIO()
+                with redirect_stdout(direct_path_update_output):
+                    main(["--db", str(db), "work", "docs/commands.mdを更新する", "--intent", "change", "--dry-run"])
+
+                english_path_update_output = io.StringIO()
+                with redirect_stdout(english_path_update_output):
+                    main(["--db", str(db), "work", "Update docs/commands.md", "--intent", "change", "--dry-run"])
+
+                source_path_fix_output = io.StringIO()
+                with redirect_stdout(source_path_fix_output):
+                    main(["--db", str(db), "work", "src/nilo/cli.pyの不具合を修正する", "--intent", "change", "--dry-run"])
+
+                english_docs_output = io.StringIO()
+                with redirect_stdout(english_docs_output):
+                    main(["--db", str(db), "work", "Update the docs describing the build pipeline", "--intent", "change", "--dry-run"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertIn("recipe: none", implementation_output.getvalue())
+            self.assertIn("recipe: none", build_output.getvalue())
+            self.assertIn("recipe: docs-update", docs_output.getvalue())
+            self.assertIn("recipe: docs-update", direct_path_update_output.getvalue())
+            self.assertIn("recipe: docs-update", english_path_update_output.getvalue())
+            self.assertIn("recipe: docs-update", english_docs_output.getvalue())
+            self.assertIn("recipe: bugfix", source_path_fix_output.getvalue())
+
     def test_facade_work_selects_release_recipe_for_explicit_release_preparation(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
