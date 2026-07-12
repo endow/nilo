@@ -848,6 +848,7 @@ class McpServerTests(unittest.TestCase):
                 "import_review_result",
                 "register_reviewer",
                 "claim_next_review",
+                "renew_review_lease",
                 "request_task_review",
                 "run_review",
                 "dispatch_review",
@@ -919,6 +920,7 @@ class McpServerTests(unittest.TestCase):
             {
                 "register_reviewer",
                 "claim_next_review",
+                "renew_review_lease",
                 "request_task_review",
                 "run_review",
                 "dispatch_review",
@@ -928,8 +930,8 @@ class McpServerTests(unittest.TestCase):
                 "mark_stale_review_requests",
             }.issubset(names)
         )
-        self.assertEqual(response["result"]["default_tool_count"], 14)
-        self.assertEqual(response["result"]["review_handoff_tool_count"], 9)
+        self.assertEqual(response["result"]["default_tool_count"], 15)
+        self.assertEqual(response["result"]["review_handoff_tool_count"], 10)
 
     def test_get_agent_work_context_returns_next_step_and_write_token(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2150,14 +2152,41 @@ MCP でも承認待ちの計画を人間向けに返す。
                 )
                 claim = call_tool("claim_next_review", {"reviewer": "claude-code", "project_id": "project_test"}, db)
                 review_id = claim["review_id"]
+                renewed = call_tool(
+                    "renew_review_lease",
+                    {"review_id": review_id, "reviewer": "claude-code", "lease_id": claim["lease_id"], "lease_seconds": 600},
+                    db,
+                )
+                self.assertEqual(renewed["lease_id"], claim["lease_id"])
+                self.assertGreater(renewed["lease_expires_at"], claim["lease_expires_at"])
                 store = Store(db)
                 try:
+                    store.update("review_attempts", claim["review_attempt_id"], {"lease_expires_at": "2000-01-01T00:00:00+00:00"})
                     store.update("review_requests", review_id, {"updated_at": "2000-01-01T00:00:00+00:00"})
                 finally:
                     store.close()
+                with self.assertRaisesRegex(McpToolError, "lease expired"):
+                    call_tool(
+                        "renew_review_lease",
+                        {"review_id": review_id, "reviewer": "claude-code", "lease_id": claim["lease_id"]},
+                        db,
+                    )
                 stale = call_tool("mark_stale_review_requests", {"reviewer": "claude-code", "stale_after_seconds": 1}, db)
                 stale_status = call_tool("get_project_status", {"project_id": "project_test"}, db)
                 reclaim = call_tool("claim_next_review", {"reviewer": "claude-code", "project_id": "project_test"}, db)
+                with self.assertRaisesRegex(McpToolError, "lease mismatch"):
+                    call_tool(
+                        "import_review_result",
+                        {
+                            "task_id": task_id,
+                            "review_id": review_id,
+                            "reviewer": "claude-code",
+                            "lease_id": claim["lease_id"],
+                            "last_seen_event_id": reclaim["latest_event"]["event_id"],
+                            "body_md": review_body(verdict="approved", summary="Late result.", findings=""),
+                        },
+                        db,
+                    )
                 imported = call_tool(
                     "import_review_result",
                     {

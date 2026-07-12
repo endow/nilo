@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -31,10 +32,11 @@ from .project_language import (
 )
 from .review import build_review_context, build_review_result_template
 from .review_dispatcher import DispatchError, dispatch_review, dispatch_review_direct
-from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
+from .review_lifecycle import insert_review_attempt, insert_review_request, set_review_attempt_status, set_review_request_status, update_review_attempt, update_review_request
 from .reviewer_registry import (
     ReviewerResolutionError,
     canonical_reviewer_name,
+    normalize_backend_kind,
     normalize_capabilities,
     reviewer_prepare_status,
     reviewer_availability,
@@ -463,8 +465,22 @@ TOOLS = [
             {
                 "reviewer": {"type": "string"},
                 "project_id": {"type": "string"},
+                "lease_seconds": {"type": "integer"},
             },
             ["reviewer"],
+        ),
+    },
+    {
+        "name": "renew_review_lease",
+        "description": "Renew an active MCP review lease for a remote worker.",
+        "inputSchema": json_schema(
+            {
+                "review_id": {"type": "string"},
+                "reviewer": {"type": "string"},
+                "lease_id": {"type": "string"},
+                "lease_seconds": {"type": "integer"},
+            },
+            ["review_id", "reviewer", "lease_id"],
         ),
     },
     {
@@ -552,6 +568,7 @@ TOOLS = [
                 "review_id": {"type": "string"},
                 "body_md": {"type": "string"},
                 "reviewer": {"type": "string"},
+                "lease_id": {"type": "string"},
                 "last_seen_event_id": {"type": "string"},
                 "context_token": {"type": "string"},
             },
@@ -740,6 +757,7 @@ WRITE_FENCE_TOOL_NAMES = {
     "dispatch_review",
     "register_reviewer",
     "claim_next_review",
+    "renew_review_lease",
     "mark_stale_review_requests",
     "request_review",
     "import_review_result",
@@ -765,6 +783,7 @@ DEFAULT_TOOL_NAMES = {
 REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES = {
     "register_reviewer",
     "claim_next_review",
+    "renew_review_lease",
     "request_task_review",
     "run_review",
     "dispatch_review",
@@ -1446,7 +1465,39 @@ def claim_next_review(store: Store, arguments: dict) -> dict:
         return {"reviewer": reviewer, "claimed": False, "review_request": None}
     request = rows[-1]
     now = now_iso()
-    request = update_review_request(store, request["id"], {"status": "claimed", "updated_at": now})
+    lease_seconds = optional_int(arguments, "lease_seconds", 300)
+    if lease_seconds < 1:
+        raise McpToolError("lease_seconds must be positive")
+    lease_id = make_id("review_lease")
+    registration = latest_reviewer_registration(store, reviewer)
+    metadata = (registration or {}).get("metadata") or {}
+    worker_instance_id = str(metadata.get("worker_instance_id") or (registration or {}).get("id") or reviewer)
+    lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).astimezone().isoformat(timespec="microseconds")
+    previous_attempts = store.list_where("review_attempts", "review_request_id=?", (request["id"],))
+    attempt_number = max((int(row["attempt_number"]) for row in previous_attempts), default=0) + 1
+    attempt = {
+        "id": make_id("review_attempt"),
+        "task_id": request["task_id"],
+        "review_request_id": request["id"],
+        "reviewer": reviewer,
+        "backend_kind": normalize_backend_kind("", reviewer),
+        "transport": "mcp_worker",
+        "status": "running",
+        "attempt_number": attempt_number,
+        "idempotency_key": f"{request['id']}:{attempt_number}:{reviewer}:{request.get('based_on_snapshot', {}).get('git_diff_hash', '')}",
+        "based_on_event_id": request.get("based_on_event_id", ""),
+        "based_on_snapshot": request.get("based_on_snapshot", {}),
+        "lease_id": lease_id,
+        "lease_expires_at": lease_expires_at,
+        "worker_instance_id": worker_instance_id,
+        "diagnostics": {},
+        "started_at": now,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with store.transaction():
+        request = update_review_request(store, request["id"], {"status": "claimed", "updated_at": now})
+        insert_review_attempt(store, attempt)
     task = store.get("tasks", request["task_id"])
     report = store.latest_for_task("agent_reports", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
@@ -1457,9 +1508,43 @@ def claim_next_review(store: Store, arguments: dict) -> dict:
         "review_request": request,
         "task_id": task["id"],
         "review_id": request["id"],
+        "review_attempt_id": attempt["id"],
+        "lease_id": lease_id,
+        "lease_expires_at": lease_expires_at,
+        "worker_instance_id": worker_instance_id,
         "prompt_md": build_review_context(task, request, report, None, verification_run, workspace_root),
         "template_md": build_review_result_template(request),
         "latest_event": store.latest_task_status_event(task["id"]),
+    }
+
+
+def renew_review_lease(store: Store, arguments: dict) -> dict:
+    review_id = require_string(arguments, "review_id")
+    reviewer = canonical_reviewer_name(require_string(arguments, "reviewer"))
+    lease_id = require_string(arguments, "lease_id")
+    lease_seconds = optional_int(arguments, "lease_seconds", 300)
+    if lease_seconds < 1:
+        raise McpToolError("lease_seconds must be positive")
+    attempts = store.list_where("review_attempts", "review_request_id=? AND status IN ('starting', 'running')", (review_id,))
+    if not attempts:
+        raise McpToolError(f"review lease is no longer active: {review_id}")
+    attempt = max(attempts, key=lambda row: int(row["attempt_number"]))
+    if attempt["reviewer"] != reviewer or attempt["lease_id"] != lease_id:
+        raise McpToolError(f"review lease mismatch: {review_id}")
+    try:
+        lease_expiry = datetime.fromisoformat(attempt["lease_expires_at"])
+    except ValueError as exc:
+        raise McpToolError(f"review lease is invalid: {review_id}") from exc
+    if lease_expiry <= datetime.now(timezone.utc).astimezone():
+        raise McpToolError(f"review lease expired: {review_id}")
+    lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).astimezone().isoformat(timespec="microseconds")
+    updated = update_review_attempt(store, attempt["id"], {"lease_expires_at": lease_expires_at, "updated_at": now_iso()})
+    return {
+        "review_id": review_id,
+        "review_attempt_id": updated["id"],
+        "reviewer": reviewer,
+        "lease_id": lease_id,
+        "lease_expires_at": lease_expires_at,
     }
 
 
@@ -1474,9 +1559,30 @@ def mark_stale_review_requests(store: Store, arguments: dict) -> dict:
     now = now_iso()
     stale = []
     for request in store.list_where("review_requests", where, args):
-        if iso_age_seconds(request["updated_at"]) < stale_after_seconds:
+        attempts = store.list_where("review_attempts", "review_request_id=? AND status IN ('starting', 'running')", (request["id"],))
+        request_expired = iso_age_seconds(request["updated_at"]) >= stale_after_seconds
+        expired_attempt_ids = []
+        for attempt in attempts:
+            lease_expires_at = attempt.get("lease_expires_at") or ""
+            lease_expired = False
+            if lease_expires_at:
+                try:
+                    lease_expired = datetime.fromisoformat(lease_expires_at) <= datetime.now(timezone.utc).astimezone()
+                except ValueError:
+                    lease_expired = True
+            if request_expired or lease_expired:
+                expired_attempt_ids.append(attempt["id"])
+        if not request_expired and not expired_attempt_ids:
             continue
-        set_review_request_status(store, request["id"], "stale", updated_at=now)
+        with store.transaction():
+            for attempt in attempts:
+                if attempt["id"] not in expired_attempt_ids:
+                    continue
+                set_review_attempt_status(store, attempt["id"], "timed_out", error_class="timeout", diagnostics={"reason": "remote review lease expired"})
+            active_attempts = store.list_where("review_attempts", "review_request_id=? AND status IN ('starting', 'running')", (request["id"],))
+            if active_attempts:
+                continue
+            set_review_request_status(store, request["id"], "stale", updated_at=now)
         stale.append(request["id"])
     return {"stale_review_requests": stale, "count": len(stale)}
 
@@ -1522,18 +1628,35 @@ def mcp_import_review_result(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"review request must be claimed or in_progress before import: {review_id} [{request['status']}]")
     if reviewer != request["reviewer"]:
         raise McpToolError(f"reviewer mismatch for review {review_id}: expected {request['reviewer']}, got {reviewer}")
+    attempts = store.list_where("review_attempts", "review_request_id=?", (review_id,))
+    active_attempts = [attempt for attempt in attempts if attempt["status"] in {"starting", "running"}]
+    active_attempt = max(active_attempts, key=lambda row: int(row["attempt_number"])) if active_attempts else None
+    if attempts:
+        lease_id = optional_string(arguments, "lease_id")
+        if not active_attempt:
+            raise McpToolError(f"review lease is no longer active: {review_id}")
+        if lease_id and lease_id != active_attempt["lease_id"]:
+            raise McpToolError(f"review lease mismatch: {review_id}")
+        try:
+            if datetime.fromisoformat(active_attempt["lease_expires_at"]) <= datetime.now(timezone.utc).astimezone():
+                raise McpToolError(f"review lease expired: {review_id}")
+        except ValueError as exc:
+            raise McpToolError(f"review lease is invalid: {review_id}") from exc
     observed_event_id = observed_task_event_id(arguments, task_id)
     previous_event = require_fresh_task_event(store, task_id, observed_event_id)
     try:
-        transition = transition_import_review_result(
-            store,
-            task_id,
-            review_id,
-            body_md=body_md,
-            reviewer=reviewer,
-            last_seen_event_id=observed_event_id,
-            cwd=Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd())),
-        )
+        with store.transaction():
+            transition = transition_import_review_result(
+                store,
+                task_id,
+                review_id,
+                body_md=body_md,
+                reviewer=reviewer,
+                last_seen_event_id=observed_event_id,
+                cwd=Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd())),
+            )
+            if active_attempt:
+                set_review_attempt_status(store, active_attempt["id"], "succeeded")
     except TransitionError as exc:
         raise McpToolError(exc.message) from exc
     result = store.get("review_results", transition.created_ids["review_result"])
@@ -2109,6 +2232,7 @@ TOOL_HANDLERS = {
     "dispatch_review": mcp_dispatch_review,
     "register_reviewer": register_reviewer,
     "claim_next_review": claim_next_review,
+    "renew_review_lease": renew_review_lease,
     "mark_stale_review_requests": mark_stale_review_requests,
     "get_project_status": get_project_status,
     "get_project_summary": get_project_summary,
