@@ -80,6 +80,13 @@ class CoordinationResult:
     output: ReviewExecutionOutput | None = None
 
 
+@dataclass(frozen=True)
+class ReviewExecutionPolicy:
+    fallback_reviewers: tuple[str, ...] = ()
+    max_attempts: int = 1
+    retryable_error_classes: frozenset[ErrorClass] = frozenset({ErrorClass.RATE_LIMITED, ErrorClass.QUOTA_EXHAUSTED})
+
+
 ATTEMPT_STATUS_BY_ERROR = {
     ErrorClass.RATE_LIMITED: "rate_limited",
     ErrorClass.QUOTA_EXHAUSTED: "quota_exhausted",
@@ -125,6 +132,7 @@ def coordinate_review(
     reason: str,
     adapter: ReviewAdapter,
     cwd: Path | None = None,
+    existing_request_id: str = "",
 ) -> CoordinationResult:
     cwd = cwd or Path.cwd()
     task = store.get("tasks", task_id)
@@ -132,10 +140,15 @@ def coordinate_review(
         raise ValueError(f"task not found: {task_id}")
     created_at = now_iso()
     latest_event = store.latest_task_status_event(task_id)
-    snapshot = compact_snapshot(current_git_snapshot(cwd))
-    request_id = make_id("review")
+    request_id = existing_request_id or make_id("review")
+    existing_request = store.get("review_requests", request_id) if existing_request_id else None
+    if existing_request_id and not existing_request:
+        raise ValueError(f"review request not found: {existing_request_id}")
+    if existing_request and existing_request["status"] in {"completed", "cancelled", "stale", "superseded", "withdrawn"}:
+        raise ValueError(f"review request cannot be retried: {request_id} [{existing_request['status']}]")
+    snapshot = existing_request["based_on_snapshot"] if existing_request else compact_snapshot(current_git_snapshot(cwd))
     attempt_id = make_id("review_attempt")
-    request = {
+    request = existing_request or {
         "id": request_id,
         "task_id": task_id,
         "requester": requester,
@@ -166,7 +179,10 @@ def coordinate_review(
         "updated_at": created_at,
     }
     with store.transaction():
-        insert_review_request(store, request)
+        if existing_request:
+            request = set_review_request_status(store, request_id, "running")
+        else:
+            insert_review_request(store, request)
         insert_review_attempt(store, attempt)
 
     context = ReviewContext(
@@ -221,3 +237,48 @@ def coordinate_review(
             )
             set_review_request_status(store, request_id, "failed")
         return CoordinationResult("failed", store.get("review_requests", request_id), store.get("review_attempts", attempt_id))
+
+
+def coordinate_review_with_fallback(
+    store: Store,
+    *,
+    task_id: str,
+    requester: str,
+    reason: str,
+    adapters: list[ReviewAdapter],
+    policy: ReviewExecutionPolicy,
+    cwd: Path | None = None,
+) -> CoordinationResult:
+    if not adapters:
+        raise ValueError("at least one review adapter is required")
+    reviewer_names = [adapter.reviewer for adapter in adapters]
+    if len(reviewer_names) != len(set(reviewer_names)):
+        raise ValueError("fallback reviewer cycle or duplicate detected")
+    allowed_names = [adapters[0].reviewer, *policy.fallback_reviewers]
+    if reviewer_names != allowed_names[: len(reviewer_names)]:
+        raise ValueError("adapters must match the explicit fallback reviewer order")
+    if policy.max_attempts < 1 or len(adapters) > policy.max_attempts:
+        raise ValueError("review attempt limit exceeded")
+
+    request_id = ""
+    result: CoordinationResult | None = None
+    for index, adapter in enumerate(adapters):
+        result = coordinate_review(
+            store,
+            task_id=task_id,
+            requester=requester,
+            reason=reason,
+            adapter=adapter,
+            cwd=cwd,
+            existing_request_id=request_id,
+        )
+        request_id = result.review_request["id"]
+        if result.status == "completed":
+            return result
+        error_value = result.review_attempt.get("error_class") or ""
+        error_class = ErrorClass(error_value) if error_value in ErrorClass._value2member_map_ else ErrorClass.UNKNOWN
+        if error_class not in policy.retryable_error_classes or index + 1 >= len(adapters):
+            return result
+    if result is None:
+        raise RuntimeError("review coordination produced no result")
+    return result

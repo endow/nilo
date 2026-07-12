@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from nilo.review_coordinator import ErrorClass, ReviewBackendError, ReviewContext, ReviewExecutionOutput, coordinate_review
+from nilo.review_coordinator import ErrorClass, ReviewBackendError, ReviewContext, ReviewExecutionOutput, ReviewExecutionPolicy, coordinate_review, coordinate_review_with_fallback
 from nilo.store import Store
 
 
@@ -98,6 +98,71 @@ class ReviewCoordinatorTest(unittest.TestCase):
         self.assertEqual(result.review_request["status"], "failed")
         self.assertEqual(result.review_attempt["status"], "failed")
         self.assertEqual(result.review_attempt["error_class"], "unknown")
+
+    def test_explicit_fallback_reuses_request_and_keeps_attempt_history(self) -> None:
+        first = FakeAdapter(reviewer="claude-code", error=ReviewBackendError(ErrorClass.RATE_LIMITED, "limited"))
+        second = FakeAdapter(reviewer="codex")
+        result = coordinate_review_with_fallback(
+            self.store,
+            task_id="task_test",
+            requester="codex",
+            reason="test",
+            adapters=[first, second],
+            policy=ReviewExecutionPolicy(fallback_reviewers=("codex",), max_attempts=2),
+            cwd=self.root,
+        )
+        attempts = self.store.list_where("review_attempts", "review_request_id=?", (result.review_request["id"],))
+        attempts.sort(key=lambda row: row["attempt_number"])
+        self.assertEqual(result.status, "completed")
+        self.assertEqual([row["attempt_number"] for row in attempts], [1, 2])
+        self.assertEqual([row["reviewer"] for row in attempts], ["claude-code", "codex"])
+
+    def test_fallback_requires_explicit_unique_reviewers_within_limit(self) -> None:
+        with self.assertRaisesRegex(ValueError, "explicit fallback"):
+            coordinate_review_with_fallback(
+                self.store,
+                task_id="task_test",
+                requester="codex",
+                reason="test",
+                adapters=[FakeAdapter(reviewer="claude-code"), FakeAdapter(reviewer="grok")],
+                policy=ReviewExecutionPolicy(fallback_reviewers=(), max_attempts=2),
+                cwd=self.root,
+            )
+        with self.assertRaisesRegex(ValueError, "cycle or duplicate"):
+            coordinate_review_with_fallback(
+                self.store,
+                task_id="task_test",
+                requester="codex",
+                reason="test",
+                adapters=[FakeAdapter(reviewer="claude-code"), FakeAdapter(reviewer="claude-code")],
+                policy=ReviewExecutionPolicy(fallback_reviewers=("claude-code",), max_attempts=2),
+                cwd=self.root,
+            )
+        with self.assertRaisesRegex(ValueError, "limit exceeded"):
+            coordinate_review_with_fallback(
+                self.store,
+                task_id="task_test",
+                requester="codex",
+                reason="test",
+                adapters=[FakeAdapter(reviewer="claude-code"), FakeAdapter(reviewer="codex")],
+                policy=ReviewExecutionPolicy(fallback_reviewers=("codex",), max_attempts=1),
+                cwd=self.root,
+            )
+
+    def test_completed_request_cannot_be_executed_twice(self) -> None:
+        first = coordinate_review(self.store, task_id="task_test", requester="codex", reason="test", adapter=FakeAdapter(), cwd=self.root)
+        with self.assertRaisesRegex(ValueError, "cannot be retried"):
+            coordinate_review(
+                self.store,
+                task_id="task_test",
+                requester="codex",
+                reason="test",
+                adapter=FakeAdapter(),
+                cwd=self.root,
+                existing_request_id=first.review_request["id"],
+            )
+        attempts = self.store.list_where("review_attempts", "review_request_id=?", (first.review_request["id"],))
+        self.assertEqual(len(attempts), 1)
 
 
 if __name__ == "__main__":
