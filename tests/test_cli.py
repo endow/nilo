@@ -1910,7 +1910,7 @@ variables:
             self.assertNotIn("recipe: release", release_word_output.getvalue())
             self.assertNotIn("recipe: release", negated_release_recipe_output.getvalue())
 
-    def test_facade_work_stops_on_multiple_active_tasks_unless_task_is_explicit(self) -> None:
+    def test_facade_work_creates_independent_task_with_multiple_active_tasks(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1923,8 +1923,8 @@ variables:
                     main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_one", "--title", "one"])
                     main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_two", "--title", "two"])
 
-                stopped = io.StringIO()
-                with redirect_stdout(stopped):
+                independent = io.StringIO()
+                with redirect_stdout(independent):
                     main(["--db", str(db), "work", "このバグを直して", "--intent", "change"])
                 explicit = io.StringIO()
                 with redirect_stdout(explicit):
@@ -1932,12 +1932,13 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertIn("stopped: multiple_active_tasks", stopped.getvalue())
-            self.assertIn("task_one", stopped.getvalue())
+            self.assertIn("status: created", independent.getvalue())
+            self.assertNotIn("stopped: multiple_active_tasks", independent.getvalue())
+            self.assertNotIn("work_session: task_one", independent.getvalue())
             self.assertIn("work_session: task_one", explicit.getvalue())
             self.assertIn("recipe: bugfix", explicit.getvalue())
 
-    def test_facade_work_requires_explicit_task_for_single_active_task(self) -> None:
+    def test_facade_work_creates_independent_task_unless_existing_task_is_explicit(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1949,8 +1950,8 @@ variables:
                     main(["--db", str(db), "project", "create", "Nilo", "--id", project_id])
                     main(["--db", str(db), "task", "create", "--project", project_id, "--id", "task_release", "--title", "Release work"])
 
-                stopped = io.StringIO()
-                with redirect_stdout(stopped):
+                independent = io.StringIO()
+                with redirect_stdout(independent):
                     main(["--db", str(db), "work", "LICENSE parsing を直す", "--intent", "change"])
                 explicit = io.StringIO()
                 with redirect_stdout(explicit):
@@ -1958,9 +1959,8 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertIn("stopped: active_task_requires_explicit_selection", stopped.getvalue())
-            self.assertIn("nilo work --task task_release", stopped.getvalue())
-            self.assertNotIn("work_session: task_release", stopped.getvalue())
+            self.assertIn("status: created", independent.getvalue())
+            self.assertNotIn("work_session: task_release", independent.getvalue())
             self.assertIn("work_session: task_release", explicit.getvalue())
 
     def test_facade_work_dry_run_json_does_not_write_task(self) -> None:

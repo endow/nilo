@@ -542,30 +542,16 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
                 payload["project_boundary"] = boundary.to_dict()
                 print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
                 return
-        elif len(active_tasks) == 1:
+        elif len(active_tasks) == 1 and not request:
             task = active_tasks[0]
-            if not request:
-                task_id = task["id"]
-            else:
-                task["status"] = statuses.get(task["id"], task["status"])
-                quoted_request = shlex.quote(request)
-                payload = _work_stop_payload(
-                    "active_task_requires_explicit_selection",
-                    project_id=project_id,
-                    next_commands=[f"nilo work --task {task['id']} {quoted_request}"],
-                    tasks=[task],
-                )
-                payload["project_boundary"] = boundary.to_dict()
-                print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
-                return
-        elif len(active_tasks) > 1:
+            task_id = task["id"]
+        elif len(active_tasks) > 1 and not request:
             for active_task in active_tasks:
                 active_task["status"] = statuses.get(active_task["id"], active_task["status"])
-            quoted_request = shlex.quote(request or "<user request>")
             payload = _work_stop_payload(
                 "multiple_active_tasks",
                 project_id=project_id,
-                next_commands=[f"nilo work --task {active_tasks[0]['id']} {quoted_request}"],
+                next_commands=[f"nilo instruct --task {active_task['id']}" for active_task in active_tasks],
                 tasks=active_tasks,
             )
             payload["project_boundary"] = boundary.to_dict()
