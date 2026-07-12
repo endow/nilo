@@ -16,7 +16,7 @@ from unittest.mock import patch
 from nilo.mcp_server import call_tool
 from nilo.cli import main
 from nilo.claude_cli_review import claude_doctor, claude_review, dry_run_claude_review
-from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
+from nilo.review_dispatcher import DIRECT_REVIEW_ADAPTERS, DispatchError, ResolvedCommand, ReviewerConfig
 from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_REVIEW_PROMPT
 from nilo.review_dispatcher import dispatch_review, dispatch_review_direct, find_executable, import_dispatch_review_result, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
 from nilo.review_dispatcher import doctor_reviewer_config
@@ -225,6 +225,52 @@ class ReviewDispatcherTests(unittest.TestCase):
             self.assertEqual(mcp_result["status"], cli_result["status"])
             self.assertEqual(mcp_result["reviewer"], cli_result["reviewer"])
             self.assertIn("review_attempt_id", mcp_result)
+
+    def test_claude_codex_and_grok_share_direct_adapter_contract(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "reviewer.py"
+            script.write_text(
+                "print('''# ReviewResult\\n\\n## Verdict\\napproved\\n\\n## Summary\\nOK\\n\\n## Findings\\nNo findings.''')\n",
+                encoding="utf-8",
+            )
+            config = root / "reviewers.toml"
+            blocks = []
+            for reviewer in ("claude-code", "codex", "grok"):
+                blocks.append(
+                    f"[reviewers.{reviewer}]\nkind = \"agent\"\ncommand = {json.dumps(sys.executable)}\n"
+                    f"args = [{json.dumps(str(script))}, \"{{prompt_file}}\"]\nworking_directory = \"{{repo_root}}\"\n"
+                    "auto_start = true\ntimeout_seconds = 10\ndispatch_capable = true\npersist_prompt_file = false\n"
+                )
+            config.write_text("\n".join(blocks), encoding="utf-8")
+            store = Store(root / "nilo.db")
+            try:
+                for reviewer in ("claude-code", "codex", "grok"):
+                    task_id = f"task_{reviewer.replace('-', '_')}"
+                    create_project_and_task(store, task_id=task_id)
+                    adapter = DIRECT_REVIEW_ADAPTERS.create_direct(
+                        store, reviewer=reviewer, actor="codex", repo_root=root, config_path=config
+                    )
+                    self.assertEqual(adapter.reviewer, reviewer)
+                    result = dispatch_review_direct(
+                        store, actor="codex", reviewer=reviewer, task_id=task_id, config_path=config, repo_root=root
+                    )
+                    self.assertEqual(result["status"], "completed")
+                self.assertEqual({row["backend_kind"] for row in store.list_where("review_attempts")}, {"claude_code", "codex", "grok"})
+            finally:
+                store.close()
+
+    def test_unconfigured_grok_does_not_create_active_request(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = Store(root / "nilo.db")
+            try:
+                create_project_and_task(store)
+                with self.assertRaises(DispatchError):
+                    dispatch_review_direct(store, actor="codex", reviewer="grok", task_id="task_test", repo_root=root)
+                self.assertEqual(store.list_where("review_requests"), [])
+            finally:
+                store.close()
     def test_claude_cli_review_imports_stdout_review_result_without_mcp_worker(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

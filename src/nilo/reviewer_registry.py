@@ -9,7 +9,7 @@ from .store import Store
 
 
 REVIEWER_HEARTBEAT_TTL_SECONDS = 300
-REVIEWER_BACKEND_KINDS = {"claude_code", "codex", "local_llm", "openai_compatible", "human", "other"}
+REVIEWER_BACKEND_KINDS = {"claude_code", "codex", "grok", "local_llm", "openai_compatible", "human", "other"}
 REVIEWER_CAPABILITIES = {"review_diff", "review_docs", "summarize", "propose_tests", "implement", "verify"}
 LEGACY_CAPABILITY_ALIASES = {"review": "review_diff"}
 
@@ -76,6 +76,8 @@ def normalize_backend_kind(value: str | None, reviewer: str = "") -> str:
         return "claude_code"
     if reviewer == "codex":
         return "codex"
+    if reviewer == "grok":
+        return "grok"
     if reviewer == "human":
         return "human"
     return "other"

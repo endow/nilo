@@ -1060,6 +1060,34 @@ class DirectReviewerAdapter:
         return None
 
 
+class ReviewAdapterRegistry:
+    PROVIDERS = frozenset({"claude-code", "codex", "grok"})
+
+    def create_direct(
+        self,
+        store: Store,
+        *,
+        reviewer: str,
+        actor: str,
+        repo_root: Path,
+        config_path: Path | None = None,
+    ) -> DirectReviewerAdapter:
+        reviewer = canonical_reviewer_name(reviewer)
+        if reviewer not in self.PROVIDERS:
+            raise DispatchError(
+                "reviewer_config",
+                f"unsupported direct reviewer: {reviewer}",
+                {"type": "configure_supported_reviewer", "reviewer": reviewer, "supported": sorted(self.PROVIDERS)},
+                status="needs_reviewer_config",
+            )
+        effective_path = config_path or repo_root / ".nilo" / "reviewers.toml"
+        config = load_reviewer_config(effective_path, reviewer, auto_configure=config_path is None)
+        return DirectReviewerAdapter(store, config, actor=actor, repo_root=repo_root)
+
+
+DIRECT_REVIEW_ADAPTERS = ReviewAdapterRegistry()
+
+
 def dispatch_review_direct(
     store: Store,
     *,
@@ -1072,8 +1100,13 @@ def dispatch_review_direct(
 ) -> dict[str, Any]:
     repo_root = repo_root or Path.cwd()
     reviewer = canonical_reviewer_name(reviewer)
-    config = load_reviewer_config(config_path or repo_root / ".nilo" / "reviewers.toml", reviewer, auto_configure=config_path is None)
-    adapter = DirectReviewerAdapter(store, config, actor=actor, repo_root=repo_root)
+    adapter = DIRECT_REVIEW_ADAPTERS.create_direct(
+        store,
+        reviewer=reviewer,
+        actor=actor,
+        repo_root=repo_root,
+        config_path=config_path,
+    )
     coordinated = coordinate_review(store, task_id=task_id, requester=actor, reason=reason, adapter=adapter, cwd=repo_root)
     return {
         "status": coordinated.status,
