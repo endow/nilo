@@ -15,6 +15,7 @@ from typing import Any
 
 from .cli_support import make_id
 from .review import build_review_context, looks_like_review_result, parse_review_result
+from .review_coordinator import ErrorClass, ReviewBackendError, ReviewContext, ReviewExecutionOutput, coordinate_review
 from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
 from .reviewer_registry import canonical_reviewer_name, normalize_backend_kind, normalize_capabilities, reviewer_is_registered_available
 from .secret import detect_secret_issues, mask_secrets
@@ -918,7 +919,7 @@ def run_reviewer_process(config: ReviewerConfig, cwd: Path, env: dict[str, str],
 
 
 def import_dispatch_review_result(store: Store, request: dict, reviewer: str, body_md: str, *, last_seen_event_id: str, cwd: Path | None = None) -> tuple[dict, list[dict]]:
-    if request["status"] not in {"claimed", "in_progress"}:
+    if request["status"] not in {"claimed", "in_progress", "running"}:
         raise DispatchError(
             "review_importing",
             f"review request must be claimed or in_progress before import: {request['id']} [{request['status']}]",
@@ -960,6 +961,116 @@ def import_dispatch_review_result(store: Store, request: dict, reviewer: str, bo
     result = store.get("review_results", transition.created_ids["review_result"])
     stored_findings = store.list_where("review_findings", "review_result_id=?", (result["id"],))
     return result, stored_findings
+
+
+class DirectReviewerAdapter:
+    transport = "direct_cli"
+
+    def __init__(self, store: Store, config: ReviewerConfig, *, actor: str, repo_root: Path) -> None:
+        self.store = store
+        self.config = config
+        self.actor = actor
+        self.repo_root = repo_root
+        self.reviewer = canonical_reviewer_name(config.name)
+        self.backend_kind = normalize_backend_kind(config.kind, self.reviewer)
+        self.result: dict[str, Any] | None = None
+        self.findings: list[dict[str, Any]] = []
+        self._prompt_path: Path | None = None
+        self._last_seen_event_id = ""
+
+    def _variables(self, context: ReviewContext, prompt_path: Path) -> dict[str, str]:
+        task = self.store.get("tasks", context.task_id)
+        return {
+            "repo_root": str(self.repo_root),
+            "prompt_file": str(prompt_path),
+            "task_id": context.task_id,
+            "project_id": task["project_id"],
+            "review_id": context.review_request_id,
+            "reviewer": self.reviewer,
+            "actor": self.actor,
+        }
+
+    def readiness(self, context: ReviewContext) -> bool:
+        if self.config.kind in {"openai_compatible", "local_llm"}:
+            return True
+        variables = self._variables(context, self.repo_root / ".nilo" / "reviews" / f"{context.review_request_id}_prompt.md")
+        try:
+            reviewer_process_context(self.config, variables, self.repo_root)
+        except DispatchError as exc:
+            raise ReviewBackendError(ErrorClass.CONFIGURATION, exc.reason, diagnostics={"stderr": exc.stderr}) from exc
+        return True
+
+    def execute(self, context: ReviewContext) -> ReviewExecutionOutput:
+        request = self.store.get("review_requests", context.review_request_id)
+        self._prompt_path, prompt_md = build_prompt_file(self.store, request, self.repo_root)
+        latest_event = self.store.latest_task_status_event(context.task_id)
+        self._last_seen_event_id = latest_event["event_id"] if latest_event else ""
+        variables = self._variables(context, self._prompt_path)
+        try:
+            cwd, env, resolved = reviewer_process_context(self.config, variables, self.repo_root)
+            if self.config.kind in {"openai_compatible", "local_llm"}:
+                process = run_local_reviewer(self.config, env, prompt_md)
+            else:
+                process = run_reviewer_process(self.config, cwd, env, resolved)
+        except DispatchError as exc:
+            error_class = ErrorClass.TIMEOUT if exc.stage == "reviewer_timeout" else ErrorClass.TRANSPORT
+            raise ReviewBackendError(error_class, exc.reason, diagnostics={"stdout": exc.stdout, "stderr": exc.stderr}) from exc
+        finally:
+            if self._prompt_path and not self.config.persist_prompt_file:
+                self._prompt_path.unlink(missing_ok=True)
+        if process.returncode != 0:
+            raise ReviewBackendError(
+                ErrorClass.TRANSPORT,
+                f"reviewer process exited with code {process.returncode}",
+                error_code=str(process.returncode),
+                diagnostics={"stdout": process.stdout, "stderr": process.stderr},
+            )
+        return ReviewExecutionOutput(process.stdout, {"stderr": process.stderr, "exit_code": process.returncode})
+
+    def finalize(self, store: Store, context: ReviewContext, output: ReviewExecutionOutput) -> None:
+        request = store.get("review_requests", context.review_request_id)
+        try:
+            self.result, self.findings = import_dispatch_review_result(
+                store,
+                request,
+                self.reviewer,
+                output.body,
+                last_seen_event_id=self._last_seen_event_id,
+                cwd=self.repo_root,
+            )
+        except DispatchError as exc:
+            raise ReviewBackendError(ErrorClass.INVALID_OUTPUT, exc.reason, diagnostics={"stdout": exc.stdout, "stderr": exc.stderr}) from exc
+
+    def cancel(self, attempt_id: str) -> None:
+        return None
+
+
+def dispatch_review_direct(
+    store: Store,
+    *,
+    actor: str,
+    reviewer: str,
+    task_id: str,
+    reason: str = "direct agent review",
+    config_path: Path | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    repo_root = repo_root or Path.cwd()
+    reviewer = canonical_reviewer_name(reviewer)
+    config = load_reviewer_config(config_path or repo_root / ".nilo" / "reviewers.toml", reviewer, auto_configure=config_path is None)
+    adapter = DirectReviewerAdapter(store, config, actor=actor, repo_root=repo_root)
+    coordinated = coordinate_review(store, task_id=task_id, requester=actor, reason=reason, adapter=adapter, cwd=repo_root)
+    return {
+        "status": coordinated.status,
+        "task_id": task_id,
+        "reviewer": reviewer,
+        "review_request_id": coordinated.review_request["id"],
+        "review_attempt_id": coordinated.review_attempt["id"],
+        "error_class": coordinated.review_attempt.get("error_class", ""),
+        "retry_after": coordinated.review_attempt.get("retry_after", ""),
+        "result": adapter.result,
+        "findings": adapter.findings,
+    }
 
 
 def close_superseded_pending_reviews(store: Store, task_id: str, reviewer: str, completed_review_id: str, actor: str) -> list[str]:

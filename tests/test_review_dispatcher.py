@@ -15,7 +15,7 @@ from nilo.mcp_server import call_tool
 from nilo.claude_cli_review import claude_doctor, claude_review, dry_run_claude_review
 from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
 from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_REVIEW_PROMPT
-from nilo.review_dispatcher import dispatch_review, find_executable, import_dispatch_review_result, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
+from nilo.review_dispatcher import dispatch_review, dispatch_review_direct, find_executable, import_dispatch_review_result, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
 from nilo.review_dispatcher import doctor_reviewer_config
 from nilo.reviewer_registry import reviewer_is_registered_available
 from nilo.store import Store
@@ -130,6 +130,45 @@ approved
 
 
 class ReviewDispatcherTests(unittest.TestCase):
+    def test_direct_dispatch_completes_without_reviewer_registration_or_claim(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            script = root / "reviewer.py"
+            script.write_text(
+                "print('''# ReviewResult\\n\\n## Verdict\\napproved\\n\\n## Summary\\nOK\\n\\n## Findings\\nNo findings.''')\n",
+                encoding="utf-8",
+            )
+            config = write_config(root, args=[str(script), "{prompt_file}"], persist_prompt_file=False)
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                result = dispatch_review_direct(store, actor="codex", reviewer="claude-code", task_id="task_test", config_path=config, repo_root=root)
+                self.assertEqual(result["status"], "completed")
+                self.assertIsNotNone(result["result"])
+                self.assertEqual(store.list_where("review_reviewers"), [])
+                attempt = store.get("review_attempts", result["review_attempt_id"])
+                self.assertEqual(attempt["status"], "succeeded")
+            finally:
+                store.close()
+
+    def test_direct_dispatch_nonzero_and_timeout_leave_no_active_request(self) -> None:
+        for body, timeout, expected in [("raise SystemExit(2)\n", 10, "transport"), ("import time; time.sleep(2)\n", 0.01, "timeout")]:
+            with self.subTest(expected=expected), TemporaryDirectory() as directory:
+                root = Path(directory)
+                script = root / "reviewer.py"
+                script.write_text(body, encoding="utf-8")
+                config = write_config(root, args=[str(script), "{prompt_file}"], timeout_seconds=timeout, persist_prompt_file=False)
+                store = Store(root / "nilo.db")
+                try:
+                    create_project_and_task(store)
+                    result = dispatch_review_direct(store, actor="codex", reviewer="claude-code", task_id="task_test", config_path=config, repo_root=root)
+                    self.assertEqual(result["status"], "failed")
+                    self.assertEqual(result["error_class"], expected)
+                    active = store.list_where("review_requests", "status IN ('requested', 'running', 'claimed', 'in_progress', 'reviewer_unavailable')")
+                    self.assertEqual(active, [])
+                finally:
+                    store.close()
     def test_claude_cli_review_imports_stdout_review_result_without_mcp_worker(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

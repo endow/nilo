@@ -1131,8 +1131,8 @@ def import_review_result(
     request = store.get("review_requests", review_id)
     if not request or request["task_id"] != task_id:
         raise TransitionError("review_request_not_found", f"review request not found for task: {review_id}")
-    if request["status"] not in {"claimed", "in_progress"}:
-        raise TransitionError("review_request_not_claimed", f"review request must be claimed or in_progress before import: {review_id} [{request['status']}]")
+    if request["status"] not in {"claimed", "in_progress", "running"}:
+        raise TransitionError("review_request_not_claimed", f"review request must be claimed, in_progress, or running before import: {review_id} [{request['status']}]")
     if reviewer != request["reviewer"]:
         raise TransitionError("reviewer_mismatch", f"reviewer mismatch for review {review_id}: expected {request['reviewer']}, got {reviewer}")
     latest = store.latest_task_status_event(task_id)
