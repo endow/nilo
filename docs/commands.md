@@ -44,6 +44,22 @@ nilo view
 
 ブラウザを自動で開かない場合は `--no-open`、ポートを変える場合は `--port`、概要 JSON だけを見る場合は `--format json` を使います。
 
+## AIレビュー
+
+通常の同期レビューは1操作の`review run`を使います。
+
+```bash
+nilo review run --task <task_id> --reviewer claude-code
+nilo review run --task <task_id> --reviewer codex
+nilo review run --task <task_id> --reviewer grok --config .nilo/reviewers.toml
+```
+
+ClaudeとCodexは利用可能なCLIを安全に検出できる場合だけ設定を自動生成します。GrokはCLI/API環境が複数あるため、`reviewers.toml`への明示設定が必要です。CLIとMCPの`run_review`は同じcoordinatorを使い、成功、rate limit、quota、timeout、異常終了のいずれでもreview requestを実行中のまま残しません。
+
+rate limitまたはquota枯渇は`deferred`として記録され、taskを「レビュー実行中」としてブロックしません。別reviewerへのfallbackは既定では行わず、明示policyがある場合だけ実行します。
+
+`review claude`、`review dispatch`、MCPのrequest/claim/import toolは後方互換またはremote worker向けに残しています。MCP remote workerでは内部的にleaseを使いますが、通常のdirect reviewでregister、heartbeat、claim、手動importは不要です。
+
 ## 保存されるもの
 
 Nilo はプロジェクトルートの `.nilo/nilo.db` に作業状態を保存します。

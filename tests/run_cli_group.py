@@ -104,7 +104,9 @@ GROUPS = {
         "test_review_dispatch_*",
         "test_review_quick_*",
         "test_review_human_launch_*",
+        "test_review_claude_*",
         "test_natural_language_*",
+        "test_work_request_mentioning_claude_review_is_not_routed_as_review_intent",
     ],
     "review-mcp": [
         "test_mcp_reviewer_*",

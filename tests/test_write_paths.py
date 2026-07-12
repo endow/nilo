@@ -20,6 +20,7 @@ ALLOWED_CORE_WRITERS = {
     "overdrive_runs": {"src/nilo/overdrive.py"},
     "review_findings": {"src/nilo/transitions.py"},
     "review_finding_updates": {"src/nilo/transitions.py"},
+    "review_attempts": {"src/nilo/review_lifecycle.py"},
     "review_requests": {"src/nilo/review_lifecycle.py", "src/nilo/transitions.py"},
     "review_results": {"src/nilo/transitions.py"},
     "roadmap_commitments": {"src/nilo/transitions.py", "src/nilo/cli_handlers/roadmap.py"},

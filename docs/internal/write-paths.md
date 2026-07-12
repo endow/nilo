@@ -11,6 +11,7 @@ step after legacy paths have transition coverage or explicit exceptions.
 | `review_results` | `src/nilo/transitions.py` | Yes | Review result import is transition-owned. |
 | `review_findings` | `src/nilo/transitions.py` | Yes | Findings are created with review result import. |
 | `review_finding_updates` | `src/nilo/transitions.py` | Yes | Finding status changes are transition-owned. |
+| `review_attempts` | `src/nilo/review_lifecycle.py` | Helper required | Provider/transportごとの試行、error、leaseはreview lifecycle helperを通して更新する。 |
 | `review_requests` | `src/nilo/review_lifecycle.py`, `src/nilo/transitions.py` completion update | Helper required | Request lifecycle writes go through the internal review lifecycle helper; review-result completion is part of transition import. |
 | `agent_reports` | `src/nilo/agent_report_import.py` | Indirect | Agent report import is isolated in a low-level helper and called by transition-owned import paths. |
 | `evidence_checks` | No production writer | No | Retained schema; current verification uses `verification_runs`. |
