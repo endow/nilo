@@ -312,6 +312,32 @@ def roadmap_task_evidence(store: Store, task: dict, status: str, *, current_snap
     }
 
 
+def successful_current_verification_commands(task_evidence: list[dict]) -> list[str]:
+    return [
+        item.get("latest_verification_command", "")
+        for item in task_evidence
+        if item["latest_verification_status"] == "passed"
+        and item["latest_evidence_status"] in {"current", "recorded", "present"}
+        and item.get("latest_verification_command")
+    ]
+
+
+def diff_verification_needs_human_review(task_evidence: dict, verification_commands: list[str]) -> bool:
+    if task_evidence["diff_verification"]["status"] != "needs_human_review":
+        return False
+    diff = task_evidence["diff_verification"]
+    if diff.get("unknown_files"):
+        return True
+    return any(
+        not any(
+            command_runs_broad_test_suite(command)
+            or any(command_covers_expected_test(command, expected_test) for expected_test in expected_tests)
+            for command in verification_commands
+        )
+        for expected_tests in diff.get("missing_tests", {}).values()
+    )
+
+
 def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[dict], statuses: dict[str, str], *, current_snapshot: dict | None = None) -> dict:
     related_tasks = related_tasks_for_commitment(tasks, commitment)
     current_snapshot = current_snapshot or current_git_snapshot(Path.cwd())
@@ -324,7 +350,8 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
         for item in task_evidence
     ) if task_evidence else False
     has_failed_verification = any(item["latest_verification_status"] in ("failed", "timed_out") for item in task_evidence)
-    has_diff_human_review = any(item["diff_verification"]["status"] == "needs_human_review" for item in task_evidence)
+    verification_commands = successful_current_verification_commands(task_evidence)
+    has_diff_human_review = any(diff_verification_needs_human_review(item, verification_commands) for item in task_evidence)
     has_current_review = all(item["latest_review_status"] in {"current", "missing"} for item in task_evidence) if task_evidence else False
     has_unresolved_findings = any(item["unresolved_review_findings"] for item in task_evidence)
     all_completions_valid = all(item["completion_valid"] for item in task_evidence) if task_evidence else False
@@ -537,8 +564,9 @@ def human_roadmap_assessment_summary(assessment: dict) -> dict:
     failed_verifications = [
         task for task in related_tasks if task["latest_verification_status"] in ("failed", "timed_out")
     ]
+    verification_commands = successful_current_verification_commands(related_tasks)
     diff_review_tasks = [
-        task for task in related_tasks if task["diff_verification"]["status"] == "needs_human_review"
+        task for task in related_tasks if diff_verification_needs_human_review(task, verification_commands)
     ]
     changed_files = sorted(
         {

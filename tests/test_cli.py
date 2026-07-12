@@ -7422,6 +7422,7 @@ close 済み commitment を表示できるようにした。
                             "status": "completed_by_user",
                             "latest_evidence_status": "current",
                             "latest_verification_status": "passed",
+                            "latest_verification_command": "python -m unittest discover tests",
                             "diff_verification": {
                                 "status": "needs_human_review",
                                 "changed_files": ["src/nilo/example.py"],
@@ -7438,12 +7439,127 @@ close 済み commitment を表示できるようにした。
         body = render_human_roadmap_summary_markdown({"id": "project_test", "name": "Nilo"}, summary)
 
         self.assertEqual(summary["work_tasks"], "すべて完了")
-        self.assertEqual(summary["evidence_attention"], "あり")
+        self.assertEqual(summary["evidence_attention"], "なし")
         self.assertIn("作業タスク: すべて完了", body)
-        self.assertIn("証跡注意: あり", body)
-        self.assertIn("変更ファイルとテストの対応が人間確認待ちです", body)
+        self.assertIn("証跡注意: なし", body)
+        self.assertNotIn("変更ファイルとテストの対応が人間確認待ちです", body)
         self.assertNotIn("needs_human_review", body)
         self.assertNotIn("diff-aware verification", body)
+
+    def test_human_roadmap_summary_keeps_diff_review_when_passing_evidence_is_stale(self) -> None:
+        summary = human_roadmap_summary(
+            [
+                {
+                    "commitment_id": "commitment_stale_attention",
+                    "title": "Stale evidence roadmap",
+                    "status": "needs_verification",
+                    "closure_ready": False,
+                    "unresolved_reason": "passing verification not recorded",
+                    "related_tasks": [
+                        {
+                            "task_id": "task_stale_attention",
+                            "status": "completed_by_user",
+                            "latest_evidence_status": "stale",
+                            "latest_verification_status": "passed",
+                            "latest_verification_command": "python -m unittest discover tests",
+                            "diff_verification": {
+                                "status": "needs_human_review",
+                                "changed_files": ["src/nilo/example.py"],
+                                "missing_tests": {"src/nilo/example.py": ["tests/test_example.py"]},
+                                "unknown_files": [],
+                            },
+                        }
+                    ],
+                    "success_criteria": [],
+                    "evidence_policy": [],
+                }
+            ]
+        )
+
+        self.assertEqual(summary["evidence_attention"], "あり")
+        self.assertEqual(
+            summary["items"][0]["evidence_attention_items"],
+            ["古い証跡があります", "変更ファイルとテストの対応が人間確認待ちです"],
+        )
+
+    def test_human_roadmap_summary_keeps_diff_review_for_unrelated_passing_test(self) -> None:
+        summary = human_roadmap_summary(
+            [
+                {
+                    "commitment_id": "commitment_unrelated_test",
+                    "title": "Unrelated passing test roadmap",
+                    "status": "needs_human_review",
+                    "closure_ready": False,
+                    "unresolved_reason": "diff-aware verification needs human review",
+                    "related_tasks": [
+                        {
+                            "task_id": "task_unrelated_test",
+                            "status": "completed_by_user",
+                            "latest_evidence_status": "current",
+                            "latest_verification_status": "passed",
+                            "latest_verification_command": "python -m unittest tests.test_other",
+                            "diff_verification": {
+                                "status": "needs_human_review",
+                                "changed_files": ["src/nilo/example.py"],
+                                "missing_tests": {"src/nilo/example.py": ["tests/test_example.py"]},
+                                "unknown_files": [],
+                            },
+                        }
+                    ],
+                    "success_criteria": [],
+                    "evidence_policy": [],
+                }
+            ]
+        )
+
+        self.assertEqual(summary["evidence_attention"], "あり")
+        self.assertTrue(summary["items"][0]["needs_diff_human_review"])
+
+    def test_human_roadmap_summary_aggregates_passing_verification_across_phase_tasks(self) -> None:
+        summary = human_roadmap_summary(
+            [
+                {
+                    "commitment_id": "commitment_phase_evidence",
+                    "title": "Phase evidence roadmap",
+                    "status": "evidence_present",
+                    "closure_ready": True,
+                    "unresolved_reason": "",
+                    "related_tasks": [
+                        {
+                            "task_id": "task_implementation_phase",
+                            "status": "completed_by_user",
+                            "latest_evidence_status": "current",
+                            "latest_verification_status": "passed",
+                            "latest_verification_command": "python -m unittest tests.test_other",
+                            "diff_verification": {
+                                "status": "needs_human_review",
+                                "changed_files": ["src/nilo/example.py"],
+                                "missing_tests": {"src/nilo/example.py": ["tests/test_example.py"]},
+                                "unknown_files": [],
+                            },
+                        },
+                        {
+                            "task_id": "task_verification_phase",
+                            "status": "completed_by_user",
+                            "latest_evidence_status": "current",
+                            "latest_verification_status": "passed",
+                            "latest_verification_command": "python -m unittest tests.test_example",
+                            "diff_verification": {
+                                "status": "not_applicable",
+                                "changed_files": [],
+                                "missing_tests": {},
+                                "unknown_files": [],
+                            },
+                        },
+                    ],
+                    "success_criteria": [],
+                    "evidence_policy": [],
+                }
+            ]
+        )
+
+        self.assertEqual(summary["evidence_attention"], "なし")
+        self.assertFalse(summary["items"][0]["needs_diff_human_review"])
 
     def test_status_fast_path_does_not_run_full_roadmap_snapshot_when_idle(self) -> None:
         with TemporaryDirectory() as directory:

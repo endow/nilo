@@ -1,31 +1,23 @@
 # Roadmap
 
 - Project: Nilo
-- Current direction: accepted commitment: Backend非依存レビュー実行基盤
+- Current direction: accepted commitment: Roadmap Revision Proposal: ロードマップ証跡判定のフェーズ横断集約
 - Work state: 完了記録の確認が必要です。
 - Work area: implementation
 
 ## Current Commitment
 
-### Backend非依存レビュー実行基盤
+### Roadmap Revision Proposal: ロードマップ証跡判定のフェーズ横断集約
 
-- Intent: 現在のレビュー経路はClaude CLI直実行とMCP reviewer workflowに分かれ、通常操作が特定backendへ特殊化されている。MCP経路ではregister、heartbeat、claim、importという複数段階が遅延と故障点を増やす。またproviderのrate limitや異常終了時にrequestが`claimed`または`in_progress`へ残る経路があると、レビュー未完了の状態が利用者の後始末なしに解消されない。
-
-requestとattempt、backendとtransportを分離すれば、Claude、Codex、Grokの差をadapter内へ閉じ込めながら、全経路で同じ終了保証を適用できる。direct経路を短く保ち、remote workerにだけqueue/leaseを適用することで、速度と障害回復を両立する。
+- Intent: 現在の判定は、ロードマップを構成する各フェーズで成功済みの検証が存在しても、その証跡を全体として評価できず、ファイル名ベースの推定が実証済みの検証より強く扱われる場合がある。証跡の正本を保存済み検証へ寄せ、推定情報は補助シグナルとして扱う必要がある。
 
 #### Success Criteria
 
-- 利用者がCLIまたはMCPの1操作で任意の設定済みreviewerへレビューを依頼できる。
-- direct経路ではregister、heartbeat、claim、手動importが発生しない。
-- rate limit、quota、timeout、command not found、認証失敗、異常終了、不正出力の直後にactive requestが0件になる。
-- rate limitとquotaは恒久失敗と区別され、`retry_after`付きの`deferred`として表示できる。
-- 1つのrequestに複数attemptを記録し、許可されたfallbackの履歴を失わない。
-- fallbackを設定していない場合、別reviewerへ内容を送信しない。
-- 二重実行または二重importでreview resultが重複しない。
-- request後に対象snapshotが変化した結果を`stale`として拒否する。
-- MCP worker切断またはprocess crash後に期限切れleaseが回収され、active状態が残らない。
-- Claude、Codex、Grok adapterが共通contract testを通過する。
-- 既存review dataと既存CLI/MCP入口の後方互換性が維持される。
+- 関連する各フェーズの成功済み検証がロードマップ全体の証跡として集約される。
+- 成功済みかつ有効な検証が揃う場合、推定由来の `missing_tests` だけでは人間確認待ちにならない。
+- missing、failed、stale の検証証跡がある場合は完了扱いにならない。
+- 既存のロードマップ完了判定と証跡安全性のテストが維持され、新しい回帰テストが成功する。
+- 未解決の review finding がない。
 
 ## Proposals Waiting for Review
 
@@ -362,8 +354,20 @@ requestとattempt、backendとtransportを分離すれば、Claude、Codex、Gro
 - release recipe のコミット件名変更を自己レビューし、指摘が0件になるまで修正する (completion needs review / implementation)
 - 外部レビュアーの無断起動を防止し、明示承認ガードと回帰テストを追加する (completion needs review / implementation)
 - 明示依頼ガード修正を自己レビューし、指摘がなくなるまで修正と再検証を繰り返す (completion needs review / implementation)
-- docs/internal/review-execution-design.mdを元に共通レビュー実行基盤を実装する (planned / implementation)
-- nilo workのrecipe推定が依頼文中の設計書パスに誤反応する問題を修正する (planned / implementation)
+- Claude・Codex・Grokに共通する高速で残骸を残さないレビュー実行基盤を設計する (completion needs review / implementation)
+- docs/internal/review-execution-design.mdを元に共通レビュー実行基盤を実装する (completion needs review / implementation)
+- nilo workのrecipe推定が依頼文中の設計書パスに誤反応する問題を修正する (completion needs review / implementation)
+- review attempt schemaと状態機械を実装する (completion needs review / implementation)
+- 共通review coordinatorとadapter contractを実装する (completion needs review / implementation)
+- direct reviewer経路をcoordinatorへ移行する (completion needs review / implementation)
+- provider error分類とdeferred状態を実装する (completion needs review / implementation)
+- review run CLIと高水準MCP toolを追加する (completion needs review / implementation)
+- review retryとfallback policyを実装する (completion needs review / implementation)
+- MCP remote reviewへleaseとreaperを導入する (completion needs review / implementation)
+- Claude・Codex・Grok adapterをregistryへ統合する (completion needs review / implementation)
+- レビュー実行基盤の統合回帰テストと文書を完成させる (completion needs review / implementation)
+- Claudeレビューの未解決finding 3件に対応する (completion needs review / implementation)
+- ロードマップ全体の証跡判定で各フェーズの成功済み検証を集約し、変更ファイル名から推定したmissing_testsだけを理由に人間確認待ちへ戻さないよう改善する (planned / implementation)
 - Status Surface Refactor final verification (completion needs review / verification)
 - タスク受付・完了フローの簡素化 を検証する (completion needs review / verification)
 - リリースレシピ単一Task化 を検証する (completion needs review / verification)
