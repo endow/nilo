@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .review_lifecycle import VALID_REVIEW_ATTEMPT_STATUSES, VALID_REVIEW_REQUEST_STATUSES
 from .snapshot import commit_aware_evidence_status, completion_commit_metadata, current_git_snapshot, review_result_status, verified_dirty_tree_was_committed_unchanged
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
@@ -12,7 +13,6 @@ VALID_TASK_STATUSES = {"planned"}
 VALID_TASK_TYPES = {"research", "design", "implementation", "test_addition", "verification", "review", "refactor", "documentation"}
 VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_DECISION_ACTORS = {"human", "ai"}
-VALID_REVIEW_REQUEST_STATUSES = {"requested", "reviewer_unavailable", "claimed", "in_progress", "stale", "completed", "withdrawn", "superseded", "failed"}
 VALID_REVIEW_VERDICTS = {"approved", "commented", "changes_requested", "rejected"}
 VALID_FINDING_STATUSES = {"unresolved", "addressed", "accepted-risk"}
 VALID_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
@@ -162,6 +162,7 @@ def audit_schema_invariants(store: Store, project_id: str) -> list[dict[str, Any
     findings: list[dict[str, Any]] = []
     tasks, task_ids = _project_task_ids(store, project_id)
     completions = _task_scoped_rows(store, "task_completions", task_ids)
+    review_attempts = _task_scoped_rows(store, "review_attempts", task_ids) if store.has_table("review_attempts") else []
     review_requests = _task_scoped_rows(store, "review_requests", task_ids)
     review_results = _task_scoped_rows(store, "review_results", task_ids)
     review_findings = _task_scoped_rows(store, "review_findings", task_ids)
@@ -171,7 +172,7 @@ def audit_schema_invariants(store: Store, project_id: str) -> list[dict[str, Any
     roadmap_revisions = store.list_where("roadmap_revisions", "project_id=?", (project_id,))
     understanding_checks = _task_scoped_rows(store, "understanding_checks", task_ids)
     transition_scope_ids = set(task_ids)
-    for rows in (completions, review_requests, review_results, review_findings, failures, todos, roadmap_commitments, roadmap_revisions, understanding_checks):
+    for rows in (completions, review_attempts, review_requests, review_results, review_findings, failures, todos, roadmap_commitments, roadmap_revisions, understanding_checks):
         transition_scope_ids.update(row["id"] for row in rows)
     for task in tasks:
         if task["status"] not in VALID_TASK_STATUSES:
@@ -194,6 +195,11 @@ def audit_schema_invariants(store: Store, project_id: str) -> list[dict[str, Any
     for request in review_requests:
         if request["status"] not in VALID_REVIEW_REQUEST_STATUSES:
             findings.append(_finding("review_request_invalid_status", f"invalid review request status: {request['status']}", entity_type="review_request", entity_id=request["id"]))
+    for attempt in review_attempts:
+        if attempt["status"] not in VALID_REVIEW_ATTEMPT_STATUSES:
+            findings.append(_finding("review_attempt_invalid_status", f"invalid review attempt status: {attempt['status']}", entity_type="review_attempt", entity_id=attempt["id"]))
+        if not store.get("review_requests", attempt["review_request_id"]):
+            findings.append(_finding("review_attempt_request_missing", "review attempt references a missing review request", severity="error", entity_type="review_attempt", entity_id=attempt["id"]))
     for result in review_results:
         if result["verdict"] not in VALID_REVIEW_VERDICTS:
             findings.append(_finding("review_result_invalid_verdict", f"invalid review verdict: {result['verdict']}", entity_type="review_result", entity_id=result["id"]))

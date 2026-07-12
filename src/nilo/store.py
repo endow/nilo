@@ -19,6 +19,7 @@ CORE_STATE_TABLES = {
     "overdrive_runs",
     "review_findings",
     "review_finding_updates",
+    "review_attempts",
     "review_requests",
     "review_results",
     "roadmap_commitments",
@@ -195,6 +196,37 @@ CREATE TABLE IF NOT EXISTS review_requests (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS review_attempts (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  review_request_id TEXT NOT NULL,
+  reviewer TEXT NOT NULL,
+  backend_kind TEXT NOT NULL,
+  transport TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  based_on_event_id TEXT NOT NULL DEFAULT '',
+  based_on_snapshot TEXT NOT NULL DEFAULT '{}',
+  lease_id TEXT NOT NULL DEFAULT '',
+  lease_expires_at TEXT NOT NULL DEFAULT '',
+  worker_instance_id TEXT NOT NULL DEFAULT '',
+  error_class TEXT NOT NULL DEFAULT '',
+  error_code TEXT NOT NULL DEFAULT '',
+  retry_after TEXT NOT NULL DEFAULT '',
+  diagnostics TEXT NOT NULL DEFAULT '{}',
+  started_at TEXT NOT NULL DEFAULT '',
+  finished_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_attempts_idempotency_key
+ON review_attempts(idempotency_key);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_attempts_request_number
+ON review_attempts(review_request_id, attempt_number);
 
 CREATE TABLE IF NOT EXISTS review_reviewers (
   id TEXT PRIMARY KEY,
@@ -498,6 +530,7 @@ JSON_COLUMNS = {
 
 TABLE_JSON_COLUMNS = {
     "instructions": {"applied_failure_pattern_ids"},
+    "review_attempts": {"diagnostics"},
     "review_dispatches": {"args"},
 }
 
@@ -580,6 +613,8 @@ MIGRATION_COLUMNS: dict[str, set[str]] = {}
 for table, column, _definition in MIGRATION_COLUMN_DEFINITIONS:
     MIGRATION_COLUMNS.setdefault(table, set()).add(column)
 
+MIGRATION_TABLES = {"review_attempts"}
+
 
 def default_db_path() -> Path:
     env = os.environ.get("NILO_DB")
@@ -658,6 +693,12 @@ class Store:
 
     def _validate_table(self, table: str) -> None:
         self._table_columns(table)
+
+    def has_table(self, table: str) -> bool:
+        if not SQL_IDENTIFIER_PATTERN.fullmatch(table):
+            raise ValueError(f"invalid SQL table identifier: {table!r}")
+        row = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        return row is not None
 
     def _validate_write_target(self, table: str, columns: Any) -> None:
         table_columns = self._table_columns(table)
@@ -795,8 +836,19 @@ def pending_schema_migration_columns(path: Path) -> dict[str, list[str]]:
         conn.close()
 
 
+def pending_schema_migration_tables(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(path)
+    try:
+        existing = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        return sorted(MIGRATION_TABLES - existing)
+    finally:
+        conn.close()
+
+
 def backup_before_schema_migration(path: Path) -> None:
-    if not pending_schema_migration_columns(path):
+    if not pending_schema_migration_columns(path) and not pending_schema_migration_tables(path):
         return
     from .backup import create_backup
 
