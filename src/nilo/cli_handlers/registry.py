@@ -36,6 +36,7 @@ from .quality import (
     cmd_review_prepare,
     cmd_review_quick,
     cmd_review_request,
+    cmd_review_run,
     cmd_review_status,
     cmd_review_template,
     cmd_review_wait,

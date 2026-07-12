@@ -849,6 +849,7 @@ class McpServerTests(unittest.TestCase):
                 "register_reviewer",
                 "claim_next_review",
                 "request_task_review",
+                "run_review",
                 "dispatch_review",
                 "get_review_prompt",
                 "get_review_template",
@@ -919,6 +920,7 @@ class McpServerTests(unittest.TestCase):
                 "register_reviewer",
                 "claim_next_review",
                 "request_task_review",
+                "run_review",
                 "dispatch_review",
                 "get_review_prompt",
                 "get_review_template",
@@ -926,8 +928,8 @@ class McpServerTests(unittest.TestCase):
                 "mark_stale_review_requests",
             }.issubset(names)
         )
-        self.assertEqual(response["result"]["default_tool_count"], 13)
-        self.assertEqual(response["result"]["review_handoff_tool_count"], 8)
+        self.assertEqual(response["result"]["default_tool_count"], 14)
+        self.assertEqual(response["result"]["review_handoff_tool_count"], 9)
 
     def test_get_agent_work_context_returns_next_step_and_write_token(self) -> None:
         with TemporaryDirectory() as directory:

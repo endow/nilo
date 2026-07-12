@@ -23,7 +23,7 @@ from ..quality_logic import (
 )
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
 from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template
-from ..review_dispatcher import dispatch_review, doctor_reviewer_config, init_reviewer_config, quick_review
+from ..review_dispatcher import dispatch_review, dispatch_review_direct, doctor_reviewer_config, init_reviewer_config, quick_review
 from ..review_lifecycle import insert_review_request, update_review_request
 from ..reviewer_registry import ReviewerResolutionError, resolve_reviewer, resolve_review_request_target, reviewer_is_registered_available
 from ..reviewer_registry import reviewer_prepare_status
@@ -400,6 +400,25 @@ def cmd_review_dispatch(args: argparse.Namespace) -> None:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result["status"] == "review_failed":
+            raise SystemExit(1)
+    finally:
+        store.close()
+
+
+def cmd_review_run(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    try:
+        result = dispatch_review_direct(
+            store,
+            actor=args.actor,
+            reviewer=args.reviewer,
+            task_id=args.task,
+            reason=args.reason,
+            config_path=Path(args.config) if args.config else None,
+            repo_root=Path.cwd(),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result["status"] == "failed":
             raise SystemExit(1)
     finally:
         store.close()

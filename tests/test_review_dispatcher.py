@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import subprocess
 import sys
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.mcp_server import call_tool
+from nilo.cli import main
 from nilo.claude_cli_review import claude_doctor, claude_review, dry_run_claude_review
 from nilo.review_dispatcher import DispatchError, ResolvedCommand, ReviewerConfig
 from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_REVIEW_PROMPT
@@ -134,7 +137,7 @@ class ReviewDispatcherTests(unittest.TestCase):
     def test_direct_dispatch_completes_without_reviewer_registration_or_claim(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            db = root / "nilo.db"
+            db = root / ".nilo" / "nilo.db"
             script = root / "reviewer.py"
             script.write_text(
                 "print('''# ReviewResult\\n\\n## Verdict\\napproved\\n\\n## Summary\\nOK\\n\\n## Findings\\nNo findings.''')\n",
@@ -188,6 +191,40 @@ class ReviewDispatcherTests(unittest.TestCase):
                 self.assertIsNone(latest_pending_review_request(store, "task_test"))
             finally:
                 store.close()
+
+    def test_review_run_cli_and_mcp_use_same_direct_result_shape(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "reviewer.py"
+            script.write_text(
+                "print('''# ReviewResult\\n\\n## Verdict\\napproved\\n\\n## Summary\\nOK\\n\\n## Findings\\nNo findings.''')\n",
+                encoding="utf-8",
+            )
+            config = write_config(root, args=[str(script), "{prompt_file}"], persist_prompt_file=False)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            create_project_and_task(store, task_id="task_cli")
+            create_project_and_task(store, task_id="task_mcp")
+            store.close()
+
+            output = io.StringIO()
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(output):
+                    main(["--db", str(db), "review", "run", "--task", "task_cli", "--reviewer", "claude-code", "--config", str(config)])
+            finally:
+                os.chdir(previous)
+            cli_result = json.loads(output.getvalue())
+            mcp_result = call_tool(
+                "run_review",
+                {"task_id": "task_mcp", "actor": "codex", "reviewer": "claude-code", "config_path": str(config), "project_root": str(root)},
+                db,
+            )
+            self.assertEqual(cli_result["status"], "completed")
+            self.assertEqual(mcp_result["status"], cli_result["status"])
+            self.assertEqual(mcp_result["reviewer"], cli_result["reviewer"])
+            self.assertIn("review_attempt_id", mcp_result)
     def test_claude_cli_review_imports_stdout_review_result_without_mcp_worker(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

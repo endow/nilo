@@ -30,7 +30,7 @@ from .project_language import (
     roadmap_proposal_texts,
 )
 from .review import build_review_context, build_review_result_template
-from .review_dispatcher import DispatchError, dispatch_review
+from .review_dispatcher import DispatchError, dispatch_review, dispatch_review_direct
 from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
 from .reviewer_registry import (
     ReviewerResolutionError,
@@ -401,6 +401,25 @@ TOOLS = [
         ),
     },
     {
+        "name": "run_review",
+        "description": "Run a configured reviewer directly and finalize the review in one operation.",
+        "metadata": {
+            "api_level": "high_level",
+            "recommended_for": "normal synchronous AI review",
+            "workflow": "direct execute, validate, import, finalize",
+        },
+        "inputSchema": json_schema(
+            {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "reviewer": {"type": "string"},
+                "reason": {"type": "string"},
+                "config_path": {"type": "string"},
+            },
+            ["task_id", "actor", "reviewer"],
+        ),
+    },
+    {
         "name": "dispatch_review",
         "description": "High-level MCP AI review; CLI fallback requires opt-in.",
         "metadata": {
@@ -717,6 +736,7 @@ WRITE_FENCE_TOOL_NAMES = {
     "submit_agent_report",
     "record_test_result",
     "request_task_review",
+    "run_review",
     "dispatch_review",
     "register_reviewer",
     "claim_next_review",
@@ -746,6 +766,7 @@ REVIEW_HANDOFF_ADDITIONAL_TOOL_NAMES = {
     "register_reviewer",
     "claim_next_review",
     "request_task_review",
+    "run_review",
     "dispatch_review",
     "get_review_prompt",
     "get_review_template",
@@ -2055,6 +2076,24 @@ def mcp_dispatch_review(store: Store, arguments: dict) -> dict:
         raise McpToolError(f"review dispatch failed unexpectedly: {type(exc).__name__}: {exc}") from exc
 
 
+def mcp_run_review(store: Store, arguments: dict) -> dict:
+    workspace = arguments.get("__nilo_workspace_context") or {}
+    try:
+        return dispatch_review_direct(
+            store,
+            actor=require_string(arguments, "actor"),
+            reviewer=require_string(arguments, "reviewer"),
+            task_id=require_string(arguments, "task_id"),
+            reason=optional_string(arguments, "reason", "direct agent review") or "direct agent review",
+            config_path=Path(optional_string(arguments, "config_path")) if optional_string(arguments, "config_path") else None,
+            repo_root=Path(workspace.get("project_root", Path.cwd())),
+        )
+    except DispatchError as exc:
+        raise McpToolError(f"review run failed during {exc.stage}: {exc.reason}") from exc
+    except Exception as exc:
+        raise McpToolError(f"review run failed unexpectedly: {type(exc).__name__}: {exc}") from exc
+
+
 TOOL_HANDLERS = {
     "get_status": get_status,
     "record_verification": mcp_record_verification_run,
@@ -2066,6 +2105,7 @@ TOOL_HANDLERS = {
     "submit_agent_report": submit_agent_report,
     "record_test_result": record_test_result,
     "request_task_review": request_task_review,
+    "run_review": mcp_run_review,
     "dispatch_review": mcp_dispatch_review,
     "register_reviewer": register_reviewer,
     "claim_next_review": claim_next_review,
