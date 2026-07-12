@@ -16,6 +16,7 @@ from typing import Any
 from .cli_support import make_id
 from .review import build_review_context, looks_like_review_result, parse_review_result
 from .review_coordinator import ErrorClass, ReviewBackendError, ReviewContext, ReviewExecutionOutput, coordinate_review
+from .review_errors import classify_provider_error
 from .review_lifecycle import insert_review_request, set_review_request_status, update_review_request
 from .reviewer_registry import canonical_reviewer_name, normalize_backend_kind, normalize_capabilities, reviewer_is_registered_available
 from .secret import detect_secret_issues, mask_secrets
@@ -1018,6 +1019,20 @@ class DirectReviewerAdapter:
         finally:
             if self._prompt_path and not self.config.persist_prompt_file:
                 self._prompt_path.unlink(missing_ok=True)
+        classified = classify_provider_error(
+            self.reviewer,
+            stdout=process.stdout,
+            stderr=process.stderr,
+            exit_code=process.returncode,
+        )
+        if classified:
+            raise ReviewBackendError(
+                classified.error_class,
+                classified.message,
+                error_code=classified.error_code,
+                retry_after=classified.retry_after,
+                diagnostics={"stdout": process.stdout, "stderr": process.stderr},
+            )
         if process.returncode != 0:
             raise ReviewBackendError(
                 ErrorClass.TRANSPORT,

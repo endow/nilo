@@ -18,6 +18,7 @@ from nilo.review_dispatcher import DEFAULT_CLAUDE_REVIEW_PROMPT, DEFAULT_CODEX_R
 from nilo.review_dispatcher import dispatch_review, dispatch_review_direct, find_executable, import_dispatch_review_result, load_reviewer_config, resolve_command_parts, run_reviewer_process, safe_default_config
 from nilo.review_dispatcher import doctor_reviewer_config
 from nilo.reviewer_registry import reviewer_is_registered_available
+from nilo.project_logic import latest_pending_review_request
 from nilo.store import Store
 from nilo.timeutil import now_iso
 
@@ -169,6 +170,24 @@ class ReviewDispatcherTests(unittest.TestCase):
                     self.assertEqual(active, [])
                 finally:
                     store.close()
+
+    def test_direct_dispatch_zero_exit_rate_limit_payload_is_deferred(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "reviewer.py"
+            script.write_text("print('{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Too many requests\",\"retry_after\":\"60\"}}')\n", encoding="utf-8")
+            config = write_config(root, args=[str(script), "{prompt_file}"], persist_prompt_file=False)
+            store = Store(root / "nilo.db")
+            try:
+                create_project_and_task(store)
+                result = dispatch_review_direct(store, actor="codex", reviewer="claude-code", task_id="task_test", config_path=config, repo_root=root)
+                self.assertEqual(result["status"], "deferred")
+                self.assertEqual(result["error_class"], "rate_limited")
+                self.assertEqual(result["retry_after"], "60")
+                self.assertEqual(store.get("review_requests", result["review_request_id"])["status"], "deferred")
+                self.assertIsNone(latest_pending_review_request(store, "task_test"))
+            finally:
+                store.close()
     def test_claude_cli_review_imports_stdout_review_result_without_mcp_worker(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
