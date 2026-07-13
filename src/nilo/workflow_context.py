@@ -164,6 +164,8 @@ def release_commit_transition_metadata(store, task_id: str) -> dict[str, Any]:
     if not run:
         return {}
     metadata = run.get("metadata") or {}
+    if (metadata.get("required_full_check") or {}).get("snapshot_relation") == "release_metadata_only_changes":
+        return {}
     if not metadata.get("commit_sha"):
         return {}
     verification = release_required_full_verification(store, task_id, run_metadata=metadata)
@@ -195,13 +197,15 @@ def release_commit_aware_evidence_status(
 ) -> str:
     from .snapshot import commit_transition_evidence_status, evidence_status
 
+    run = recipe_run_for_task(store, task_id, "release")
+    if _release_metadata_only_required_check_is_current(run, verification_run, current_snapshot):
+        return "current"
     transition = release_commit_transition_metadata(store, task_id)
     if not transition:
         return evidence_status(verification_run, current_snapshot, strict=strict)
     status = commit_transition_evidence_status(verification_run, current_snapshot, transition, strict=strict)
     if status == "current":
         return status
-    run = recipe_run_for_task(store, task_id, "release")
     required = release_required_full_verification(store, task_id, run_metadata=(run.get("metadata") or {}) if run else {})
     if required and (not verification_run or required.get("id") != verification_run.get("id")):
         required_status = commit_transition_evidence_status(required, current_snapshot, transition, strict=strict)
@@ -218,16 +222,36 @@ def release_commit_verified_verification(
 ) -> dict[str, Any] | None:
     from .snapshot import commit_transition_evidence_status
 
+    run = recipe_run_for_task(store, task_id, "release")
+    required = release_required_full_verification(store, task_id, run_metadata=(run.get("metadata") or {}) if run else {})
+    if required and _release_metadata_only_required_check_is_current(run, required, current_snapshot):
+        return required
     transition = release_commit_transition_metadata(store, task_id)
     if not transition:
         return None
     if commit_transition_evidence_status(verification_run, current_snapshot, transition) == "current":
         return verification_run
-    run = recipe_run_for_task(store, task_id, "release")
-    required = release_required_full_verification(store, task_id, run_metadata=(run.get("metadata") or {}) if run else {})
     if required and commit_transition_evidence_status(required, current_snapshot, transition) == "current":
         return required
     return None
+
+
+def _release_metadata_only_required_check_is_current(
+    run: dict[str, Any] | None,
+    verification_run: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+) -> bool:
+    if not run or not verification_run:
+        return False
+    required = (run.get("metadata") or {}).get("required_full_check") or {}
+    return bool(
+        required.get("status") == "satisfied"
+        and required.get("snapshot_relation") == "release_metadata_only_changes"
+        and required.get("verification_id") == verification_run.get("id")
+        and required.get("reuse_commit_sha")
+        and required.get("reuse_commit_sha") == current_snapshot.get("git_head")
+        and not current_snapshot.get("working_tree_dirty")
+    )
 
 
 def release_required_checks_passed(store, task_id: str, *, run_metadata: dict[str, Any] | None = None) -> bool:

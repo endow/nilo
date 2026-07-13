@@ -627,6 +627,18 @@ PYTHONPATH=src python tests/run_shards.py --changed --jobs auto
                     metadata = store.get("recipe_runs", context["recipe_run_id"])["metadata"]
                     self.assertTrue(metadata["post_commit_full_check_reused"])
                     self.assertEqual(metadata["release_prepare_check_mode"], "full")
+                    required = metadata["required_full_check"]
+                    self.assertEqual(required["snapshot_relation"], "release_metadata_only_changes")
+                    self.assertEqual(required["reuse_commit_sha"], run_git(root, "rev-parse", "HEAD"))
+                    completed = approve_pending_public_operations(
+                        store,
+                        project_id=root.name,
+                        approval="v0.3.1 を tag/push/release して",
+                        release_url="https://example.test/release/v0.3.1",
+                        executed=True,
+                    )
+                    self.assertEqual(completed["status"], "completed")
+                    self.assertEqual(projected_task_status(store, store.get("tasks", task_id)), "completed_by_user")
                 finally:
                     store.close()
             finally:

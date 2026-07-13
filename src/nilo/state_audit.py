@@ -52,6 +52,10 @@ def audit_task(
     snapshot = current_snapshot or current_git_snapshot(cwd)
     verification = store.latest_for_task("verification_runs", task_id)
     evidence = commit_aware_evidence_status(verification, snapshot, completion)
+    if evidence not in {"current", "recorded"}:
+        from .workflow_context import release_commit_aware_evidence_status
+
+        evidence = release_commit_aware_evidence_status(store, task_id, verification, snapshot)
     unresolved = unresolved_review_findings(store, task_id)
     actor = completion.get("actor") or completion.get("completed_by") or ""
     if actor == "human":
@@ -387,7 +391,13 @@ def audit_workflow(store: Store, project_id: str, *, cwd: Path | None = None) ->
             findings.append(_finding("task_completion_commit_metadata_missing_sha", "task completion commit metadata has no commit sha", severity="error", entity_type="task_completion", entity_id=completion["id"]))
         if not metadata.get("committed_from_verified_dirty_tree"):
             findings.append(_finding("task_completion_commit_not_from_verified_dirty_tree", "task completion commit was not recorded from the verified dirty tree", severity="error", entity_type="task_completion", entity_id=completion["id"]))
-        evidence = commit_aware_evidence_status(store.latest_for_task("verification_runs", completion["task_id"]), current_git_snapshot(cwd), completion)
+        verification = store.latest_for_task("verification_runs", completion["task_id"])
+        snapshot = current_git_snapshot(cwd)
+        evidence = commit_aware_evidence_status(verification, snapshot, completion)
+        if evidence not in {"current", "recorded"}:
+            from .workflow_context import release_commit_aware_evidence_status
+
+            evidence = release_commit_aware_evidence_status(store, completion["task_id"], verification, snapshot)
         if evidence == "stale" and metadata.get("committed_from_verified_dirty_tree"):
             findings.append(_finding("commit_aware_evidence_still_stale", "commit-aware evidence is still stale despite verified dirty-tree commit metadata", severity="error", entity_type="task_completion", entity_id=completion["id"]))
     return findings

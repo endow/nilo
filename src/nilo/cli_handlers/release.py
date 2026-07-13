@@ -248,7 +248,10 @@ def _release_prepare_or_resume(args: argparse.Namespace, *, resume: bool) -> Non
                 "release_prepare_managed_files": managed_files,
                 "post_commit_full_check_reused": verification_mode == "full",
                 "release_prepare_check_mode": verification_mode,
-                "required_full_check": _required_full_check_metadata(verification_row, reused=verification_mode == "full"),
+                "required_full_check": _required_full_check_metadata(
+                    {**verification_row, "commit_sha": commit_sha},
+                    reused=verification_mode == "full",
+                ),
             }
         )
         store.update("recipe_runs", updated_run["id"], {"metadata": metadata, "updated_at": now_iso()})
@@ -724,7 +727,7 @@ def _required_full_check_metadata(verification_row: dict[str, Any], *, reused: b
         status = "deferred" if passed else "failed"
     else:
         status = "satisfied" if passed else "failed"
-    return {
+    required = {
         "status": status,
         "verification_id": verification_row.get("id", ""),
         "reused": reused,
@@ -734,6 +737,13 @@ def _required_full_check_metadata(verification_row: dict[str, Any], *, reused: b
         "working_tree_dirty": bool(verification_row.get("working_tree_dirty")),
         "command": verification_row.get("command") or RELEASE_FULL_CHECK_COMMAND,
     }
+    snapshot_relation = verification_row.get("snapshot_relation") or ""
+    if reused and snapshot_relation:
+        required["snapshot_relation"] = snapshot_relation
+        required["reuse_reason"] = verification_row.get("reuse_reason") or snapshot_relation
+        required["reuse_commit_sha"] = verification_row.get("commit_sha") or ""
+        required["release_metadata_only_base"] = verification_row.get("release_metadata_only_base") or ""
+    return required
 
 
 def _failed_verification_metadata(verification_row: dict[str, Any]) -> dict[str, Any]:
