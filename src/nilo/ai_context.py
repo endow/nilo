@@ -8,7 +8,7 @@ from .display_labels import ai_value_label, category_label, field_label, severit
 from .failure import compact_failure_message, list_failure_logs, summarize_failure_logs
 from .human_status import human_next_action_text
 from .project_language import project_primary_language
-from .snapshot import commit_aware_evidence_status, current_git_snapshot
+from .snapshot import commit_aware_evidence_status, current_git_snapshot, review_result_status
 from .store import Store
 from .task_logic import active_task_completion, is_task_closed_status, projected_task_status, unresolved_review_findings
 from .workflow_context import release_commit_aware_evidence_status, workflow_context
@@ -34,6 +34,61 @@ def active_tasks(store: Store, project_id: str) -> tuple[list[dict], dict[str, s
     return [task for task in tasks if not is_task_closed_status(statuses[task["id"]])], statuses
 
 
+def _review_summary(
+    store: Store,
+    task_id: str,
+    findings: list[dict],
+    *,
+    current_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    request = store.latest_for_task("review_requests", task_id)
+    result = store.latest_for_task("review_results", task_id)
+    unresolved_blocking = len([item for item in findings if item["blocking"]])
+    request_is_newer = bool(
+        request
+        and result
+        and request["id"] != result["review_request_id"]
+        and request["created_at"] >= result["created_at"]
+    )
+    if request_is_newer:
+        if request["status"] in {"failed", "reviewer_unavailable", "stale"}:
+            status = request["status"]
+            outcome = request["status"]
+        else:
+            status = "requested"
+            outcome = "pending"
+    elif result:
+        status = "completed"
+        freshness = review_result_status(result, current_snapshot) if current_snapshot else "unknown"
+        if freshness == "stale":
+            outcome = "stale"
+        elif result["verdict"] == "approved":
+            outcome = "clean" if not findings else "findings"
+        else:
+            outcome = result["verdict"]
+    elif request:
+        if request["status"] in {"failed", "reviewer_unavailable", "stale"}:
+            status = request["status"]
+            outcome = request["status"]
+        else:
+            status = "requested"
+            outcome = "pending"
+    else:
+        status = "not_run"
+        outcome = "not_run"
+    return {
+        "status": status,
+        "outcome": outcome,
+        "verdict": result["verdict"] if result else "none",
+        "freshness": review_result_status(result, current_snapshot) if result and current_snapshot else "none",
+        "orphan_findings": bool(findings and not result),
+        "request_id": request["id"] if request else "",
+        "result_id": result["id"] if result else "",
+        "unresolved_count": len(findings),
+        "unresolved_blocking_count": unresolved_blocking,
+    }
+
+
 def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snapshot_mode: str = "full") -> dict[str, Any]:
     from . import project_logic as p
 
@@ -52,6 +107,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snap
     if evidence == "missing" and latest_report:
         evidence = "present"
     unresolved = unresolved_review_findings(store, task_id)
+    review = _review_summary(store, task_id, unresolved, current_snapshot=snapshot)
     latest_event = store.latest_task_status_event(task_id)
     status = projected_task_status(store, task, current_snapshot=snapshot, latest_event=latest_event)
     latest_event_id = latest_event["event_id"] if latest_event else ""
@@ -86,10 +142,7 @@ def task_ai_context(store: Store, task_id: str, *, cwd: Path | None = None, snap
             "verification_exit_code": verification_run["exit_code"] if verification_run else None,
             "verification_timed_out": bool(verification_run["timed_out"]) if verification_run else False,
         },
-        "review": {
-            "unresolved_count": len(unresolved),
-            "unresolved_blocking_count": len([item for item in unresolved if item["blocking"]]),
-        },
+        "review": review,
         "completion": {
             "allowed": completion_allowed,
             "blocked": not completion_allowed,
@@ -222,7 +275,15 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
     active_task = None
     blockers: list[str] = []
     latest_verification = {"status": "none", "verification_run_id": "", "exit_code": None}
-    latest_review = {"unresolved_count": 0, "unresolved_blocking_count": 0}
+    latest_review = {
+        "status": "none",
+        "outcome": "none",
+        "verdict": "none",
+        "freshness": "none",
+        "orphan_findings": False,
+        "unresolved_count": 0,
+        "unresolved_blocking_count": 0,
+    }
     write_context_token = ""
     latest_task_status_event_id = ""
     working_tree = data.get("working_tree", "unknown")
@@ -239,6 +300,11 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
             "exit_code": evidence["verification_exit_code"],
         }
         latest_review = {
+            "status": review["status"],
+            "outcome": review["outcome"],
+            "verdict": review["verdict"],
+            "freshness": review["freshness"],
+            "orphan_findings": review["orphan_findings"],
             "unresolved_count": review["unresolved_count"],
             "unresolved_blocking_count": review["unresolved_blocking_count"],
         }
@@ -249,7 +315,7 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
     next_actions = data.get("next_required_actions") or []
     next_action = next_actions[0] if next_actions else ""
     roadmap_state = data.get("roadmap_agent_state")
-    if not current and roadmap_state:
+    if not current and roadmap_state and not next_action.startswith("roadmap update pending"):
         next_action = f"roadmap: {roadmap_state['recommended_next_action']}"
     detail_commands = _detail_commands(data["project_id"], task_id)
     required_commands = []
@@ -310,6 +376,11 @@ def _compact_release_recipe_context(data: dict[str, Any], workflow: dict[str, An
             "exit_code": evidence.get("verification_exit_code"),
         },
         "latest_review": {
+            "status": review.get("status", "not_run"),
+            "outcome": review.get("outcome", "not_run"),
+            "verdict": review.get("verdict", "none"),
+            "freshness": review.get("freshness", "none"),
+            "orphan_findings": review.get("orphan_findings", False),
             "unresolved_count": review.get("unresolved_count", 0),
             "unresolved_blocking_count": review.get("unresolved_blocking_count", 0),
         },
@@ -463,6 +534,7 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
                 f"{field_label('status')}: {ai_value_label(task['state'])}",
                 f"git: head={git_head} diff_hash={diff_hash} dirty={git['dirty']}",
                 f"{field_label('evidence')}: {ai_value_label(evidence['status'])}",
+                f"review_status: {review['status']} outcome={review['outcome']} verdict={review['verdict']} freshness={review['freshness']} orphan_findings={str(review['orphan_findings']).lower()}",
                 f"{field_label('unresolved_review_count')}: {review['unresolved_count']}",
                 f"{field_label('completion')}: {ai_value_label('completion_allowed' if completion['allowed'] else 'completion_blocked')}",
             ]
@@ -607,6 +679,11 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
     review = data.get("latest_review") or {}
     required.append(
         "latest_review: "
+        f"status={review.get('status', 'none')} "
+        f"outcome={review.get('outcome', 'none')} "
+        f"verdict={review.get('verdict', 'none')} "
+        f"freshness={review.get('freshness', 'none')} "
+        f"orphan_findings={str(review.get('orphan_findings', False)).lower()} "
         f"unresolved={review.get('unresolved_count', 0)} "
         f"blocking={review.get('unresolved_blocking_count', 0)}"
     )
@@ -629,8 +706,7 @@ def review_ai_context(store: Store, task_id: str) -> dict[str, Any]:
     findings = unresolved_review_findings(store, task_id)
     return {
         "task_id": task_id,
-        "unresolved_count": len(findings),
-        "unresolved_blocking_count": len([item for item in findings if item["blocking"]]),
+        **_review_summary(store, task_id, findings, current_snapshot=current_git_snapshot(Path.cwd())),
         "unresolved_findings": [
             {
                 "id": item["id"],

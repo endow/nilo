@@ -35,7 +35,7 @@ from nilo.human_status import human_next_action_text
 from nilo.project_logic import human_roadmap_summary, project_tasks_and_statuses, render_handson_active_task_next_steps, selected_roadmap_commitment
 from nilo.roadmap_render import human_roadmap_action_text, render_human_roadmap_markdown, render_human_roadmap_summary_markdown
 from nilo.review_dispatcher import find_executable
-from nilo.snapshot import UNCOMPUTED_DIFF_HASH
+from nilo.snapshot import UNCOMPUTED_DIFF_HASH, current_git_snapshot
 from nilo.store import Store
 from nilo.task_logic import projected_task_status
 from nilo.timeutil import now_iso
@@ -2713,6 +2713,122 @@ variables:
                 self.assertIn("required_commands:", body)
                 self.assertNotIn("現在タスク完了診断", body)
                 self.assertNotIn("完了可否", body)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_ai_status_distinguishes_review_not_run_from_completed_clean(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_review_state", "--title", "Review state"])
+
+                status_output = io.StringIO()
+                task_output = io.StringIO()
+                with redirect_stdout(status_output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                with redirect_stdout(task_output):
+                    main(["--db", str(db), "task", "status", "--task", "task_review_state", "--ai"])
+                self.assertIn("latest_review: status=not_run outcome=not_run verdict=none freshness=none orphan_findings=false unresolved=0", status_output.getvalue())
+                self.assertIn("review_status: not_run outcome=not_run", task_output.getvalue())
+
+                store = Store(db)
+                try:
+                    store.insert(
+                        "review_requests",
+                        {
+                            "id": "review_request_clean",
+                            "task_id": "task_review_state",
+                            "requester": "nilo",
+                            "reviewer": "claude-code",
+                            "status": "requested",
+                            "reason": "test",
+                            "based_on_event_id": "",
+                            "based_on_snapshot": {},
+                            "created_at": now_iso(),
+                            "updated_at": now_iso(),
+                        },
+                    )
+                finally:
+                    store.close()
+
+                requested_output = io.StringIO()
+                with redirect_stdout(requested_output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                self.assertIn("latest_review: status=requested outcome=pending verdict=none freshness=none orphan_findings=false unresolved=0", requested_output.getvalue())
+
+                store = Store(db)
+                try:
+                    store.insert(
+                        "review_results",
+                        {
+                            "id": "review_result_clean",
+                            "task_id": "task_review_state",
+                            "review_request_id": "review_request_clean",
+                            "reviewer": "claude-code",
+                            "verdict": "approved",
+                            "summary": "clean review",
+                            "based_on_event_id": "",
+                            "based_on_snapshot": current_git_snapshot(root, mode="fast"),
+                            "body_md": "# ReviewResult\n",
+                            "created_at": now_iso(),
+                        },
+                    )
+                finally:
+                    store.close()
+
+                reviewed_output = io.StringIO()
+                with redirect_stdout(reviewed_output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                self.assertIn("latest_review: status=completed outcome=clean verdict=approved freshness=current orphan_findings=false unresolved=0", reviewed_output.getvalue())
+
+                store = Store(db)
+                try:
+                    store.update("review_results", "review_result_clean", {"verdict": "changes_requested"})
+                finally:
+                    store.close()
+                changes_output = io.StringIO()
+                with redirect_stdout(changes_output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                self.assertIn("status=completed outcome=changes_requested verdict=changes_requested freshness=current", changes_output.getvalue())
+
+                store = Store(db)
+                try:
+                    store.update("review_results", "review_result_clean", {"based_on_snapshot": {"git_head": "different"}})
+                finally:
+                    store.close()
+                stale_output = io.StringIO()
+                with redirect_stdout(stale_output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                self.assertIn("status=completed outcome=stale verdict=changes_requested freshness=stale", stale_output.getvalue())
+
+                store = Store(db)
+                try:
+                    store.insert(
+                        "review_requests",
+                        {
+                            "id": "review_request_again",
+                            "task_id": "task_review_state",
+                            "requester": "nilo",
+                            "reviewer": "claude-code",
+                            "status": "requested",
+                            "reason": "re-review",
+                            "based_on_event_id": "",
+                            "based_on_snapshot": {},
+                            "created_at": "2099-01-01T00:00:00+00:00",
+                            "updated_at": "2099-01-01T00:00:00+00:00",
+                        },
+                    )
+                finally:
+                    store.close()
+                rereview_output = io.StringIO()
+                with redirect_stdout(rereview_output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                self.assertIn("status=requested outcome=pending verdict=changes_requested", rereview_output.getvalue())
             finally:
                 os.chdir(previous_cwd)
 
@@ -13028,7 +13144,8 @@ close 済み commitment を表示できるようにした。
             with redirect_stdout(output):
                 main(["--db", str(db), "status", "--ai", "--project", "project_test"])
             body = output.getvalue()
-            self.assertIn("作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。", body)
+            self.assertIn("active_roadmap:", body)
+            self.assertIn("roadmap_next_action: wait_for_user_direction", body)
             self.assertNotIn("作業計画を確認し、これで進めてよいか判断してください。", body)
 
     def test_status_ai_keeps_distinct_pending_revision_from_same_source_path(self) -> None:

@@ -416,7 +416,7 @@ class CliGitIntegrationTests(unittest.TestCase):
                 body = status_text.getvalue()
                 self.assertIn("active_task: task_ai [planned] AI compact", body)
                 self.assertIn("latest_verification: status=missing", body)
-                self.assertIn("latest_review: unresolved=1", body)
+                self.assertIn("latest_review: status=not_run outcome=not_run verdict=none freshness=none orphan_findings=true unresolved=1", body)
                 self.assertNotIn("detail_commands:", body)
                 self.assertIn("required_commands:", body)
                 self.assertNotIn("完了可否", body)

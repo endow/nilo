@@ -110,6 +110,7 @@ class StatusSurfaceRegressionTests(unittest.TestCase):
         status_body = status_output.getvalue()
         self.assertIn("active_task: task_surface [completion_needs_review] Status surface task", status_body)
         self.assertIn("latest_verification: status=missing", status_body)
+        self.assertIn("latest_review: status=not_run outcome=not_run verdict=none freshness=none orphan_findings=false unresolved=0", status_body)
         self.assertNotIn("detail_commands:", status_body)
         self.assertIn("required_commands:", status_body)
 

@@ -233,6 +233,11 @@ def cmd_task_status(args: argparse.Namespace) -> None:
                 print(f"{field_label('task')}: {task_summary['id']} {task_summary['title']}")
                 print(f"{field_label('status')}: {ai_value_label(task_summary['state'])}")
                 print(f"{field_label('evidence')}: {ai_value_label(data['evidence']['status'])}")
+                print(
+                    f"review_status: {data['review']['status']} outcome={data['review']['outcome']} "
+                    f"verdict={data['review']['verdict']} freshness={data['review']['freshness']} "
+                    f"orphan_findings={str(data['review']['orphan_findings']).lower()}"
+                )
                 print(f"{field_label('unresolved_review_count')}: {data['review']['unresolved_count']}")
                 print(f"{field_label('completion')}: {ai_value_label('completion_allowed' if data['completion']['allowed'] else 'completion_blocked')}")
                 print(f"{field_label('blocking_reasons')}:")
@@ -355,6 +360,10 @@ def cmd_review_show(args: argparse.Namespace) -> None:
             print(json.dumps(data, ensure_ascii=False, indent=2))
             return
         print(f"{field_label('task_id')}: {args.task}")
+        print(
+            f"review_status: {data['status']} outcome={data['outcome']} verdict={data['verdict']} "
+            f"freshness={data['freshness']} orphan_findings={str(data['orphan_findings']).lower()}"
+        )
         print(f"{field_label('unresolved_review_count')}: {data['unresolved_count']}")
         print(f"{field_label('unresolved_blocking_count')}: {data['unresolved_blocking_count']}")
         print(f"{field_label('unresolved_findings')}:")
