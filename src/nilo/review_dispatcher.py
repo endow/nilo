@@ -939,7 +939,15 @@ def import_dispatch_review_result(store: Store, request: dict, reviewer: str, bo
             {"type": "fix_reviewer_output", "reviewer": reviewer},
             stdout=body_md,
         )
-    verdict, _summary, _findings = parse_review_result(body_md)
+    try:
+        verdict, _summary, _findings = parse_review_result(body_md)
+    except ValueError as exc:
+        raise DispatchError(
+            "review_output_received",
+            str(exc),
+            {"type": "fix_reviewer_output", "reviewer": reviewer},
+            stdout=body_md,
+        ) from exc
     if verdict not in VALID_DISPATCH_VERDICTS:
         raise DispatchError(
             "review_output_received",

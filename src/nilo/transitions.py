@@ -1148,7 +1148,10 @@ def import_review_result(
         raise TransitionError("review_request_snapshot_missing", "review request has no based_on_snapshot")
     if not snapshots_match(request_snapshot, compact_snapshot(current_git_snapshot(cwd or Path.cwd()))):
         raise TransitionError("stale_review_snapshot", "review request based_on_snapshot is stale")
-    verdict, summary, findings = parse_review_result(body_md)
+    try:
+        verdict, summary, findings = parse_review_result(body_md)
+    except ValueError as exc:
+        raise TransitionError("review_result_malformed", str(exc)) from exc
     created_at = now_iso()
     result = {"id": make_id("review_result"), "task_id": task_id, "review_request_id": review_id, "reviewer": reviewer, "verdict": verdict, "summary": mask_secrets(summary), "based_on_event_id": request.get("based_on_event_id", ""), "based_on_snapshot": request.get("based_on_snapshot", {}), "body_md": mask_secrets(body_md), "created_at": created_at}
     store.insert("review_results", result)

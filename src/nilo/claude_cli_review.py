@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .review import build_review_context, build_review_result_template, looks_like_review_result, parse_review_result
+from .review import build_review_context, build_review_result_template, extract_review_result_body, looks_like_review_result, parse_review_result
 from .review_dispatcher import (
     DispatchError,
     create_quick_review_request,
@@ -276,7 +276,11 @@ def claude_review(
     report = store.latest_for_task("agent_reports", task["id"])
     verification_run = store.latest_for_task("verification_runs", task["id"])
     context = build_review_context(task, request, report, None, verification_run, repo_root)
-    prompt = build_claude_review_prompt(context, build_review_result_template(request), with_mcp=with_mcp)
+    prompt = build_claude_review_prompt(
+        context,
+        build_review_result_template(request, include_import_command=False),
+        with_mcp=with_mcp,
+    )
     prompt_path = default_prompt_path(repo_root, request["id"]) if write_prompt else None
     if prompt_path:
         write_text(prompt_path, prompt)
@@ -322,7 +326,7 @@ def claude_review(
             output_file=result_path,
             next_action="run nilo review claude-doctor",
         )
-    body_md = process.stdout.strip()
+    body_md = extract_review_result_body(process.stdout.strip())
     if no_import:
         if not result_path:
             result_path = default_result_path(repo_root, request["id"])
@@ -340,6 +344,7 @@ def claude_review(
             "mcp_config": str(mcp_config),
             "next_action": f"nilo review import --task {task['id']} --review {request['id']} --file {result_path}",
         }
+    recoverable_output = False
     try:
         if not strict_review_result(body_md):
             raise DispatchError(
@@ -349,7 +354,17 @@ def claude_review(
                 stdout=process.stdout,
                 stderr=process.stderr,
             )
-        verdict, _summary, _findings = parse_review_result(body_md)
+        recoverable_output = True
+        try:
+            verdict, _summary, _findings = parse_review_result(body_md)
+        except ValueError as exc:
+            raise DispatchError(
+                "review_output_received",
+                str(exc),
+                {"type": "fix_claude_review_output", "reviewer": CLAUDE_REVIEWER},
+                stdout=process.stdout,
+                stderr=process.stderr,
+            ) from exc
         if verdict not in VALID_CLAUDE_VERDICTS:
             raise DispatchError(
                 "review_output_received",
@@ -370,7 +385,8 @@ def claude_review(
         if not result_path:
             result_path = default_result_path(repo_root, request["id"])
             write_text(result_path, process.stdout)
-        fail_quick_review_request(store, request, requester, exc.reason)
+        if exc.stage != "review_output_received" or not recoverable_output:
+            fail_quick_review_request(store, request, requester, exc.reason)
         return {
             "status": "review_import_failed",
             "failure_stage": exc.stage,
@@ -383,7 +399,11 @@ def claude_review(
             "stderr": mask_secrets(process.stderr),
             "mcp": "enabled" if with_mcp else "disabled",
             "mcp_config": str(mcp_config),
-            "next_action": f"edit the file and run nilo review import --task {task['id']} --review {request['id']} --file {result_path}",
+            "next_action": (
+                f"edit the file and run nilo review import --task {task['id']} --review {request['id']} --file {result_path}"
+                if recoverable_output
+                else "retry the Claude review"
+            ),
         }
     blocking = [finding for finding in findings if finding["blocking"] and finding["status"] == "unresolved"]
     nonblocking = [finding for finding in findings if not (finding["blocking"] and finding["status"] == "unresolved")]

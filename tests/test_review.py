@@ -61,6 +61,66 @@ OK.
         self.assertEqual(findings[0]["title"], "Bug")
         self.assertTrue(findings[0]["blocking"])
 
+    def test_parse_review_result_rejects_unknown_finding_field(self) -> None:
+        body = """# ReviewResult
+
+## Verdict
+approved
+
+## Summary
+Looks good.
+
+## Findings
+### F1
+severity: low
+mblocking: false
+
+Typo in field name.
+"""
+
+        with self.assertRaisesRegex(ValueError, "unknown ReviewResult finding field: mblocking"):
+            parse_review_result(body)
+
+    def test_parse_review_result_allows_colons_in_description_and_code(self) -> None:
+        body = """# ReviewResult
+
+## Verdict
+commented
+
+## Summary
+One note.
+
+## Findings
+### F1
+severity: low
+blocking: false
+
+Reproduction: open https://example.com/path
+```yaml
+custom: value
+```
+"""
+
+        _verdict, _summary, findings = parse_review_result(body)
+
+        self.assertIn("Reproduction: open https://example.com/path", findings[0]["description"])
+        self.assertIn("custom: value", findings[0]["description"])
+
+    def test_parse_review_result_combines_description_field_and_free_text(self) -> None:
+        body = """# ReviewResult
+
+## Findings
+### F1
+severity: low
+description: Short summary.
+
+Additional detail.
+"""
+
+        _verdict, _summary, findings = parse_review_result(body)
+
+        self.assertEqual(findings[0]["description"], "Short summary.\nAdditional detail.")
+
     def test_looks_like_review_result_rejects_unrecognized_json(self) -> None:
         self.assertFalse(looks_like_review_result("{}"))
         self.assertFalse(looks_like_review_result('{"error":"rate limited"}'))

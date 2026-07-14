@@ -292,6 +292,7 @@ class ReviewDispatcherTests(unittest.TestCase):
                 self.assertEqual(result["mcp"], "disabled")
                 self.assertTrue(result["review_request_id"].startswith("review_"))
                 self.assertTrue(Path(result["prompt_file"]).exists())
+                self.assertNotIn("## Import Command", Path(result["prompt_file"]).read_text(encoding="utf-8"))
                 self.assertEqual(Path(result["output_file"]), output_file)
                 self.assertIn("# ReviewResult", output_file.read_text(encoding="utf-8"))
                 request = store.get("review_requests", result["review_request_id"])
@@ -302,7 +303,7 @@ class ReviewDispatcherTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_claude_cli_review_rejects_stdout_preamble_and_saves_recovery_file(self) -> None:
+    def test_claude_cli_review_extracts_review_result_after_stdout_preamble(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -317,9 +318,66 @@ class ReviewDispatcherTests(unittest.TestCase):
                 create_project_and_task(store)
                 with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
                     result = claude_review(store, task_id="task_test", repo_root=root)
+                self.assertEqual(result["status"], "review_completed")
+                request = store.get("review_requests", result["review_request_id"])
+                stored = store.get("review_results", result["review_result_id"])
+                self.assertEqual(request["status"], "completed")
+                self.assertTrue(stored["body_md"].startswith("# ReviewResult"))
+            finally:
+                store.close()
+
+    def test_claude_cli_review_malformed_finding_can_be_fixed_and_imported(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (root / ".gitignore").write_text(".nilo/\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            malformed = review_result(finding_description="check field validation").replace("blocking: true", "mblocking: true")
+            claude = write_reviewer_script(root, f"#!{sys.executable}\nprint({malformed!r})\n", name="bin/claude")
+            claude.chmod(0o755)
+            db = root / ".nilo" / "nilo.db"
+            store = Store(db)
+            try:
+                create_project_and_task(store)
+                with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                    result = claude_review(store, task_id="task_test", repo_root=root)
                 self.assertEqual(result["status"], "review_import_failed")
-                self.assertIn("claude output malformed", result["reason"])
-                self.assertTrue((root / result["raw_output_file"]).exists() if not Path(result["raw_output_file"]).is_absolute() else Path(result["raw_output_file"]).exists())
+                self.assertIn("unknown ReviewResult finding field: mblocking", result["reason"])
+                request = store.get("review_requests", result["review_request_id"])
+                self.assertEqual(request["status"], "in_progress")
+
+                fixed = Path(result["raw_output_file"]).read_text(encoding="utf-8").replace("mblocking: true", "blocking: true")
+                latest_event = store.latest_task_status_event("task_test")
+                stored, _findings = import_dispatch_review_result(
+                    store,
+                    request,
+                    "claude-code",
+                    fixed,
+                    last_seen_event_id=latest_event["event_id"],
+                    cwd=root,
+                )
+                self.assertEqual(stored["verdict"], "approved")
+                self.assertEqual(store.get("review_requests", request["id"])["status"], "completed")
+            finally:
+                store.close()
+
+    def test_claude_cli_review_non_review_output_marks_request_failed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (root / ".gitignore").write_text(".nilo/\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            claude = write_reviewer_script(root, f"#!{sys.executable}\nprint('rate limited')\n", name="bin/claude")
+            claude.chmod(0o755)
+            store = Store(root / ".nilo" / "nilo.db")
+            try:
+                create_project_and_task(store)
+                with patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                    result = claude_review(store, task_id="task_test", repo_root=root)
+                self.assertEqual(result["status"], "review_import_failed")
+                self.assertEqual(result["next_action"], "retry the Claude review")
                 request = store.get("review_requests", result["review_request_id"])
                 self.assertEqual(request["status"], "failed")
             finally:

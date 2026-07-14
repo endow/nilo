@@ -12,6 +12,7 @@ from .snapshot import current_git_snapshot, evidence_status
 
 VALID_FINDING_STATUSES = {"unresolved", "addressed", "accepted-risk"}
 VALID_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+VALID_FINDING_FIELDS = {"severity", "status", "file", "path", "line", "blocking", "title", "description"}
 NO_FINDINGS_SENTINELS = {
     "no findings",
     "no finding",
@@ -23,6 +24,7 @@ NO_FINDINGS_SENTINELS = {
 
 def parse_review_result(markdown: str) -> tuple[str, str, list[dict]]:
     markdown = extract_review_result_body(markdown)
+    validate_finding_fields(markdown)
     json_result = parse_jsonish_review_result(markdown)
     if json_result:
         return json_result
@@ -170,7 +172,9 @@ def parse_findings(text: str) -> list[dict]:
                 "file_path": labels.get("file", labels.get("path", "")),
                 "line": labels.get("line", ""),
                 "blocking": blocking,
-                "description": description.strip(),
+                "description": "\n".join(
+                    part.strip() for part in (labels.get("description", ""), description) if part.strip()
+                ),
             }
         )
     return findings
@@ -186,11 +190,50 @@ def parse_finding_labels(lines: list[str]) -> tuple[dict[str, str], str]:
     label_re = re.compile(r"^\s*(?:[-*]\s*)?([A-Za-z_][A-Za-z0-9_-]*)\s*[:：]\s*(.*?)\s*$")
     for line in lines:
         match = label_re.match(line)
-        if match and match.group(1).lower() in {"severity", "status", "file", "path", "line", "blocking", "title"}:
+        if match and match.group(1).lower() in VALID_FINDING_FIELDS:
             labels[match.group(1).lower()] = match.group(2).strip()
         else:
             description_lines.append(line)
     return labels, "\n".join(description_lines)
+
+
+def validate_finding_fields(markdown: str) -> None:
+    findings_body = review_section(markdown, ["Findings", "指摘"])
+    if not findings_body:
+        return
+    label_re = re.compile(r"^\s*(?:[-*]\s*)?([A-Za-z_][A-Za-z0-9_-]*)\s*[:：]\s*(.*?)\s*$")
+    unknown = []
+    in_fence = False
+    for line in findings_body.splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = label_re.match(line)
+        if match:
+            field = match.group(1).lower()
+            if field not in VALID_FINDING_FIELDS and any(edit_distance(field, valid) <= 2 for valid in VALID_FINDING_FIELDS):
+                unknown.append(match.group(1))
+    if unknown:
+        fields = ", ".join(sorted(set(unknown)))
+        raise ValueError(f"unknown ReviewResult finding field: {fields}")
+
+
+def edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[-1]
 
 
 def parse_bool(value: str) -> bool:
@@ -284,7 +327,15 @@ Description of the finding.
 """
 
 
-def build_review_result_template(request: dict) -> str:
+def build_review_result_template(request: dict, *, include_import_command: bool = True) -> str:
+    import_command = ""
+    if include_import_command:
+        import_command = f"""
+## Import Command
+```bash
+nilo review import --task {request["task_id"]} --review {request["id"]} --file .nilo/reviews/{request["id"]}.md
+```
+"""
     return f"""# ReviewResult
 
 review_id: {request["id"]}
@@ -306,11 +357,7 @@ line:
 blocking: false
 
 Describe the finding. Delete this sample finding if there are no findings.
-
-## Import Command
-```bash
-nilo review import --task {request["task_id"]} --review {request["id"]} --file .nilo/reviews/{request["id"]}.md
-```
+{import_command}
 """
 
 
