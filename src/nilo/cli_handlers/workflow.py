@@ -824,6 +824,10 @@ def cmd_verification_run(args: argparse.Namespace) -> None:
                 actor="nilo",
                 related_id=row["id"],
                 snapshot=compact_snapshot(current_git_snapshot(Path.cwd())),
+                operation="secret_scan",
+                error_code="credential_pattern",
+                context={"check": "secret_scan"},
+                preventability="likely",
                 status="open",
             )
         print(f"verification_run: {row['id']}")

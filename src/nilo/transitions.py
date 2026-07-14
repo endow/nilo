@@ -524,6 +524,10 @@ def record_outcome_decision(
         source="outcome_record",
         actor=actor,
         snapshot=compact_snapshot(current_git_snapshot(cwd or Path.cwd())),
+        operation="human_outcome",
+        error_code=decision,
+        context={"decision": decision},
+        preventability="unknown",
     )
     if decision in {"rejected", "deferred"}:
         from .workflow_context import recipe_run_for_task

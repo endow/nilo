@@ -388,6 +388,10 @@ def record_nilo_issue_for_task(store: Any, project_id: str, task_id: str, comman
         actor="nilo",
         related_id=command,
         snapshot=compact_snapshot(current_git_snapshot(boundary.git_root or boundary.project_root)),
+        operation="write_fence",
+        error_code=error.code,
+        context={"check": "project_boundary"},
+        preventability="likely",
         status="open",
     )
 

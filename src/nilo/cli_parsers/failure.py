@@ -29,6 +29,13 @@ def register_failure(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     failure_summary.add_argument("--json", action="store_true")
     failure_summary.set_defaults(func=handlers.cmd_failure_summary)
 
+    failure_shadow = failure_sub.add_parser("shadow-report")
+    failure_shadow.add_argument("--project", default="")
+    failure_shadow.add_argument("--since", default="")
+    failure_shadow.add_argument("--until", default="")
+    failure_shadow.add_argument("--json", action="store_true")
+    failure_shadow.set_defaults(func=handlers.cmd_failure_shadow_report)
+
     failure_show = failure_sub.add_parser("show")
     failure_show.add_argument("failure_id")
     failure_show.add_argument("--json", action="store_true")

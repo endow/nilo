@@ -12638,7 +12638,15 @@ close 済み commitment を表示できるようにした。
             self.assertNotIn("sk-thislookssecret1234567890", run["stdout"])
             self.assertIn("[MASKED:openai_api_key]", run["stdout"])
             self.assertEqual(run["metadata"]["secret_issue_count"], 1)
-            self.assertTrue(any(failure["category"] == "secret_detected" for failure in failures))
+            secret_failure = next(failure for failure in failures if failure["category"] == "secret_detected")
+            self.assertEqual(secret_failure["operation"], "secret_scan")
+            self.assertEqual(secret_failure["error_code"], "credential_pattern")
+            self.assertEqual(
+                secret_failure["fingerprint"],
+                "v1:verification_run:secret_scan:secret_detected:credential_pattern",
+            )
+            self.assertEqual(secret_failure["context"], {"check": "secret_scan"})
+            self.assertNotIn("sk-thislookssecret1234567890", json.dumps(secret_failure["context"]))
 
     def test_verification_run_records_timeout(self) -> None:
         with TemporaryDirectory() as directory:
@@ -12716,7 +12724,11 @@ close 済み commitment を表示できるようにした。
             stored_report = store.latest_for_task("agent_reports", "task_test")
             store.close()
             self.assertIsNone(check)
-            self.assertTrue(any(failure["category"] == "secret_detected" for failure in failures))
+            secret_failure = next(failure for failure in failures if failure["category"] == "secret_detected")
+            self.assertEqual(secret_failure["operation"], "secret_scan")
+            self.assertEqual(secret_failure["error_code"], "credential_pattern")
+            self.assertEqual(secret_failure["context"], {"check": "secret_scan"})
+            self.assertNotIn("sk-thislookssecret1234567890", json.dumps(secret_failure["context"]))
             self.assertNotIn("sk-thislookssecret1234567890", stored_report["body_md"])
             self.assertIn("[MASKED:openai_api_key]", stored_report["body_md"])
 

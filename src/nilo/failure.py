@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import re
 from typing import Any
 
 from .cli_support import make_id
@@ -16,6 +17,19 @@ def deterministic_id(prefix: str, parts: list[str]) -> str:
 
 
 FAILURE_STATUSES = {"open", "resolved", "ignored"}
+FAILURE_FINGERPRINT_VERSION = "v1"
+FAILURE_PREVENTABILITY = {"unknown", "likely", "external"}
+
+
+def normalize_fingerprint_part(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", (value or "").strip().casefold()).strip("_")
+    return normalized or "unspecified"
+
+
+def failure_fingerprint(*, source: str, operation: str, category: str, error_code: str) -> str:
+    """Build a stable fingerprint from bounded structured classifications only."""
+    parts = (source, operation, category, error_code)
+    return ":".join([FAILURE_FINGERPRINT_VERSION, *(normalize_fingerprint_part(part) for part in parts)])
 
 
 def failure_snapshot(cwd: Path | None = None) -> dict[str, Any]:
@@ -38,8 +52,14 @@ def record_failure_log(
     actor: str = "",
     related_id: str = "",
     snapshot: dict[str, Any] | None = None,
+    operation: str = "",
+    error_code: str = "",
+    context: dict[str, Any] | None = None,
+    preventability: str = "unknown",
     status: str = "open",
 ) -> dict[str, Any]:
+    if preventability not in FAILURE_PREVENTABILITY:
+        raise ValueError(f"invalid failure preventability: {preventability}")
     failure = {
         "id": make_id("failure"),
         "project_id": project_id,
@@ -52,6 +72,11 @@ def record_failure_log(
         "actor": actor,
         "related_id": related_id or report_id,
         "snapshot": snapshot if snapshot is not None else failure_snapshot(),
+        "fingerprint": failure_fingerprint(source=source, operation=operation, category=category, error_code=error_code),
+        "operation": operation,
+        "error_code": error_code,
+        "context": context or {},
+        "preventability": preventability,
         "status": status,
         "resolved_at": "",
         "resolved_by": "",
@@ -144,3 +169,85 @@ def compact_failure_message(message: str, limit: int = 200) -> str:
     if len(first_line) <= limit:
         return first_line
     return first_line[: limit - 3] + "..."
+
+
+def fingerprint_shadow_report(
+    store: Store,
+    *,
+    project_id: str = "",
+    since: str = "",
+    until: str = "",
+) -> dict[str, Any]:
+    clauses: list[str] = []
+    args: list[Any] = []
+    if project_id:
+        clauses.append("project_id=?")
+        args.append(project_id)
+    if since:
+        clauses.append("created_at>=?")
+        args.append(since)
+    if until:
+        clauses.append("created_at<?")
+        args.append(until)
+    failures = store.list_where("failure_logs", " AND ".join(clauses) or "1=1", tuple(args))
+
+    groups: dict[str, dict[str, Any]] = {}
+    empty_count = 0
+    unspecified_count = 0
+    for failure in failures:
+        fingerprint = failure.get("fingerprint") or ""
+        if not fingerprint:
+            empty_count += 1
+            continue
+        if "unspecified" in fingerprint.split(":"):
+            unspecified_count += 1
+        group = groups.setdefault(
+            fingerprint,
+            {
+                "fingerprint": fingerprint,
+                "occurrence_count": 0,
+                "task_ids": set(),
+                "severity": {},
+                "failure_ids": [],
+                "classifications": set(),
+            },
+        )
+        group["occurrence_count"] += 1
+        group["task_ids"].add(failure["task_id"])
+        severity = failure["severity"]
+        group["severity"][severity] = group["severity"].get(severity, 0) + 1
+        if len(group["failure_ids"]) < 3:
+            group["failure_ids"].append(failure["id"])
+        group["classifications"].add(
+            (failure.get("source") or "", failure.get("operation") or "", failure["category"], failure.get("error_code") or "")
+        )
+
+    rendered_groups = []
+    for group in groups.values():
+        classifications = sorted(group.pop("classifications"))
+        task_ids = group.pop("task_ids")
+        rendered_groups.append(
+            {
+                **group,
+                "distinct_task_count": len(task_ids),
+                "severity": dict(sorted(group["severity"].items())),
+                "possible_collision": len(classifications) > 1,
+                "classifications": [
+                    {"source": item[0], "operation": item[1], "category": item[2], "error_code": item[3]}
+                    for item in classifications
+                ],
+            }
+        )
+    rendered_groups.sort(key=lambda item: (-item["occurrence_count"], item["fingerprint"]))
+    classified_count = len(failures) - empty_count - unspecified_count
+    return {
+        "project_id": project_id,
+        "since": since,
+        "until": until,
+        "total_failures": len(failures),
+        "classified_count": classified_count,
+        "empty_fingerprint_count": empty_count,
+        "unspecified_count": unspecified_count,
+        "classification_rate": classified_count / len(failures) if failures else 0.0,
+        "groups": rendered_groups,
+    }

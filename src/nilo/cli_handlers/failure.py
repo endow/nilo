@@ -4,7 +4,7 @@ import argparse
 import json
 
 from ..display_labels import category_label, field_label, severity_label, status_label
-from ..failure import list_failure_logs, summarize_failure_logs
+from ..failure import fingerprint_shadow_report, list_failure_logs, summarize_failure_logs
 from ..store import Store
 from ..transitions import TransitionError, ignore_failure, resolve_failure
 
@@ -82,6 +82,35 @@ def cmd_failure_summary(args: argparse.Namespace) -> None:
                 print(f"- {failure['id']} {failure['task_id']} {category_label(failure['category'])}")
         else:
             print("- なし")
+    finally:
+        store.close()
+
+
+def cmd_failure_shadow_report(args: argparse.Namespace) -> None:
+    store = Store(args.db, read_only=True)
+    try:
+        report = fingerprint_shadow_report(store, project_id=args.project, since=args.since, until=args.until)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        print("fingerprint shadow report:")
+        print(f"- project_id: {report['project_id'] or 'all'}")
+        print(f"- period: {report['since'] or 'unbounded'} .. {report['until'] or 'unbounded'} (until exclusive)")
+        print(f"- total_failures: {report['total_failures']}")
+        print(f"- classified_count: {report['classified_count']}")
+        print(f"- empty_fingerprint_count: {report['empty_fingerprint_count']}")
+        print(f"- unspecified_count: {report['unspecified_count']}")
+        print(f"- classification_rate: {report['classification_rate']:.3f}")
+        print("groups:")
+        if not report["groups"]:
+            print("- なし")
+        for group in report["groups"]:
+            print(
+                f"- {group['fingerprint']}: occurrences={group['occurrence_count']} "
+                f"tasks={group['distinct_task_count']} collision={str(group['possible_collision']).lower()}"
+            )
+            print(f"  severity: {json.dumps(group['severity'], ensure_ascii=False, sort_keys=True)}")
+            print(f"  representative_failure_ids: {', '.join(group['failure_ids'])}")
     finally:
         store.close()
 

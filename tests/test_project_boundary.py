@@ -13,7 +13,13 @@ from unittest.mock import patch
 
 from nilo.cli import main
 from nilo.mcp_server import call_tool
-from nilo.project_boundary import ProjectBoundaryError, project_boundary_prompt, require_write_fence, resolve_project_boundary
+from nilo.project_boundary import (
+    ProjectBoundaryError,
+    project_boundary_prompt,
+    record_nilo_issue_for_task,
+    require_write_fence,
+    resolve_project_boundary,
+)
 from nilo.snapshot import compact_snapshot
 from nilo.store import Store
 from nilo.timeutil import now_iso
@@ -26,6 +32,31 @@ class ProjectBoundaryTests(unittest.TestCase):
     def init_git(self, root: Path) -> None:
         root.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_recorded_boundary_failure_has_stable_structured_classification(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "Nilo"
+            self.init_git(root)
+            db = root / ".nilo" / "nilo.db"
+            self.create_project_task(db, "nilo")
+            boundary = resolve_project_boundary(root, db_path=db)
+            error = ProjectBoundaryError(
+                "write outside boundary at /private/path with sk-secret-value",
+                code="write_fence_violation",
+                details={"inspected_repositories": [str(root)]},
+            )
+            store = Store(db)
+            try:
+                failure = record_nilo_issue_for_task(store, "nilo", "task_test", "dangerous-command", error, boundary)
+            finally:
+                store.close()
+
+        self.assertEqual(failure["operation"], "write_fence")
+        self.assertEqual(failure["error_code"], "write_fence_violation")
+        self.assertEqual(failure["fingerprint"], "v1:project_boundary:write_fence:niloissue:write_fence_violation")
+        self.assertEqual(failure["context"], {"check": "project_boundary"})
+        self.assertNotIn("private", json.dumps(failure["context"]))
+        self.assertNotIn("secret", failure["fingerprint"])
 
     def write_binding(
         self,

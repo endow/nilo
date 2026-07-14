@@ -66,10 +66,16 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
         for issue in issues:
             if issue.startswith("secret detected"):
                 category = "secret_detected"
+                operation = "secret_scan"
+                error_code = "credential_pattern"
             elif issue.startswith("changed_files") or issue.startswith("git metadata"):
                 category = "metadata_mismatch"
+                operation = "evidence_check"
+                error_code = "changed_files_mismatch" if issue.startswith("changed_files") else "git_metadata_mismatch"
             else:
                 category = "evidence_missing"
+                operation = "evidence_check"
+                error_code = "required_evidence_missing"
             severity = "high" if category in ("metadata_mismatch", "secret_detected") else "medium"
             record_failure_log(
                 store,
@@ -83,6 +89,10 @@ def import_agent_report(store: Store, task: dict, markdown: str, agent: str, cwd
                 actor="nilo",
                 related_id=report["id"],
                 snapshot=snapshot,
+                operation=operation,
+                error_code=error_code,
+                context={"check": operation},
+                preventability="likely",
                 status="open",
             )
 

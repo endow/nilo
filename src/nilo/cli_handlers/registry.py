@@ -14,7 +14,7 @@ from .facade import (
     cmd_facade_status,
     cmd_facade_work,
 )
-from .failure import cmd_failure_ignore, cmd_failure_list, cmd_failure_resolve, cmd_failure_show, cmd_failure_summary
+from .failure import cmd_failure_ignore, cmd_failure_list, cmd_failure_resolve, cmd_failure_shadow_report, cmd_failure_show, cmd_failure_summary
 from .mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
 from .overdrive import cmd_roadmap_execute, cmd_run
 from .project import cmd_project_create, cmd_project_export_handson, cmd_project_export_recipes, cmd_project_import_recipes, cmd_project_status, cmd_project_summary

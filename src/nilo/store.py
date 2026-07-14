@@ -137,6 +137,11 @@ CREATE TABLE IF NOT EXISTS failure_logs (
   actor TEXT NOT NULL DEFAULT '',
   related_id TEXT NOT NULL DEFAULT '',
   snapshot TEXT NOT NULL DEFAULT '{}',
+  fingerprint TEXT NOT NULL DEFAULT '',
+  operation TEXT NOT NULL DEFAULT '',
+  error_code TEXT NOT NULL DEFAULT '',
+  context TEXT NOT NULL DEFAULT '{}',
+  preventability TEXT NOT NULL DEFAULT 'unknown',
   status TEXT NOT NULL DEFAULT 'open',
   resolved_at TEXT NOT NULL DEFAULT '',
   resolved_by TEXT NOT NULL DEFAULT '',
@@ -529,6 +534,7 @@ JSON_COLUMNS = {
 }
 
 TABLE_JSON_COLUMNS = {
+    "failure_logs": {"context"},
     "instructions": {"applied_failure_pattern_ids"},
     "review_attempts": {"diagnostics"},
     "review_dispatches": {"args"},
@@ -584,6 +590,11 @@ MIGRATION_COLUMN_DEFINITIONS = (
     ("failure_logs", "actor", "TEXT NOT NULL DEFAULT ''"),
     ("failure_logs", "related_id", "TEXT NOT NULL DEFAULT ''"),
     ("failure_logs", "snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+    ("failure_logs", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "operation", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "error_code", "TEXT NOT NULL DEFAULT ''"),
+    ("failure_logs", "context", "TEXT NOT NULL DEFAULT '{}'"),
+    ("failure_logs", "preventability", "TEXT NOT NULL DEFAULT 'unknown'"),
     ("failure_logs", "status", "TEXT NOT NULL DEFAULT 'open'"),
     ("failure_logs", "resolved_at", "TEXT NOT NULL DEFAULT ''"),
     ("failure_logs", "resolved_by", "TEXT NOT NULL DEFAULT ''"),

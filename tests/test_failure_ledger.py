@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nilo.cli import main
+from nilo.failure import failure_fingerprint, fingerprint_shadow_report, record_failure_log
 from nilo.store import Store
 from nilo.timeutil import now_iso
 
@@ -112,6 +113,115 @@ class FailureLedgerTests(unittest.TestCase):
             store.close()
             self.assertTrue(LEGACY_LEARNING_TABLES.isdisjoint(self.table_names(db)))
 
+    def test_failure_fingerprint_uses_only_structured_classification(self) -> None:
+        first = failure_fingerprint(
+            source="Report Import",
+            operation="Evidence Check",
+            category="Metadata Mismatch",
+            error_code="Changed Files Mismatch",
+        )
+        second = failure_fingerprint(
+            source="report-import",
+            operation="evidence/check",
+            category="metadata_mismatch",
+            error_code="changed_files_mismatch",
+        )
+
+        self.assertEqual(first, "v1:report_import:evidence_check:metadata_mismatch:changed_files_mismatch")
+        self.assertEqual(first, second)
+
+    def test_record_failure_fingerprint_ignores_variable_failure_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            self.create_project_task(db)
+            store = Store(db)
+            try:
+                first = record_failure_log(
+                    store,
+                    "project_test",
+                    "task_test",
+                    "report_one",
+                    "metadata_mismatch",
+                    "changed_files mismatch at /tmp/one for task_one with token sk-secret-one",
+                    "high",
+                    source="report_import",
+                    operation="evidence_check",
+                    error_code="changed_files_mismatch",
+                    related_id="task_one",
+                    context={"check": "changed_files"},
+                )
+                second = record_failure_log(
+                    store,
+                    "project_test",
+                    "task_test",
+                    "report_two",
+                    "metadata_mismatch",
+                    "changed_files mismatch at /other/two for task_two with token sk-secret-two",
+                    "high",
+                    source="report_import",
+                    operation="evidence_check",
+                    error_code="changed_files_mismatch",
+                    related_id="task_two",
+                    context={"check": "changed_files"},
+                )
+            finally:
+                store.close()
+
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+        self.assertNotIn("task_one", first["fingerprint"])
+        self.assertNotIn("tmp", first["fingerprint"])
+        self.assertNotIn("secret", first["fingerprint"])
+
+    def test_failure_schema_migrates_legacy_rows_without_guessing_fingerprint(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                """
+                CREATE TABLE failure_logs (
+                  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                  report_id TEXT, category TEXT NOT NULL, message TEXT NOT NULL,
+                  severity TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '',
+                  related_id TEXT NOT NULL DEFAULT '', snapshot TEXT NOT NULL DEFAULT '{}',
+                  status TEXT NOT NULL DEFAULT 'open', resolved_at TEXT NOT NULL DEFAULT '',
+                  resolved_by TEXT NOT NULL DEFAULT '', resolution_note TEXT NOT NULL DEFAULT '',
+                  decision_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO failure_logs
+                (id, project_id, task_id, report_id, category, message, severity, source,
+                 actor, related_id, snapshot, status, resolved_at, resolved_by,
+                 resolution_note, decision_note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "failure_legacy", "project_test", "task_test", "report_test",
+                    "metadata_mismatch", "variable legacy message", "high", "report_import",
+                    "nilo", "report_test", "{}", "open", "", "", "", "", now_iso(),
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            store = Store(db)
+            try:
+                failure = store.get("failure_logs", "failure_legacy")
+                columns = {row["name"] for row in store.conn.execute("PRAGMA table_info(failure_logs)").fetchall()}
+            finally:
+                store.close()
+
+        assert failure is not None
+        self.assertTrue({"fingerprint", "operation", "error_code", "context", "preventability"} <= columns)
+        self.assertEqual(failure["fingerprint"], "")
+        self.assertEqual(failure["operation"], "")
+        self.assertEqual(failure["error_code"], "")
+        self.assertEqual(failure["context"], {})
+        self.assertEqual(failure["preventability"], "unknown")
+        self.assertEqual(failure["message"], "variable legacy message")
+
     def test_report_import_records_open_failure_logs(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -138,6 +248,14 @@ class FailureLedgerTests(unittest.TestCase):
             self.assertEqual(failures[0]["source"], "report_import")
             self.assertEqual(failures[0]["actor"], "nilo")
             self.assertEqual(failures[0]["related_id"], reports[0]["id"])
+            self.assertEqual(failures[0]["operation"], "evidence_check")
+            self.assertEqual(failures[0]["error_code"], "changed_files_mismatch")
+            self.assertEqual(
+                failures[0]["fingerprint"],
+                "v1:report_import:evidence_check:metadata_mismatch:changed_files_mismatch",
+            )
+            self.assertEqual(failures[0]["context"], {"check": "evidence_check"})
+            self.assertEqual(failures[0]["preventability"], "likely")
             self.assertTrue(LEGACY_LEARNING_TABLES.isdisjoint(self.table_names(db)))
 
     def test_outcome_rejected_records_human_failure_log(self) -> None:
@@ -156,6 +274,10 @@ class FailureLedgerTests(unittest.TestCase):
             self.assertEqual(failures[0]["source"], "outcome_record")
             self.assertEqual(failures[0]["actor"], "human")
             self.assertEqual(failures[0]["status"], "open")
+            self.assertEqual(failures[0]["operation"], "human_outcome")
+            self.assertEqual(failures[0]["error_code"], "rejected")
+            self.assertEqual(failures[0]["fingerprint"], "v1:outcome_record:human_outcome:human_rejected:rejected")
+            self.assertEqual(failures[0]["context"], {"decision": "rejected"})
 
     def test_failure_list_filters(self) -> None:
         with TemporaryDirectory() as directory:
@@ -237,6 +359,94 @@ class FailureLedgerTests(unittest.TestCase):
             self.assertEqual(summary["resolved"], 1)
             self.assertEqual(summary["by_severity"]["high"], 2)
             self.assertEqual([failure["id"] for failure in summary["recent_high_failures"]], [])
+
+    def test_fingerprint_shadow_report_groups_period_and_classification_quality(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            self.create_project_task(db)
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "task", "create", "--project", "project_test", "--id", "task_other", "--title", "Other"])
+            store = Store(db)
+            try:
+                for task_id in ("task_test", "task_other"):
+                    failure = record_failure_log(
+                        store,
+                        "project_test",
+                        task_id,
+                        "",
+                        "metadata_mismatch",
+                        f"variable message for {task_id}",
+                        "high" if task_id == "task_test" else "medium",
+                        source="report_import",
+                        operation="evidence_check",
+                        error_code="changed_files_mismatch",
+                        context={"check": "evidence_check"},
+                    )
+                    store.update("failure_logs", failure["id"], {"created_at": "2026-07-10T00:00:00+09:00"})
+                unspecified = record_failure_log(
+                    store,
+                    "project_test",
+                    "task_test",
+                    "",
+                    "evidence_missing",
+                    "unknown structured source",
+                    "low",
+                    source="report_import",
+                )
+                store.update("failure_logs", unspecified["id"], {"created_at": "2026-07-11T00:00:00+09:00"})
+                self.insert_failure(db, "failure_empty", created_at="2026-07-12T00:00:00+09:00")
+                self.insert_failure(db, "failure_outside", created_at="2026-06-01T00:00:00+09:00")
+                report = fingerprint_shadow_report(
+                    store,
+                    project_id="project_test",
+                    since="2026-07-01T00:00:00+09:00",
+                    until="2026-08-01T00:00:00+09:00",
+                )
+            finally:
+                store.close()
+
+        self.assertEqual(report["total_failures"], 4)
+        self.assertEqual(report["classified_count"], 2)
+        self.assertEqual(report["empty_fingerprint_count"], 1)
+        self.assertEqual(report["unspecified_count"], 1)
+        self.assertEqual(report["classification_rate"], 0.5)
+        self.assertEqual(report["groups"][0]["occurrence_count"], 2)
+        self.assertEqual(report["groups"][0]["distinct_task_count"], 2)
+        self.assertEqual(report["groups"][0]["severity"], {"high": 1, "medium": 1})
+        self.assertEqual(len(report["groups"][0]["failure_ids"]), 2)
+        self.assertFalse(report["groups"][0]["possible_collision"])
+
+    def test_shadow_report_cli_is_read_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            db = Path(directory) / "nilo.db"
+            self.create_project_task(db)
+            self.insert_failure(db, "failure_empty")
+            store = Store(db)
+            try:
+                before = {
+                    table: store.conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+                    for table in ("tasks", "todos", "failure_logs", "transition_events")
+                }
+            finally:
+                store.close()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "failure", "shadow-report", "--project", "project_test", "--json"])
+
+            store = Store(db)
+            try:
+                after = {
+                    table: store.conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+                    for table in ("tasks", "todos", "failure_logs", "transition_events")
+                }
+            finally:
+                store.close()
+
+        body = json.loads(output.getvalue())
+        self.assertEqual(body["total_failures"], 1)
+        self.assertEqual(body["empty_fingerprint_count"], 1)
+        self.assertEqual(before, after)
 
     def test_failure_show_outputs_extended_fields(self) -> None:
         with TemporaryDirectory() as directory:
