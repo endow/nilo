@@ -447,6 +447,40 @@ def _compact_next_action_text(action: str) -> str:
     return _shorten(human_next_action_text(action), 90)
 
 
+def _roadmap_work_status_label(status: str, language: str) -> str:
+    labels = {
+        "ja": {
+            "active": "作業中",
+            "task_plan_required": "タスク計画待ち",
+            "complete": "完了",
+            "incomplete": "未完了",
+        },
+        "en": {
+            "active": "active",
+            "task_plan_required": "task plan required",
+            "complete": "complete",
+            "incomplete": "incomplete",
+        },
+    }
+    return labels.get(language, labels["en"]).get(status, status.replace("_", " "))
+
+
+def _roadmap_next_action_label(action: str, language: str) -> str:
+    labels = {
+        "ja": {
+            "wait_for_user_direction": "ユーザーが次に進める作業を指定する",
+            "continue_active_task": "現在のタスクを続ける",
+            "summarize_current_commitment": "現在のロードマップ内容を確認する",
+        },
+        "en": {
+            "wait_for_user_direction": "wait for the user to choose the next work",
+            "continue_active_task": "continue the active task",
+            "summarize_current_commitment": "review the current roadmap commitment",
+        },
+    }
+    return labels.get(language, labels["en"]).get(action, action.replace("_", " "))
+
+
 def _render_with_budget(required: list[str], optional_sections: list[list[str]], max_chars: int | None) -> str:
     if max_chars is None:
         lines = list(required)
@@ -634,6 +668,7 @@ def render_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None
 
 def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | None = None) -> str:
     active = data.get("active_task")
+    language = data.get("primary_language") or "en"
     required: list[str] = [
         f"project_id: {data['project_id']}",
     ]
@@ -648,16 +683,30 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
         required.append("active_task: none")
     roadmap = data.get("active_roadmap")
     if roadmap:
-        required.append(
-            "active_roadmap: "
-            f"{roadmap['commitment_id']} [{roadmap['work_status']}] "
-            f"{_shorten(roadmap['commitment_title'], 64)}"
-        )
-        required.append(f"roadmap_next_action: {roadmap['recommended_next_action']}")
+        title = _shorten(roadmap["commitment_title"], 64)
+        status = roadmap["work_status"]
+        status_label = _roadmap_work_status_label(status, language)
+        action = roadmap["recommended_next_action"]
+        action_label = _roadmap_next_action_label(action, language)
+        if language == "ja":
+            required.append(
+                f"active_roadmap: {title}（状態: {status_label}、ID: {roadmap['commitment_id']}、status: {status}）"
+            )
+            required.append(f"roadmap_next_action: {action_label}（action: {action}）")
+        else:
+            required.append(
+                f"active_roadmap: {title} (state: {status_label}, ID: {roadmap['commitment_id']}, status: {status})"
+            )
+            required.append(f"roadmap_next_action: {action_label} (action: {action})")
 
     action = data.get("next_action") or ""
     required.append("next_action:")
-    required.append(f"- {_compact_next_action_text(action) if action else 'なし'}")
+    if action.startswith("roadmap: "):
+        roadmap_action = action.removeprefix("roadmap: ")
+        action_text = _roadmap_next_action_label(roadmap_action, language)
+    else:
+        action_text = _compact_next_action_text(action) if action else ("なし" if language == "ja" else "none")
+    required.append(f"- {action_text}")
     required.append(f"working_tree: {data.get('working_tree', 'unknown')}")
     for key in ("reason", "failed_verification_id", "resume_command", "required_approval_text", "command_after_approval", "command"):
         if data.get(key):

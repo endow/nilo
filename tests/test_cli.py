@@ -2884,7 +2884,19 @@ variables:
             try:
                 os.chdir(root)
                 with redirect_stdout(io.StringIO()):
-                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "project",
+                            "create",
+                            "Nilo",
+                            "--id",
+                            "project_test",
+                            "--rule",
+                            "primary_language: ja",
+                        ]
+                    )
                 imported = io.StringIO()
                 with redirect_stdout(imported):
                     main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
@@ -2899,13 +2911,48 @@ variables:
                 body = output.getvalue()
 
                 self.assertIn("active_task: none", body)
-                self.assertIn(f"active_roadmap: {commitment_id} [task_plan_required] Active Roadmap", body)
-                self.assertIn("roadmap_next_action: wait_for_user_direction", body)
-                self.assertIn("- roadmap: wait_for_user_direction", body)
+                self.assertIn(
+                    f"active_roadmap: Active Roadmap（状態: タスク計画待ち、ID: {commitment_id}、status: task_plan_required）",
+                    body,
+                )
+                self.assertIn(
+                    "roadmap_next_action: ユーザーが次に進める作業を指定する（action: wait_for_user_direction）",
+                    body,
+                )
+                self.assertIn("- ユーザーが次に進める作業を指定する", body)
                 self.assertIn("nilo roadmap status --ai --project project_test", body)
                 self.assertNotIn("次に扱う具体的な作業を人間が決めてください", body)
             finally:
                 os.chdir(previous_cwd)
+
+    def test_compact_ai_status_uses_english_roadmap_labels(self) -> None:
+        from nilo.ai_context import render_compact_ai_context_text
+
+        body = render_compact_ai_context_text(
+            {
+                "project_id": "project_test",
+                "primary_language": "en",
+                "active_task": None,
+                "active_roadmap": {
+                    "commitment_id": "commitment_test",
+                    "commitment_title": "Readable Roadmap",
+                    "work_status": "incomplete",
+                    "recommended_next_action": "wait_for_user_direction",
+                },
+                "next_action": "roadmap: wait_for_user_direction",
+                "working_tree": "clean",
+                "blockers": {"count": 0, "items": []},
+            }
+        )
+
+        self.assertIn(
+            "active_roadmap: Readable Roadmap (state: incomplete, ID: commitment_test, status: incomplete)",
+            body,
+        )
+        self.assertIn(
+            "roadmap_next_action: wait for the user to choose the next work (action: wait_for_user_direction)",
+            body,
+        )
 
     def test_status_ai_compacts_large_work_failure_summary_without_truncating_json(self) -> None:
         with TemporaryDirectory() as directory:
@@ -5868,7 +5915,10 @@ completed criterion を満たした。
                 main(["--db", str(db), "status", "--ai", "--project", "project_test"])
             fast_status_body = fast_status_output.getvalue()
             self.assertIn("active_task: task_related [planned] Related current commitment task", fast_status_body)
-            self.assertIn(f"active_roadmap: {commitment_id} [active] Current Commitment", fast_status_body)
+            self.assertIn(
+                f"active_roadmap: Current Commitment（状態: 作業中、ID: {commitment_id}、status: active）",
+                fast_status_body,
+            )
             self.assertNotIn("- roadmap:", fast_status_body)
             self.assertNotIn("active_task: task_old", fast_status_body)
 
@@ -13273,7 +13323,10 @@ close 済み commitment を表示できるようにした。
                 main(["--db", str(db), "status", "--ai", "--project", "project_test"])
             body = output.getvalue()
             self.assertIn("active_roadmap:", body)
-            self.assertIn("roadmap_next_action: wait_for_user_direction", body)
+            self.assertIn(
+                "roadmap_next_action: ユーザーが次に進める作業を指定する（action: wait_for_user_direction）",
+                body,
+            )
             self.assertNotIn("作業計画を確認し、これで進めてよいか判断してください。", body)
 
     def test_status_ai_keeps_distinct_pending_revision_from_same_source_path(self) -> None:
