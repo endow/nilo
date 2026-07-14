@@ -22,6 +22,7 @@ from ..quality_logic import (
     validate_required_scores,
 )
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
+from ..project_language import human_gate_texts
 from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template
 from ..review_dispatcher import dispatch_review, dispatch_review_direct, doctor_reviewer_config, init_reviewer_config, quick_review
 from ..review_lifecycle import insert_review_request, update_review_request
@@ -1121,11 +1122,14 @@ def cmd_review_finding_update(args: argparse.Namespace) -> None:
         if not finding:
             raise SystemExit(f"review finding not found: {args.finding}")
         current_event_id = _require_cli_fresh_task_context(store, finding["task_id"], getattr(args, "last_seen_event_id", ""), getattr(args, "context_token", ""), args=args, finding=finding)
+        task = store.get("tasks", finding["task_id"]) or {}
+        project = store.get("projects", task.get("project_id", "")) or {}
+        gate_texts = human_gate_texts(project, Path.cwd())
         if args.status == "accepted-risk":
             if args.actor != "human":
-                raise SystemExit(_human_decision_required_message(args, finding, current_event_id))
+                raise SystemExit(_human_decision_required_message(args, finding, current_event_id, gate_texts))
             if not getattr(args, "human_confirm", False):
-                raise SystemExit(_human_confirmation_required_message(args, finding, current_event_id))
+                raise SystemExit(_human_confirmation_required_message(args, finding, current_event_id, gate_texts))
         try:
             update_review_finding(
                 store,
@@ -1203,21 +1207,25 @@ def _stale_context_message(task_id: str, observed: str, current: str, args: argp
     )
 
 
-def _human_decision_required_message(args: argparse.Namespace, finding: dict, current_event_id: str) -> str:
+def _human_decision_required_message(
+    args: argparse.Namespace, finding: dict, current_event_id: str, texts: dict[str, str]
+) -> str:
     return "\n".join(
         [
-            "human decision required: accepted-risk must be recorded by a human",
-            "next:",
-            f"- have a human run: {_finding_update_command(args, finding, current_event_id, actor='human', human=True)}",
+            texts["accepted_risk_human_required"],
+            texts["next"],
+            f"- {texts['have_human_run']}: {_finding_update_command(args, finding, current_event_id, actor='human', human=True)}",
         ]
     )
 
 
-def _human_confirmation_required_message(args: argparse.Namespace, finding: dict, current_event_id: str) -> str:
+def _human_confirmation_required_message(
+    args: argparse.Namespace, finding: dict, current_event_id: str, texts: dict[str, str]
+) -> str:
     return "\n".join(
         [
-            "human confirmation required: accepted-risk needs --human-confirm and a decision note",
-            "next:",
+            texts["accepted_risk_confirmation_required"],
+            texts["next"],
             f"- {_finding_update_command(args, finding, current_event_id, actor='human', human=True)}",
         ]
     )

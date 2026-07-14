@@ -1775,6 +1775,48 @@ variables:
             self.assertIn("recipe: bugfix", english_bugfix_output.getvalue())
             self.assertNotIn("recipe: release", english_bugfix_output.getvalue())
 
+    def test_facade_work_localizes_human_gate_text_with_primary_language(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "project",
+                            "create",
+                            "Nilo",
+                            "--id",
+                            root.name,
+                            "--rule",
+                            "primary_language: ja",
+                        ]
+                    )
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "work",
+                            "表示を更新する",
+                            "--intent",
+                            "change",
+                            "--dry-run",
+                            "--json",
+                        ]
+                    )
+            finally:
+                os.chdir(previous_cwd)
+
+            payload = json.loads(output.getvalue())
+            self.assertIn("人間による承認が必要な場合", payload["stop_if"])
+            self.assertNotIn("human acceptance is required", payload["stop_if"])
+
     def test_facade_work_prioritizes_implementation_action_over_referenced_docs_path(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2523,7 +2565,7 @@ variables:
 
             with self.assertRaises(SystemExit) as raised:
                 main(["--db", str(db), "task", "completion", "invalidate", "--completion", "completion_done", "--reason", "reopen", "--actor", "human"])
-            self.assertIn("human decision requires human_confirm=True", str(raised.exception))
+            self.assertIn("人間の判断には human_confirm=True が必要です", str(raised.exception))
 
     def test_review_waiver_requires_human_confirmation_and_records_audit_event(self) -> None:
         with TemporaryDirectory() as directory:
@@ -2553,7 +2595,7 @@ variables:
 
             with self.assertRaises(SystemExit) as raised:
                 main(["--db", str(db), "review", "waive", "--review", "review_test", "--reason", "緊急修正"])
-            self.assertIn("human decision requires human_confirm=True", str(raised.exception))
+            self.assertIn("人間の判断には human_confirm=True が必要です", str(raised.exception))
             with redirect_stdout(io.StringIO()):
                 main(["--db", str(db), "review", "waive", "--review", "review_test", "--reason", "緊急修正", "--human-confirm"])
 
@@ -9742,10 +9784,96 @@ close 済み commitment を表示できるようにした。
                     ]
                 )
             self.assertIn("--decision-note", str(raised.exception))
+            self.assertIn("人間による完了", str(raised.exception))
+            with self.assertRaises(SystemExit) as raised:
+                main(
+                    [
+                        "--db",
+                        str(db),
+                        "task",
+                        "complete",
+                        "--task",
+                        "task_test",
+                        "--reason",
+                        "accepted",
+                        "--actor",
+                        "human",
+                        "--decision-note",
+                        "確認済み",
+                    ]
+                )
+            self.assertIn("人間の判断には human_confirm=True が必要です", str(raised.exception))
+            self.assertIn("pass --human-confirm", str(raised.exception))
             store = Store(db)
             completion = store.latest_for_task("task_completions", "task_test")
             store.close()
             self.assertIsNone(completion)
+
+    def test_high_risk_completion_message_uses_project_primary_language(self) -> None:
+        for language, expected in (
+            ("ja", "高リスクのタスクを完了するには、人間による明示的な判断が必要です"),
+            ("en", "high-risk task completion requires an explicit human decision"),
+        ):
+            with self.subTest(language=language), TemporaryDirectory() as directory:
+                db = Path(directory) / "nilo.db"
+                with redirect_stdout(io.StringIO()):
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "project",
+                            "create",
+                            "Nilo",
+                            "--id",
+                            "project_test",
+                            "--rule",
+                            f"primary_language: {language}",
+                        ]
+                    )
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "create",
+                            "--project",
+                            "project_test",
+                            "--id",
+                            "task_test",
+                            "--title",
+                            "High risk task",
+                            "--risk",
+                            "high",
+                        ]
+                    )
+                with self.assertRaises(SystemExit) as raised:
+                    main(
+                        [
+                            "--db",
+                            str(db),
+                            "task",
+                            "complete",
+                            "--task",
+                            "task_test",
+                            "--reason",
+                            "done",
+                            "--actor",
+                            "ai",
+                        ]
+                    )
+                self.assertEqual(str(raised.exception), expected)
+
+    def test_primary_language_falls_back_to_os_locale_without_project_files(self) -> None:
+        from nilo.project_language import infer_primary_language_from_files
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("nilo.project_language.locale.getlocale", return_value=("ja_JP", "UTF-8")):
+                self.assertEqual(infer_primary_language_from_files(root), "ja")
+            with patch("nilo.project_language.locale.getlocale", return_value=("en_US", "UTF-8")):
+                self.assertEqual(infer_primary_language_from_files(root), "en")
+            with patch("nilo.project_language.locale.getlocale", return_value=(None, None)):
+                self.assertEqual(infer_primary_language_from_files(root), "en")
 
     def test_task_complete_rejects_ai_completion_without_evidence(self) -> None:
         with TemporaryDirectory() as directory:
@@ -12374,8 +12502,8 @@ close 済み commitment を表示できるようにした。
                     )
 
             message = str(raised.exception)
-            self.assertIn("human decision required: accepted-risk must be recorded by a human", message)
-            self.assertIn("have a human run:", message)
+            self.assertIn("人間の判断が必要です: accepted-risk は人間が記録する必要があります", message)
+            self.assertIn("人間が実行してください:", message)
             self.assertIn(f"nilo --db {db}", message)
             self.assertIn("--actor human", message)
             self.assertIn("--human-confirm", message)
@@ -12439,7 +12567,7 @@ close 済み commitment を表示できるようにした。
                     )
 
             message = str(raised.exception)
-            self.assertIn("human confirmation required: accepted-risk needs --human-confirm", message)
+            self.assertIn("人間による確認が必要です: accepted-risk には --human-confirm", message)
             self.assertIn(f"nilo --db {db}", message)
             self.assertIn("--actor human", message)
             self.assertIn("--human-confirm", message)

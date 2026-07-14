@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import locale
 import re
 from pathlib import Path
 
@@ -63,7 +64,8 @@ def infer_primary_language_from_files(root: Path | None = None) -> str:
                 continue
             if body.strip():
                 return infer_primary_language_from_text(body)
-    return "ja"
+    system_language = (locale.getlocale()[0] or "").replace("-", "_").lower()
+    return "ja" if system_language.startswith("ja") or "japanese" in system_language else "en"
 
 
 def project_primary_language(project: dict, root: Path | None = None) -> str:
@@ -95,6 +97,46 @@ def human_readable_language_policy(project: dict, root: Path | None = None) -> s
         "Do not translate CLI-provided text automatically; keep commands, paths, file names, identifiers, "
         "status, enum, and JSON field names in their original technical form."
     )
+
+
+def human_gate_texts(project: dict, root: Path | None = None) -> dict[str, str]:
+    if project_primary_language(project, root) == "ja":
+        return {
+            "public_operation_required": "公開操作が必要な場合",
+            "destructive_change_required": "破壊的変更が必要な場合",
+            "verification_fails": "検証が失敗した場合",
+            "human_acceptance_required": "人間による承認が必要な場合",
+            "high_risk_completion_required": "高リスクのタスクを完了するには、人間による明示的な判断が必要です",
+            "human_only": "この操作は人間の判断を記録するため、AIは実行できません",
+            "human_confirm_required": "人間の判断には human_confirm=True が必要です",
+            "decision_note_required": "人間の判断には判断理由が必要です",
+            "decision_source_required": "人間の判断には decision_source=human_interactive または human_explicit が必要です",
+            "ai_human_decision_forbidden": "AIは人間の判断を記録できません",
+            "human_completion_note_required": "人間による完了には、人間の承認内容を --decision-note で指定する必要があります",
+            "accepted_risk_human_required": "人間の判断が必要です: accepted-risk は人間が記録する必要があります",
+            "accepted_risk_confirmation_required": "人間による確認が必要です: accepted-risk には --human-confirm と判断理由が必要です",
+            "next": "次の操作:",
+            "have_human_run": "人間が実行してください",
+            "todo_close_decision_required": "Todoを終了するには、人間による確認または後続項目へのリンクが必要です",
+        }
+    return {
+        "public_operation_required": "public operation is required",
+        "destructive_change_required": "destructive change is required",
+        "verification_fails": "verification fails",
+        "human_acceptance_required": "human acceptance is required",
+        "high_risk_completion_required": "high-risk task completion requires an explicit human decision",
+        "human_only": "this transition records a human decision and cannot be performed by AI",
+        "human_confirm_required": "human decision requires human_confirm=True",
+        "decision_note_required": "human decision requires a decision note",
+        "decision_source_required": "human decision requires decision_source=human_interactive or human_explicit",
+        "ai_human_decision_forbidden": "AI cannot create a human decision",
+        "human_completion_note_required": "human completion requires --decision-note with the human acceptance note",
+        "accepted_risk_human_required": "human decision required: accepted-risk must be recorded by a human",
+        "accepted_risk_confirmation_required": "human confirmation required: accepted-risk needs --human-confirm and a decision note",
+        "next": "next:",
+        "have_human_run": "have a human run",
+        "todo_close_decision_required": "closing a todo requires human confirmation or a linked successor",
+    }
 
 
 def _nontechnical_text(value: str) -> str:

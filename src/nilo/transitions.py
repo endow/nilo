@@ -7,6 +7,7 @@ from typing import Any
 
 from .agent_report_import import import_agent_report as import_agent_report_body
 from .cli_support import make_id
+from .project_language import human_gate_texts
 from .review import VALID_FINDING_STATUSES, parse_review_result
 from .secret import mask_secrets
 from .snapshot import compact_snapshot, current_git_snapshot, evidence_status, snapshots_match
@@ -80,20 +81,47 @@ def _require_actor(actor: str) -> None:
         raise TransitionError("actor_required", "transition requires an explicit actor", "pass --actor or --by explicitly")
 
 
-def _require_human_decision(actor: str, human_confirm: bool, decision_note: str, decision_source: str) -> None:
+def _require_human_decision(
+    actor: str,
+    human_confirm: bool,
+    decision_note: str,
+    decision_source: str,
+    messages: dict[str, str] | None = None,
+) -> None:
+    messages = messages or {}
     _require_actor(actor)
     if actor != "human":
-        raise TransitionError("human_only", "this transition records a human decision and cannot be performed by AI")
+        raise TransitionError("human_only", messages.get("human_only", "this transition records a human decision and cannot be performed by AI"))
     if not human_confirm:
-        raise TransitionError("human_confirm_required", "human decision requires human_confirm=True", "pass --human-confirm")
+        raise TransitionError(
+            "human_confirm_required",
+            messages.get("human_confirm_required", "human decision requires human_confirm=True"),
+            "pass --human-confirm",
+        )
     if not decision_note.strip():
-        raise TransitionError("decision_note_required", "human decision requires a decision note", "pass --decision-note or --reason")
+        raise TransitionError(
+            "decision_note_required",
+            messages.get("decision_note_required", "human decision requires a decision note"),
+            "pass --decision-note or --reason",
+        )
     if decision_source not in HUMAN_DECISION_SOURCES:
         raise TransitionError(
             "decision_source_required",
-            "human decision requires decision_source=human_interactive or human_explicit",
+            messages.get(
+                "decision_source_required",
+                "human decision requires decision_source=human_interactive or human_explicit",
+            ),
             "use CLI --human-confirm with an explicit note",
         )
+
+
+def _project_human_gate_texts(store: Store, project_id: str) -> dict[str, str]:
+    return human_gate_texts(store.get("projects", project_id) or {}, Path.cwd())
+
+
+def _task_human_gate_texts(store: Store, task_id: str) -> dict[str, str]:
+    task = store.get("tasks", task_id) or {}
+    return _project_human_gate_texts(store, task.get("project_id", ""))
 
 
 def _require_expected(value: str, expected: str | None, code: str, message: str) -> None:
@@ -278,9 +306,11 @@ def complete_task(
         raise TransitionError("task_already_closed", f"task is already closed: {task_id} ({previous_status})")
     latest_review = store.latest_for_task("review_results", task_id)
     _require_no_open_high_failure(store, task)
+    project = store.get("projects", task["project_id"]) or {}
+    gate_texts = human_gate_texts(project, cwd)
     commit_transition: dict[str, Any] = {}
     if actor == "human":
-        _require_human_decision(actor, human_confirm, decision_note, decision_source)
+        _require_human_decision(actor, human_confirm, decision_note, decision_source, gate_texts)
         latest_verification = store.latest_for_task("verification_runs", task_id)
         snapshot = current_git_snapshot(cwd)
         if unresolved_review_findings(store, task_id):
@@ -295,9 +325,9 @@ def complete_task(
                 commit_transition = release_commit_transition_metadata(store, task_id)
     elif actor == "ai":
         if human_confirm or decision_source in HUMAN_DECISION_SOURCES:
-            raise TransitionError("ai_human_decision_forbidden", "AI cannot create a human decision")
+            raise TransitionError("ai_human_decision_forbidden", gate_texts["ai_human_decision_forbidden"])
         if requires_human_completion(store, task):
-            raise TransitionError("human_completion_required", "high-risk task completion requires an explicit human decision")
+            raise TransitionError("human_completion_required", gate_texts["high_risk_completion_required"])
         unresolved = unresolved_review_findings(store, task_id)
         if unresolved:
             ids = ", ".join(item["id"] for item in unresolved[:5])
@@ -397,8 +427,9 @@ def invalidate_task_completion(
     human_confirm: bool = False,
     decision_source: str = "",
 ) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, reason, decision_source)
     completion = store.get("task_completions", completion_id)
+    messages = _task_human_gate_texts(store, completion["task_id"]) if completion else human_gate_texts({}, Path.cwd())
+    _require_human_decision(actor, human_confirm, reason, decision_source, messages)
     if not completion:
         raise TransitionError("completion_not_found", f"task completion not found: {completion_id}")
     if completion.get("invalidated_at"):
@@ -436,8 +467,9 @@ def waive_review_request(
     human_confirm: bool = False,
     decision_source: str = "",
 ) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, reason, decision_source)
     request = store.get("review_requests", review_id)
+    messages = _task_human_gate_texts(store, request["task_id"]) if request else human_gate_texts({}, Path.cwd())
+    _require_human_decision(actor, human_confirm, reason, decision_source, messages)
     if not request:
         raise TransitionError("review_request_not_found", f"review request not found: {review_id}")
     if request["status"] == "completed":
@@ -560,13 +592,14 @@ record_outcome_decision = atomic_transition(record_outcome_decision)
 
 def cancel_task(store: Store, task_id: str, *, actor: str, reason: str, human_confirm: bool = False, decision_note: str = "") -> TransitionResult:
     _require_actor(actor)
+    task = store.get("tasks", task_id)
+    gate_texts = _project_human_gate_texts(store, task["project_id"]) if task else human_gate_texts({}, Path.cwd())
     if actor == "human":
-        _require_human_decision(actor, human_confirm, decision_note, "human_explicit")
+        _require_human_decision(actor, human_confirm, decision_note, "human_explicit", gate_texts)
     elif human_confirm or decision_note:
-        raise TransitionError("ai_human_decision_forbidden", "AI cannot attach a human cancellation decision")
+        raise TransitionError("ai_human_decision_forbidden", gate_texts["ai_human_decision_forbidden"])
     if not reason.strip():
         raise TransitionError("reason_required", "task cancellation requires a reason")
-    task = store.get("tasks", task_id)
     if not task:
         raise TransitionError("task_not_found", f"task not found: {task_id}")
     previous = projected_task_status(store, task)
@@ -763,8 +796,11 @@ def accept_roadmap_revision(
     decision_source: str = "human_interactive",
     expected_revision_status: str | None = None,
 ) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     revision = store.get("roadmap_revisions", revision_id)
+    _require_human_decision(
+        actor, human_confirm, decision_note or reason, decision_source,
+        _project_human_gate_texts(store, revision["project_id"]) if revision else human_gate_texts({}, Path.cwd()),
+    )
     if not revision:
         raise TransitionError("roadmap_revision_not_found", f"roadmap revision not found: {revision_id}")
     if revision["status"] != "pending":
@@ -804,7 +840,10 @@ def adopt_roadmap_proposal(
     human_confirm: bool = False,
     decision_source: str = "human_interactive",
 ) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
+    _require_human_decision(
+        actor, human_confirm, decision_note or reason, decision_source,
+        _project_human_gate_texts(store, project_id),
+    )
     created_at = now_iso()
     commitment_id = make_id("commitment")
     revision_id = make_id("roadmap_rev")
@@ -855,8 +894,11 @@ adopt_roadmap_proposal = atomic_transition(adopt_roadmap_proposal)
 
 
 def reject_roadmap_revision(store: Store, revision_id: str, *, actor: str, reason: str, decision_note: str = "", human_confirm: bool = False, decision_source: str = "human_interactive", expected_revision_status: str | None = None) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     revision = store.get("roadmap_revisions", revision_id)
+    _require_human_decision(
+        actor, human_confirm, decision_note or reason, decision_source,
+        _project_human_gate_texts(store, revision["project_id"]) if revision else human_gate_texts({}, Path.cwd()),
+    )
     if not revision:
         raise TransitionError("roadmap_revision_not_found", f"roadmap revision not found: {revision_id}")
     commitment = store.get("roadmap_commitments", revision["proposed_commitment_id"])
@@ -895,7 +937,10 @@ def close_roadmap_commitment(
         raise TransitionError("roadmap_commitment_not_accepted", f"roadmap commitment is not accepted: {commitment_id}")
     _require_expected(commitment["status"], expected_commitment_status, "stale_roadmap_commitment", f"stale roadmap commitment state: expected={expected_commitment_status}, current={commitment['status']}")
     if force:
-        _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
+        _require_human_decision(
+            actor, human_confirm, decision_note or reason, decision_source,
+            _project_human_gate_texts(store, commitment["project_id"]),
+        )
     elif not closure_ready:
         raise TransitionError("roadmap_commitment_not_ready", "roadmap commitment is not closure-ready")
     closed_at = now_iso()
@@ -928,7 +973,10 @@ def resolve_failure(
         raise TransitionError("failure_not_found", f"failure not found: {failure_id}")
     _require_expected(failure["status"], expected_status, "stale_failure", f"stale failure state: expected={expected_status}, current={failure['status']}")
     if actor == "human":
-        _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
+        _require_human_decision(
+            actor, human_confirm, decision_note or reason, decision_source,
+            _task_human_gate_texts(store, failure["task_id"]),
+        )
     elif actor == "ai":
         verification = store.latest_for_task("verification_runs", failure["task_id"])
         review = store.latest_for_task("review_results", failure["task_id"])
@@ -967,8 +1015,11 @@ def ignore_failure(
     decision_note: str = "",
     expected_status: str | None = None,
 ) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     failure = store.get("failure_logs", failure_id)
+    _require_human_decision(
+        actor, human_confirm, decision_note or reason, decision_source,
+        _task_human_gate_texts(store, failure["task_id"]) if failure else human_gate_texts({}, Path.cwd()),
+    )
     if not failure:
         raise TransitionError("failure_not_found", f"failure not found: {failure_id}")
     _require_expected(failure["status"], expected_status, "stale_failure", f"stale failure state: expected={expected_status}, current={failure['status']}")
@@ -1002,8 +1053,11 @@ def approve_understanding(
     decision_source: str = "human_interactive",
     decision_note: str = "",
 ) -> TransitionResult:
-    _require_human_decision(actor, human_confirm, decision_note or reason, decision_source)
     latest = store.latest_for_task("understanding_checks", task_id)
+    _require_human_decision(
+        actor, human_confirm, decision_note or reason, decision_source,
+        _task_human_gate_texts(store, task_id),
+    )
     if not latest or latest["status"] != "understanding_reported":
         raise TransitionError("understanding_report_required", "understanding report import required before approval")
     row = {"id": make_id("understanding"), "task_id": task_id, "status": "approved_to_implement", "body_md": latest["body_md"], "actor": actor, "reason": reason, "decision_source": decision_source, "human_confirmed": human_confirm, "created_at": now_iso()}
@@ -1034,7 +1088,10 @@ def update_review_finding(
         raise TransitionError("review_finding_not_found", f"review finding not found: {finding_id}")
     _require_expected(finding["status"], expected_status, "stale_review_finding", f"stale review finding state: expected={expected_status}, current={finding['status']}")
     if status == "accepted-risk":
-        _require_human_decision(actor, human_confirm, reason, decision_source)
+        _require_human_decision(
+            actor, human_confirm, reason, decision_source,
+            _task_human_gate_texts(store, finding["task_id"]),
+        )
     warnings: list[str] = []
     if actor == "ai" and status == "addressed":
         if not store.latest_for_task("verification_runs", finding["task_id"]) and not store.latest_for_task("agent_reports", finding["task_id"]):
@@ -1069,9 +1126,13 @@ def triage_todo(
         raise TransitionError("todo_not_found", f"todo not found: {todo_id}")
     _require_expected(todo["status"], expected_status, "stale_todo", f"stale todo state: expected={expected_status}, current={todo['status']}")
     if status in {"rejected", "deferred"} and not (human_confirm and actor == "human") and not (commitment_id or roadmap_revision_id):
-        raise TransitionError("todo_close_decision_required", "closing a todo requires human confirmation or a linked successor")
+        messages = _project_human_gate_texts(store, todo["project_id"])
+        raise TransitionError("todo_close_decision_required", messages["todo_close_decision_required"])
     if status in {"rejected", "deferred"} and actor == "human":
-        _require_human_decision(actor, human_confirm, reason, decision_source)
+        _require_human_decision(
+            actor, human_confirm, reason, decision_source,
+            _project_human_gate_texts(store, todo["project_id"]),
+        )
     if actor == "ai" and status not in AI_ALLOWED_TODO_STATUSES and status not in {"superseded", "converted_to_task"}:
         raise TransitionError("todo_transition_not_ai_allowed", f"AI cannot set todo status {status}")
     values = {"status": status, "triaged_at": now_iso(), "triage_reason": reason, "actor": actor, "decision_source": decision_source}

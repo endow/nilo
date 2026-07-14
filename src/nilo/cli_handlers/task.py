@@ -11,6 +11,7 @@ from ..failure import deterministic_id
 from ..human_status import human_next_action_text
 from ..gitmeta import EMPTY_TREE_COMMIT, head_commit, task_base_snapshot
 from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task, require_write_fence, resolve_project_boundary
+from ..project_language import human_gate_texts
 from ..snapshot import commit_aware_evidence_status, compact_snapshot, current_git_snapshot, review_result_status
 from ..store import Store
 from ..task_analytics import project_task_analytics, task_analytics
@@ -461,7 +462,9 @@ def cmd_task_complete(args: argparse.Namespace) -> None:
             human_confirm = bool(getattr(args, "human_confirm", False) or human_acceptance)
             decision_note = (getattr(args, "decision_note", "") or "").strip() or human_acceptance
             if args.actor == "human" and not decision_note:
-                raise TransitionError("decision_note_required", "human completion requires --decision-note with the human acceptance note")
+                project = store.get("projects", task["project_id"]) or {}
+                message = human_gate_texts(project, Path.cwd())["human_completion_note_required"]
+                raise TransitionError("decision_note_required", message)
             result = complete_task(
                 store,
                 args.task,

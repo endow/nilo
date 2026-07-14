@@ -16,6 +16,7 @@ from ..failure import deterministic_id
 from ..human_status import human_next_action_text
 from ..open_state import open_state_detector
 from ..project_logic import fast_project_tasks_and_recorded_statuses, fast_unfinished_verification_targets
+from ..project_language import human_gate_texts
 from ..project_boundary import (
     ProjectBoundaryError,
     assert_self_development_allowed,
@@ -601,6 +602,7 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
                 with redirect_stdout(io.StringIO()):
                     cmd_task_create(create_args)
                 created = True
+        gate_texts = human_gate_texts(project, Path.cwd())
         payload = {
             "status": "dry_run" if getattr(args, "dry_run", False) else ("created" if created else "ready"),
             "project_id": project_id,
@@ -613,10 +615,10 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
             "acceptance": task.get("acceptance_criteria") or work_acceptance_for_recipe(recipe["recipe"]),
             "recommended_check": getattr(args, "check", "") or "",
             "stop_if": [
-                "public operation is required",
-                "destructive change is required",
-                "verification fails",
-                "human acceptance is required",
+                gate_texts["public_operation_required"],
+                gate_texts["destructive_change_required"],
+                gate_texts["verification_fails"],
+                gate_texts["human_acceptance_required"],
             ],
             "next": [
                 f"nilo instruct --task {task_id}",
