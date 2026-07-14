@@ -728,13 +728,22 @@ def roadmap_proposal_path_for_commitment(store: Store, project_id: str, commitme
     return f".nilo/roadmap/{project_id}/roadmap_proposal.md"
 
 
-def selected_roadmap_commitment(store: Store, commitments: list[dict], tasks: list[dict], statuses: dict[str, str]) -> dict | None:
+def selected_roadmap_commitment(
+    store: Store,
+    commitments: list[dict],
+    tasks: list[dict],
+    statuses: dict[str, str],
+    *,
+    current_snapshot: dict | None = None,
+) -> dict | None:
     if not commitments:
         return None
 
     ranked: list[tuple[int, int, dict]] = []
     for index, commitment in enumerate(commitments):
-        assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
+        assessment = roadmap_commitment_assessment(
+            store, commitment, tasks, statuses, current_snapshot=current_snapshot
+        )
         related = related_tasks_for_commitment(tasks, commitment)
         active = [task for task in related if not is_task_closed_status(statuses[task["id"]])]
         if active:
@@ -749,8 +758,17 @@ def selected_roadmap_commitment(store: Store, commitments: list[dict], tasks: li
     return sorted(ranked, key=lambda item: (item[0], item[1]))[0][2]
 
 
-def ordered_roadmap_commitments(store: Store, commitments: list[dict], tasks: list[dict], statuses: dict[str, str]) -> list[dict]:
-    selected = selected_roadmap_commitment(store, commitments, tasks, statuses)
+def ordered_roadmap_commitments(
+    store: Store,
+    commitments: list[dict],
+    tasks: list[dict],
+    statuses: dict[str, str],
+    *,
+    current_snapshot: dict | None = None,
+) -> list[dict]:
+    selected = selected_roadmap_commitment(
+        store, commitments, tasks, statuses, current_snapshot=current_snapshot
+    )
     if not selected:
         return []
     return [selected, *[commitment for commitment in commitments if commitment["id"] != selected["id"]]]
@@ -786,12 +804,15 @@ def roadmap_prioritized_project_active_tasks(
     project_id: str,
     tasks: list[dict],
     statuses: dict[str, str],
+    *,
+    current_snapshot: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     commitments = ordered_roadmap_commitments(
         store,
         accepted_roadmap_commitments(store, project_id),
         tasks,
         statuses,
+        current_snapshot=current_snapshot,
     )
     return roadmap_prioritized_active_tasks(tasks, statuses, commitments), commitments
 
@@ -800,13 +821,28 @@ def human_roadmap_path_for_project(project_id: str) -> str:
     return "ROADMAP.md"
 
 
-def roadmap_agent_state(store: Store, project_id: str, tasks: list[dict], statuses: dict[str, str]) -> dict | None:
-    commitments = accepted_roadmap_commitments(store, project_id)
-    commitment = selected_roadmap_commitment(store, commitments, tasks, statuses)
+def roadmap_agent_state(
+    store: Store,
+    project_id: str,
+    tasks: list[dict],
+    statuses: dict[str, str],
+    *,
+    commitments: list[dict] | None = None,
+    current_snapshot: dict | None = None,
+) -> dict | None:
+    if commitments is None:
+        commitments = accepted_roadmap_commitments(store, project_id)
+        commitment = selected_roadmap_commitment(
+            store, commitments, tasks, statuses, current_snapshot=current_snapshot
+        )
+    else:
+        commitment = commitments[0] if commitments else None
     if not commitment:
         return None
 
-    assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
+    assessment = roadmap_commitment_assessment(
+        store, commitment, tasks, statuses, current_snapshot=current_snapshot
+    )
     active_tasks = [
         task
         for task in related_tasks_for_commitment(tasks, commitment)
@@ -991,6 +1027,8 @@ def project_level_next_actions(
     commitments: list[dict],
     pending_revisions: list[dict],
     project_id: str,
+    *,
+    current_snapshot: dict | None = None,
 ) -> list[str]:
     active_tasks = roadmap_prioritized_active_tasks(tasks, statuses, commitments)
     if active_tasks:
@@ -1026,8 +1064,12 @@ def project_level_next_actions(
             f"source_path: {source}); ask the user whether to adopt or reject the direction"
         ]
     if commitments:
-        commitment = selected_roadmap_commitment(store, commitments, tasks, statuses) or commitments[0]
-        assessment = roadmap_commitment_assessment(store, commitment, tasks, statuses)
+        commitment = selected_roadmap_commitment(
+            store, commitments, tasks, statuses, current_snapshot=current_snapshot
+        ) or commitments[0]
+        assessment = roadmap_commitment_assessment(
+            store, commitment, tasks, statuses, current_snapshot=current_snapshot
+        )
         if assessment["status"] == "task_plan_required":
             return [
                 no_active_task_action(

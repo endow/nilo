@@ -129,12 +129,25 @@ def project_ai_context(
     workflow = workflow_context(store, project_id)
     tasks: list[dict] = []
     statuses: dict[str, str] = {}
+    roadmap_state = None
+    project_snapshot = None
     if workflow.get("type") == "recipe_run" and workflow.get("task_id"):
         current = task_ai_context(store, workflow["task_id"], cwd=cwd, snapshot_mode=snapshot_mode)
     else:
         tasks, statuses = p.fast_project_tasks_and_recorded_statuses(store, project_id)
-        active, _ = p.roadmap_prioritized_project_active_tasks(store, project_id, tasks, statuses)
+        project_snapshot = current_git_snapshot(cwd, mode=snapshot_mode)
+        active, commitments = p.roadmap_prioritized_project_active_tasks(
+            store, project_id, tasks, statuses, current_snapshot=project_snapshot
+        )
         current = task_ai_context(store, active[0]["id"], cwd=cwd, snapshot_mode=snapshot_mode) if active else None
+        roadmap_state = p.roadmap_agent_state(
+            store,
+            project_id,
+            tasks,
+            statuses,
+            commitments=commitments,
+            current_snapshot=project_snapshot,
+        )
     if workflow.get("type") == "recipe_run":
         next_actions = workflow_next_actions(workflow)
     elif current:
@@ -143,18 +156,29 @@ def project_ai_context(
         design_residue = p.project_design_residue()
         commitments = p.accepted_roadmap_commitments(store, project_id)
         pending_revisions = p.pending_roadmap_revisions(store, project_id)
-        next_actions = p.project_level_next_actions(store, tasks, statuses, design_residue, commitments, pending_revisions, project_id)[:3]
+        next_actions = p.project_level_next_actions(
+            store,
+            tasks,
+            statuses,
+            design_residue,
+            commitments,
+            pending_revisions,
+            project_id,
+            current_snapshot=project_snapshot,
+        )[:3]
     failure_summary = summarize_failure_logs(store, project_id=project_id, limit=100000)
     if current:
         working_tree = "dirty" if current.get("git", {}).get("dirty") else "clean"
     else:
-        working_tree = "dirty" if current_git_snapshot(cwd, mode=snapshot_mode)["working_tree_dirty"] else "clean"
+        project_snapshot = project_snapshot or current_git_snapshot(cwd, mode=snapshot_mode)
+        working_tree = "dirty" if project_snapshot["working_tree_dirty"] else "clean"
     verbose_context = {
         "project_id": project_id,
         "project_name": project["name"],
         "primary_language": project_primary_language(project, cwd),
         "workflow_context": workflow,
         "current_task": current,
+        "roadmap_agent_state": roadmap_state,
         "next_required_actions": next_actions,
         "working_tree": working_tree,
         "failure_summary": {
@@ -224,18 +248,24 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
 
     next_actions = data.get("next_required_actions") or []
     next_action = next_actions[0] if next_actions else ""
+    roadmap_state = data.get("roadmap_agent_state")
+    if not current and roadmap_state:
+        next_action = f"roadmap: {roadmap_state['recommended_next_action']}"
     detail_commands = _detail_commands(data["project_id"], task_id)
     required_commands = []
     if next_action:
         required_commands.append("nilo next --project " + data["project_id"])
     if next_action.startswith("run nilo "):
         required_commands.append(next_action.removeprefix("run "))
+    if roadmap_state:
+        required_commands.append(f"nilo roadmap status --ai --project {data['project_id']}")
     return {
         "compact": True,
         "project_id": data["project_id"],
         "project_name": data["project_name"],
         "primary_language": data.get("primary_language", ""),
         "active_task": active_task,
+        "active_roadmap": roadmap_state,
         "next_action": next_action,
         "blockers": {"count": len(blockers), "items": blockers[:3]},
         "latest_verification": latest_verification,
@@ -544,6 +574,14 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
         required.append(f"active_task: {active['id']} [{active['status']}] {_shorten(active['title'], 64)}")
     else:
         required.append("active_task: none")
+    roadmap = data.get("active_roadmap")
+    if roadmap:
+        required.append(
+            "active_roadmap: "
+            f"{roadmap['commitment_id']} [{roadmap['work_status']}] "
+            f"{_shorten(roadmap['commitment_title'], 64)}"
+        )
+        required.append(f"roadmap_next_action: {roadmap['recommended_next_action']}")
 
     action = data.get("next_action") or ""
     required.append("next_action:")

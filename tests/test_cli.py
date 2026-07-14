@@ -2716,6 +2716,39 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
+    def test_ai_status_without_active_task_summarizes_active_roadmap(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text("# Active Roadmap\n\n## Success Criteria\n- status surfaces the roadmap\n", encoding="utf-8")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                imported = io.StringIO()
+                with redirect_stdout(imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(line.split(": ", 1)[1] for line in imported.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                commitment_id = next(line.split(": ", 1)[1] for line in imported.getvalue().splitlines() if line.startswith("proposed_commitment: "))
+                with redirect_stdout(io.StringIO()):
+                    main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+                body = output.getvalue()
+
+                self.assertIn("active_task: none", body)
+                self.assertIn(f"active_roadmap: {commitment_id} [task_plan_required] Active Roadmap", body)
+                self.assertIn("roadmap_next_action: wait_for_user_direction", body)
+                self.assertIn("- roadmap: wait_for_user_direction", body)
+                self.assertIn("nilo roadmap status --ai --project project_test", body)
+                self.assertNotIn("次に扱う具体的な作業を人間が決めてください", body)
+            finally:
+                os.chdir(previous_cwd)
+
     def test_status_ai_compacts_large_work_failure_summary_without_truncating_json(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -5677,6 +5710,8 @@ completed criterion を満たした。
                 main(["--db", str(db), "status", "--ai", "--project", "project_test"])
             fast_status_body = fast_status_output.getvalue()
             self.assertIn("active_task: task_related [planned] Related current commitment task", fast_status_body)
+            self.assertIn(f"active_roadmap: {commitment_id} [active] Current Commitment", fast_status_body)
+            self.assertNotIn("- roadmap:", fast_status_body)
             self.assertNotIn("active_task: task_old", fast_status_body)
 
             next_output = io.StringIO()
@@ -7592,6 +7627,31 @@ close 済み commitment を表示できるようにした。
 
             body = output.getvalue()
             self.assertIn("作業中のタスクはありません", body)
+
+    def test_ai_status_fast_path_does_not_run_full_roadmap_snapshot_when_idle(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text("# Idle Roadmap\n\n## Success Criteria\n- idle status remains fast\n", encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                imported = io.StringIO()
+                with redirect_stdout(imported):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(line.split(": ", 1)[1] for line in imported.getvalue().splitlines() if line.startswith("roadmap_revision: "))
+                main(["--db", str(db), "roadmap", "accept", "--revision", revision_id, "--reason", "accepted", "--actor", "human", "--human-confirm", "--decision-note", "test human decision"])
+
+            output = io.StringIO()
+            with redirect_stdout(output), patch(
+                "nilo.project_logic.current_git_snapshot",
+                side_effect=AssertionError("full snapshot should not run in fast AI status"),
+            ):
+                main(["--db", str(db), "status", "--ai", "--project", "project_test"])
+
+            self.assertIn("active_task: none", output.getvalue())
+            self.assertIn("active_roadmap:", output.getvalue())
 
     def test_next_hides_diff_attention_after_human_roadmap_close(self) -> None:
         with TemporaryDirectory() as directory:
