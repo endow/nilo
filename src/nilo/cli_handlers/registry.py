@@ -51,7 +51,6 @@ from .roadmap import (
     cmd_roadmap_assess,
     cmd_roadmap_close,
     cmd_roadmap_discuss,
-    cmd_roadmap_export,
     cmd_roadmap_import,
     cmd_roadmap_reject,
     cmd_roadmap_status,

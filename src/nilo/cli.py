@@ -412,7 +412,6 @@ from .project_logic import (
     handson_text,
     human_recipe_provenance_label,
     human_roadmap_summary,
-    human_roadmap_path_for_project,
     next_actions_for_task,
     normalize_command_path,
     ordered_roadmap_commitments,

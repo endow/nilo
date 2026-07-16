@@ -68,16 +68,6 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     roadmap_execute.add_argument("--max-failures", type=int, default=3)
     roadmap_execute.set_defaults(func=handlers.cmd_roadmap_execute)
 
-    roadmap_export = roadmap_sub.add_parser("export")
-    roadmap_export.add_argument("--project", required=True)
-    roadmap_export.add_argument(
-        "--file",
-        "--output",
-        dest="file",
-        help="write generated human roadmap to this output file",
-    )
-    roadmap_export.set_defaults(func=handlers.cmd_roadmap_export)
-
     roadmap_import = roadmap_sub.add_parser("import")
     roadmap_import.add_argument("--project", required=True)
     roadmap_import.add_argument("--file")
@@ -90,7 +80,6 @@ def register_roadmap(sub: argparse._SubParsersAction, handlers: ModuleType) -> N
     roadmap_adopt.add_argument("--actor", choices=["human"], required=True)
     roadmap_adopt.add_argument("--human-confirm", action="store_true")
     roadmap_adopt.add_argument("--decision-note", default="")
-    roadmap_adopt.add_argument("--roadmap-file")
     roadmap_adopt.set_defaults(func=handlers.cmd_roadmap_adopt)
 
     roadmap_accept = roadmap_sub.add_parser("accept")

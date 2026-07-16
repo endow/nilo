@@ -33,7 +33,7 @@ from nilo.ai_context import AI_CONTEXT_TEXT_MAX_CHARS, project_ai_context, rende
 from nilo.cli import handson_language, main
 from nilo.human_status import human_next_action_text
 from nilo.project_logic import human_roadmap_summary, project_tasks_and_statuses, render_handson_active_task_next_steps, selected_roadmap_commitment
-from nilo.roadmap_render import human_roadmap_action_text, render_human_roadmap_markdown, render_human_roadmap_summary_markdown
+from nilo.roadmap_render import render_human_roadmap_summary_markdown
 from nilo.review_dispatcher import find_executable
 from nilo.snapshot import UNCOMPUTED_DIFF_HASH, current_git_snapshot
 from nilo.store import Store
@@ -974,9 +974,6 @@ variables:
                 with redirect_stdout(roadmap_discuss_output):
                     main(["--db", str(db), "roadmap", "discuss", "--project", root.name])
 
-                roadmap_file = root / "ROADMAP.md"
-                with redirect_stdout(io.StringIO()), patch("nilo.project_logic.locale.getlocale", return_value=("en_US", "UTF-8")):
-                    main(["--db", str(db), "roadmap", "export", "--project", root.name, "--file", str(roadmap_file)])
             finally:
                 os.chdir(previous_cwd)
 
@@ -985,7 +982,6 @@ variables:
                 project_status_output.getvalue(),
                 project_summary_output.getvalue(),
                 roadmap_discuss_output.getvalue(),
-                roadmap_file.read_text(encoding="utf-8"),
             ]:
                 self.assertIn("docs-update (project layer)", body)
                 self.assertNotIn("recipe_content_hash", body)
@@ -1344,20 +1340,6 @@ variables:
         self.assertIn("task_verified: if the human accepts, run task complete --actor human --human-acceptance; add --commit only when Nilo should commit too", english_steps)
         self.assertNotIn("差分、変更ファイル一覧", "\n".join(english_steps))
         self.assertIn("task_verified: 差分、変更ファイル一覧、検証結果、未解決事項を確認する", japanese_steps)
-
-    def test_human_roadmap_action_text_translates_human_completion_guidance(self) -> None:
-        self.assertEqual(
-            human_roadmap_action_text('ask the human to accept with nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."', "ja"),
-            "証跡が揃ったら、人間が内容を確認して完了判断する",
-        )
-        self.assertEqual(
-            human_roadmap_action_text('verification evidence is ready; ask the human to accept with nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."', "ja"),
-            "証跡が揃ったら、人間が内容を確認して完了判断する",
-        )
-        self.assertEqual(
-            human_roadmap_action_text('if the human accepts, use nilo task complete --task task_test --reason "..." --actor human --human-acceptance "..."', "ja"),
-            "人間が内容に問題ないと判断したら、作業を完了扱いにする",
-        )
 
     def test_human_next_action_text_translates_human_completion_guidance(self) -> None:
         self.assertEqual(
@@ -5239,38 +5221,6 @@ project status からロードマップ現在地を読めるようにする。
             self.assertEqual(summary["roadmap_commitments"][0]["accepted_by"], "human")
             self.assertEqual(summary["pending_roadmap_revisions"], [])
 
-            roadmap_file = root / "ROADMAP.md"
-            export_output = io.StringIO()
-            with redirect_stdout(export_output), patch("nilo.project_logic.locale.getlocale", return_value=("en_US", "UTF-8")):
-                main(["--db", str(db), "roadmap", "export", "--project", "project_test", "--file", str(roadmap_file)])
-            self.assertIn(f"written: {roadmap_file}", export_output.getvalue())
-            roadmap_body = roadmap_file.read_text(encoding="utf-8")
-            self.assertNotIn(b"\r\n", roadmap_file.read_bytes())
-            self.assertIn("# Roadmap", roadmap_body)
-            self.assertIn("- Project: Nilo", roadmap_body)
-            self.assertIn("### Phase 2.5 Roadmap Projection", roadmap_body)
-            self.assertIn("- roadmap_position が accepted commitment を表示する", roadmap_body)
-            self.assertNotIn("project_id:", roadmap_body)
-            self.assertNotIn("commitment_", roadmap_body)
-            self.assertNotIn("roadmap_rev_", roadmap_body)
-
-            japanese_roadmap_file = root / "roadmap_ja.md"
-            japanese_export_output = io.StringIO()
-            with redirect_stdout(japanese_export_output), patch("nilo.project_logic.locale.getlocale", return_value=("Japanese_Japan", "utf8")):
-                main(["--db", str(db), "roadmap", "export", "--project", "project_test", "--file", str(japanese_roadmap_file)])
-            self.assertIn(f"written: {japanese_roadmap_file}", japanese_export_output.getvalue())
-            japanese_body = japanese_roadmap_file.read_text(encoding="utf-8")
-            self.assertIn("# ロードマップ", japanese_body)
-            self.assertIn("- 今の方向: 採用済みのロードマップ項目: Phase 2.5 Roadmap Projection", japanese_body)
-            self.assertIn("## 現在のロードマップ項目", japanese_body)
-            self.assertIn("#### 成功条件", japanese_body)
-            self.assertIn("## 次に確認すること", japanese_body)
-            self.assertNotIn("# Roadmap", japanese_body)
-            self.assertNotIn("project_id:", japanese_body)
-            self.assertNotIn("RoadmapCommitment", japanese_body)
-            self.assertNotIn("commitment_", japanese_body)
-            self.assertNotIn("roadmap_rev_", japanese_body)
-
             handoff = root / "generated_handoff.md"
             with redirect_stdout(io.StringIO()), patch("nilo.project_logic.handson_language", return_value="ja"):
                 main(["--db", str(db), "project", "export-handson", "--project", "project_test", "--file", str(handoff)])
@@ -6106,47 +6056,11 @@ completed criterion を満たした。
             self.assertIn(f"matching revisions: {revision_id}:accepted", stale_output.getvalue())
             self.assertIn("not linked to a pending roadmap revision", stale_output.getvalue())
 
-    def test_human_roadmap_markdown_masks_internal_ids_without_free_text_rewrites(self) -> None:
-        summary = {
-            "project_id": "project_test",
-            "project_name": "Nilo",
-            "roadmap_position": "active task focus: Refactor task_scheduler commitment_123",
-            "work_state": "人間の確認待ちです。",
-            "current_phase": "implementation",
-            "roadmap_commitments": [],
-            "pending_roadmap_revisions": [
-                {"id": "roadmap_rev_123", "status": "pending", "proposed_commitment_id": "commitment_123"}
-            ],
-            "active_tasks": [
-                {
-                    "id": "task_123",
-                    "status": "evidence_submitted",
-                    "task_type": "implementation",
-                    "title": "Refactor task_scheduler commitment_123",
-                }
-            ],
-            "next_actions": [
-                "review pending roadmap revision roadmap_rev_123 for commitment_123",
-                "task_123: review dirty-tree verification metadata before accepting this task",
-            ],
-        }
-
-        body = render_human_roadmap_markdown(summary, "ja")
-
-        self.assertIn("- 今の方向: 進行中の作業: 実装", body)
-        self.assertIn("- 実装の作業 (作業報告済み)", body)
-        self.assertIn("未コミット差分を含む検証記録を確認してから作業を完了する", body)
-        self.assertNotIn("task_123", body)
-        self.assertNotIn("commitment_123", body)
-        self.assertNotIn("roadmap_rev_123", body)
-        self.assertNotIn("Refactor 作業_scheduler", body)
-
-    def test_roadmap_adopt_imports_accepts_and_exports_in_one_step(self) -> None:
+    def test_roadmap_adopt_imports_and_accepts_in_one_step(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
             proposal = root / "roadmap_adopt.md"
-            roadmap_file = root / "ROADMAP.md"
             proposal.write_text(
                 """# One Step Roadmap Adoption
 
@@ -6155,7 +6069,7 @@ Reduce roadmap transaction friction.
 
 ## Success Criteria
 - adopt creates an accepted commitment
-- adopt exports the human roadmap
+- adopt accepts the imported roadmap
 
 ## Review Gates
 - close remains separate
@@ -6186,8 +6100,6 @@ Reduce roadmap transaction friction.
                         "--human-confirm",
                         "--decision-note",
                         "test human decision",
-                        "--roadmap-file",
-                        str(roadmap_file),
                     ]
                 )
 
@@ -6195,9 +6107,6 @@ Reduce roadmap transaction friction.
             revision_id = next(line.split(": ", 1)[1] for line in body.splitlines() if line.startswith("accepted_revision: "))
             commitment_id = next(line.split(": ", 1)[1] for line in body.splitlines() if line.startswith("accepted_commitment: "))
             self.assertIn("accepted_by: human", body)
-            self.assertIn(f"written: {roadmap_file}", body)
-            self.assertTrue(roadmap_file.exists())
-            self.assertIn("One Step Roadmap Adoption", roadmap_file.read_text(encoding="utf-8"))
 
             store = Store(db)
             try:
@@ -6219,71 +6128,11 @@ Reduce roadmap transaction friction.
                 main(["--db", str(db), "status", "--project", "project_test", "--verbose"])
             self.assertIn("ロードマップ: accepted commitment: One Step Roadmap Adoption", status_output.getvalue())
 
-    def test_roadmap_adopt_refuses_non_generated_roadmap_file_before_state_change(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = root / "nilo.db"
-            proposal = root / "roadmap_adopt.md"
-            design = root / "docs" / "design.md"
-            design.parent.mkdir()
-            design.write_text("# Design\n\nDo not replace me.\n", encoding="utf-8")
-            proposal.write_text(
-                """# One Step Roadmap Adoption
-
-## Intent
-Reduce roadmap transaction friction.
-
-## Success Criteria
-- adopt refuses unsafe roadmap output before state changes
-""",
-                encoding="utf-8",
-            )
-
-            with redirect_stdout(io.StringIO()):
-                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
-
-            with self.assertRaises(SystemExit) as raised:
-                with redirect_stdout(io.StringIO()):
-                    main(
-                        [
-                            "--db",
-                            str(db),
-                            "roadmap",
-                            "adopt",
-                            "--project",
-                            "project_test",
-                            "--file",
-                            str(proposal),
-                            "--reason",
-                            "human chose this direction",
-                            "--actor",
-                            "human",
-                            "--human-confirm",
-                            "--decision-note",
-                            "test human decision",
-                            "--roadmap-file",
-                            str(design),
-                        ]
-                    )
-
-            self.assertIn("refused to overwrite existing non-generated file", str(raised.exception))
-            self.assertEqual(design.read_text(encoding="utf-8"), "# Design\n\nDo not replace me.\n")
-
-            store = Store(db)
-            try:
-                commitments = store.list_where("roadmap_commitments", "project_id=?", ("project_test",))
-                revisions = store.list_where("roadmap_revisions", "project_id=?", ("project_test",))
-            finally:
-                store.close()
-            self.assertEqual(commitments, [])
-            self.assertEqual(revisions, [])
-
     def test_roadmap_adopt_rejects_discussion_context(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
             discussion = root / "roadmap_discussion.md"
-            roadmap_file = root / "ROADMAP.md"
             discussion.write_text(
                 """# Roadmap Discussion Context
 
@@ -6316,8 +6165,6 @@ Reduce roadmap transaction friction.
                             "--human-confirm",
                             "--decision-note",
                             "test human decision",
-                            "--roadmap-file",
-                            str(roadmap_file),
                         ]
                     )
 
@@ -6331,7 +6178,6 @@ Reduce roadmap transaction friction.
             self.assertIn("roadmap adopt rejected discussion context", str(raised.exception))
             self.assertEqual(revisions, [])
             self.assertEqual(commitments, [])
-            self.assertFalse(roadmap_file.exists())
 
     def test_roadmap_import_rejects_discussion_context(self) -> None:
         with TemporaryDirectory() as directory:
@@ -6371,7 +6217,7 @@ Reduce roadmap transaction friction.
 - source_path は空になる
 
 ## Non Goals
-- ROADMAP.md を廃止しない
+- file workflow を維持する
 
 ## Autonomy Scope
 - CLI import の検証
@@ -7079,7 +6925,6 @@ project status からロードマップ現在地を読めるようにする。
                 ["roadmap", "assess", "--project", "project_test", "--file", str(design)],
                 ["roadmap", "summary", "--project", "project_test", "--file", str(design)],
                 ["roadmap", "task-plan", "--commitment", commitment_id, "--file", str(design)],
-                ["roadmap", "export", "--project", "project_test", "--file", str(design)],
             ]
             for command in commands:
                 with self.subTest(command=command[1]):

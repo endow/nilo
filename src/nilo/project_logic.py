@@ -817,10 +817,6 @@ def roadmap_prioritized_project_active_tasks(
     return roadmap_prioritized_active_tasks(tasks, statuses, commitments), commitments
 
 
-def human_roadmap_path_for_project(project_id: str) -> str:
-    return "ROADMAP.md"
-
-
 def roadmap_agent_state(
     store: Store,
     project_id: str,
@@ -1972,34 +1968,14 @@ def render_handson_next_action(action: str, language: str) -> str:
     stdin_proposal_prefix = "draft a RoadmapProposal from the discussion context, import it with "
     if action.startswith(stdin_proposal_prefix):
         detail = action.removeprefix(stdin_proposal_prefix)
-        if " using stdin, accept it with " in detail and ", then publish ROADMAP.md with " in detail:
-            import_command, rest = detail.split(" using stdin, accept it with ", 1)
-            accept_command, export_command = rest.split(", then publish ROADMAP.md with ", 1)
-            return (
-                f"相談用コンテキストを材料に RoadmapProposal を作成し、標準入力で `{import_command}` に渡して、"
-                f"`{accept_command}` で承認してから `{export_command}` で `ROADMAP.md` を更新する"
-            )
         return f"相談用コンテキストを材料に RoadmapProposal を作成する: {detail}"
     stdin_proposal_after_discuss = "draft a RoadmapProposal from the discussion context and import it with "
     if action.startswith(stdin_proposal_after_discuss):
         detail = action.removeprefix(stdin_proposal_after_discuss)
-        if " using stdin; accept with " in detail and "; publish the human roadmap with " in detail:
-            import_command, rest = detail.split(" using stdin; accept with ", 1)
-            accept_command, export_command = rest.split("; publish the human roadmap with ", 1)
-            return (
-                f"相談用コンテキストを材料に RoadmapProposal を作成し、標準入力で `{import_command}` に渡して、"
-                f"`{accept_command}` で承認してから `{export_command}` で人間向けロードマップを更新する"
-            )
         return f"相談用コンテキストを材料に RoadmapProposal を作成する: {detail}"
     fresh_proposal_prefix = "write a fresh RoadmapProposal to "
     if action.startswith(fresh_proposal_prefix):
         path, detail = action.removeprefix(fresh_proposal_prefix).split(" from the discussion context, ", 1)
-        if detail.startswith("import it, accept it with ") and ", then publish ROADMAP.md with " in detail:
-            accept_command, export_command = detail.removeprefix("import it, accept it with ").split(", then publish ROADMAP.md with ", 1)
-            return (
-                f"相談用コンテキストを材料に `{path}` へ新しい RoadmapProposal を作成し、"
-                f"`{accept_command}` で承認してから `{export_command}` で `ROADMAP.md` を更新する"
-            )
         return f"相談用コンテキストを材料に `{path}` へ新しい RoadmapProposal を作成する: {detail}"
     stale_checked_proposal_prefix = "verify any existing "
     stale_checked_marker = " is not stale, then write a fresh RoadmapProposal to "

@@ -50,8 +50,6 @@ class StatusSurfaceRegressionTests(unittest.TestCase):
                     "--human-confirm",
                     "--decision-note",
                     "test human decision",
-                    "--roadmap-file",
-                    str(root / "ROADMAP.md"),
                 ]
             )
         with redirect_stdout(io.StringIO()):

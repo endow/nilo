@@ -11,7 +11,6 @@ from nilo.cli import main
 from nilo.human_status import human_task_status
 from nilo.mcp_server import call_tool
 from nilo.project_logic import project_work_state
-from nilo.roadmap_render import human_roadmap_work_state_text
 
 
 class HumanStatusTests(unittest.TestCase):
@@ -89,19 +88,6 @@ class HumanStatusTests(unittest.TestCase):
         self.assertIn("人間", by_user["state"])
         self.assertIn("AI", by_ai["state"])
         self.assertNotEqual(by_user["state"], by_ai["state"])
-
-    def test_roadmap_work_state_translates_new_human_project_states(self) -> None:
-        cases = {
-            "レビュー結果の確認待ちです。": "waiting for review comment triage",
-            "レビューが停止しています。": "review stalled",
-            "検証に失敗しています。": "verification failed",
-            "検証がタイムアウトしています。": "verification timed out",
-        }
-
-        for source, expected in cases.items():
-            with self.subTest(source=source):
-                self.assertEqual(human_roadmap_work_state_text(source, "en"), expected)
-                self.assertNotEqual(human_roadmap_work_state_text(source, "en"), source)
 
     def test_get_task_status_adds_human_status_without_removing_machine_status(self) -> None:
         with TemporaryDirectory() as directory:

@@ -8,7 +8,6 @@ from ..cli_support import make_id, read_text_or_exit
 from ..project_language import project_primary_language
 from ..roadmap_render import (
     render_pending_roadmap_plan_lines,
-    render_human_roadmap_markdown,
     render_human_roadmap_summary_markdown,
     render_roadmap_assess_markdown,
     render_roadmap_discuss_markdown,
@@ -51,13 +50,6 @@ def ensure_generated_markdown_output_is_safe(output: Path, output_kind: str, all
     )
 
 
-def ensure_human_roadmap_output_is_safe(project_id: str, output_path: str | None) -> None:
-    from .. import cli as c
-
-    output = Path(output_path or c.human_roadmap_path_for_project(project_id))
-    ensure_generated_markdown_output_is_safe(output, "roadmap export", {"# Roadmap", "# ロードマップ"})
-
-
 def normalize_commitment_text(value: str) -> str:
     return " ".join(value.casefold().split())
 
@@ -88,26 +80,6 @@ def comparable_roadmap_source_path(value: str) -> str:
         return str(Path(value).resolve()).casefold()
     except OSError:
         return value.replace("\\", "/").casefold()
-
-
-def render_and_write_human_roadmap(store: Store, project: dict, output_path: str | None = None) -> Path:
-    from .. import cli as c
-
-    tasks, statuses = c.project_tasks_and_statuses(store, project["id"])
-    summary = c.project_summary_data(store, project, tasks, statuses)
-    language = c.handson_language()
-    if language == "ja":
-        summary = {
-            **summary,
-            "roadmap_position": c.render_handson_roadmap_position(summary["roadmap_position"], language),
-            "next_actions": [c.render_handson_next_action(action, language) for action in summary["next_actions"]],
-        }
-    body = render_human_roadmap_markdown(summary, language)
-    output = Path(output_path or c.human_roadmap_path_for_project(project["id"]))
-    ensure_human_roadmap_output_is_safe(project["id"], output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(body, encoding="utf-8", newline="\n")
-    return output
 
 
 def cmd_roadmap_import(args: argparse.Namespace) -> None:
@@ -206,7 +178,6 @@ def cmd_roadmap_adopt(args: argparse.Namespace) -> None:
         if duplicates:
             details = ", ".join(f"{item['id']} [{item['status']}] {item['title']}" for item in duplicates)
             raise SystemExit(f"duplicate roadmap commitment detected before adopt: {details}")
-        ensure_human_roadmap_output_is_safe(project["id"], args.roadmap_file)
         try:
             result = adopt_roadmap_proposal(
                 store,
@@ -222,11 +193,9 @@ def cmd_roadmap_adopt(args: argparse.Namespace) -> None:
             )
         except TransitionError as exc:
             raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
-        output = render_and_write_human_roadmap(store, project, args.roadmap_file)
         print(f"accepted_revision: {result.created_ids['roadmap_revision']}")
         print(f"accepted_commitment: {result.created_ids['roadmap_commitment']}")
         print(f"accepted_by: {args.actor}")
-        print(f"written: {output}")
     finally:
         store.close()
 
@@ -552,17 +521,5 @@ def cmd_roadmap_task_plan(args: argparse.Namespace) -> None:
             print(f"written: {output}")
         else:
             print(body, end="")
-    finally:
-        store.close()
-
-
-def cmd_roadmap_export(args: argparse.Namespace) -> None:
-    store = Store(args.db)
-    try:
-        project = store.get("projects", args.project)
-        if not project:
-            raise SystemExit(f"project not found: {args.project}")
-        output = render_and_write_human_roadmap(store, project, args.file)
-        print(f"written: {output}")
     finally:
         store.close()
