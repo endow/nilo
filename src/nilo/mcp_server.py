@@ -31,8 +31,10 @@ from .project_language import (
     roadmap_proposal_texts,
 )
 from .review import build_review_context, build_review_result_template
+from .review_adapter_registry import ReviewAdapterRegistry
 from .review_dispatcher import DispatchError, dispatch_review, dispatch_review_direct
-from .review_lifecycle import insert_review_attempt, insert_review_request, set_review_attempt_status, set_review_request_status, update_review_attempt, update_review_request
+from .review_lifecycle import insert_review_attempt, set_review_attempt_status, set_review_request_status, update_review_attempt, update_review_request
+from .review_service import ReviewService
 from .reviewer_registry import (
     ReviewerResolutionError,
     canonical_reviewer_name,
@@ -59,7 +61,6 @@ from .timeutil import iso_age_seconds, now_iso
 from .transitions import (
     TransitionError,
     create_task_from_todo as transition_create_task_from_todo,
-    import_review_result as transition_import_review_result,
     promote_todo_to_roadmap_proposal as transition_promote_todo_to_roadmap_proposal,
     record_verification_run as transition_record_verification_run,
     triage_todo as transition_triage_todo,
@@ -1446,22 +1447,19 @@ def mcp_request_review(store: Store, arguments: dict) -> dict:
     except ReviewerResolutionError as exc:
         next_action = reviewer_unavailable_next_action(store, to_actor)
         raise McpToolError(f"{exc}; next_action: {next_action}") from None
-    created_at = now_iso()
     workspace_root = Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd()))
     snapshot = compact_snapshot(current_git_snapshot(workspace_root))
-    row = {
-        "id": make_id("review"),
-        "task_id": task_id,
-        "requester": from_actor,
-        "reviewer": resolved.reviewer,
-        "status": initial_review_request_status(store, resolved.reviewer),
-        "reason": reason,
-        "based_on_event_id": previous_event["event_id"] if previous_event else "",
-        "based_on_snapshot": snapshot,
-        "created_at": created_at,
-        "updated_at": created_at,
-    }
-    insert_review_request(store, row)
+    service = ReviewService(store, ReviewAdapterRegistry(), cwd=workspace_root)
+    row = service.request_review(
+        task_id=task_id,
+        requester=from_actor,
+        reviewer=resolved.reviewer,
+        reason=reason,
+        snapshot=snapshot,
+    )
+    initial_status = initial_review_request_status(store, resolved.reviewer)
+    if initial_status != row["status"]:
+        row = update_review_request(store, row["id"], {"status": initial_status, "updated_at": now_iso()})
     return {
         "task_id": task_id,
         "review_request": row,
@@ -1709,20 +1707,21 @@ def mcp_import_review_result(store: Store, arguments: dict) -> dict:
     previous_event = require_fresh_task_event(store, task_id, observed_event_id)
     try:
         with store.transaction():
-            transition = transition_import_review_result(
+            service = ReviewService(
                 store,
-                task_id,
+                ReviewAdapterRegistry(),
+                cwd=Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd())),
+            )
+            result = service.import_result(
                 review_id,
                 body_md=body_md,
                 reviewer=reviewer,
                 last_seen_event_id=observed_event_id,
-                cwd=Path((arguments.get("__nilo_workspace_context") or {}).get("project_root", Path.cwd())),
             )
             if active_attempt:
                 set_review_attempt_status(store, active_attempt["id"], "succeeded")
     except TransitionError as exc:
         raise McpToolError(exc.message) from exc
-    result = store.get("review_results", transition.created_ids["review_result"])
     stored_findings = store.list_where("review_findings", "review_result_id=?", (result["id"],))
     return {
         "task_id": task_id,

@@ -25,14 +25,16 @@ from ..project_boundary import ProjectBoundaryError, record_nilo_issue_for_task,
 from ..project_language import human_gate_texts
 from ..review import VALID_FINDING_STATUSES, build_review_context, build_review_result_template
 from ..review_dispatcher import dispatch_review, dispatch_review_direct, doctor_reviewer_config, init_reviewer_config, quick_review
-from ..review_lifecycle import insert_review_request, update_review_request
+from ..review_adapter_registry import ReviewAdapterRegistry
+from ..review_lifecycle import update_review_request
+from ..review_service import ReviewService
 from ..reviewer_registry import ReviewerResolutionError, resolve_reviewer, resolve_review_request_target, reviewer_is_registered_available
 from ..reviewer_registry import reviewer_prepare_status
-from ..snapshot import compact_snapshot, current_git_snapshot, review_result_status
+from ..snapshot import current_git_snapshot, review_result_status
 from ..store import Store
 from ..task_logic import is_task_completed_status, projected_task_status
 from ..timeutil import now_iso
-from ..transitions import TransitionError, import_review_result, update_review_finding, waive_review_request
+from ..transitions import TransitionError, update_review_finding, waive_review_request
 
 
 def parse_git_status_porcelain_z(stdout: str) -> list[str]:
@@ -344,22 +346,15 @@ def cmd_review_request(args: argparse.Namespace) -> None:
             resolved = resolve_review_request_target(store, args.reviewer)
         except ReviewerResolutionError as exc:
             raise SystemExit(f"{exc}\nnext_action: {exc.next_action}") from None
-        created_at = now_iso()
-        latest_event = store.latest_task_status_event(args.task)
-        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
-        row = {
-            "id": make_id("review"),
-            "task_id": args.task,
-            "requester": args.requester,
-            "reviewer": resolved.reviewer,
-            "status": "requested" if reviewer_has_fresh_heartbeat(store, resolved.reviewer) else "reviewer_unavailable",
-            "reason": args.reason,
-            "based_on_event_id": latest_event["event_id"] if latest_event else "",
-            "based_on_snapshot": snapshot,
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-        insert_review_request(store, row)
+        service = ReviewService(store, ReviewAdapterRegistry(), cwd=Path.cwd())
+        row = service.request_review(
+            task_id=args.task,
+            requester=args.requester,
+            reviewer=resolved.reviewer,
+            reason=args.reason,
+        )
+        if not reviewer_has_fresh_heartbeat(store, resolved.reviewer):
+            row = update_review_request(store, row["id"], {"status": "reviewer_unavailable", "updated_at": now_iso()})
         print(f"review_request: {row['id']}")
         print(f"status: {row['status']}")
         if row["status"] == "reviewer_unavailable":
@@ -665,22 +660,15 @@ def create_review_delegation(args: argparse.Namespace) -> tuple[dict, dict, bool
         except ReviewerResolutionError as exc:
             raise SystemExit(f"{exc}\nnext_action: {exc.next_action}") from None
         task, dirty_tree_review = active_review_task(store, args.project, args.task, allow_dirty_tree_task=True)
-        created_at = now_iso()
-        latest_event = store.latest_task_status_event(task["id"])
-        snapshot = compact_snapshot(current_git_snapshot(Path.cwd()))
-        row = {
-            "id": make_id("review"),
-            "task_id": task["id"],
-            "requester": args.requester,
-            "reviewer": resolved.reviewer,
-            "status": "requested" if reviewer_has_fresh_heartbeat(store, resolved.reviewer) else "reviewer_unavailable",
-            "reason": args.reason,
-            "based_on_event_id": latest_event["event_id"] if latest_event else "",
-            "based_on_snapshot": snapshot,
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-        insert_review_request(store, row)
+        service = ReviewService(store, ReviewAdapterRegistry(), cwd=Path.cwd())
+        row = service.request_review(
+            task_id=task["id"],
+            requester=args.requester,
+            reviewer=resolved.reviewer,
+            reason=args.reason,
+        )
+        if not reviewer_has_fresh_heartbeat(store, resolved.reviewer):
+            row = update_review_request(store, row["id"], {"status": "reviewer_unavailable", "updated_at": now_iso()})
         if args.write_default:
             report = store.latest_for_task("agent_reports", task["id"])
             verification_run = store.latest_for_task("verification_runs", task["id"])
@@ -850,18 +838,15 @@ def cmd_review_result_import(args: argparse.Namespace) -> None:
             getattr(args, "context_token", ""),
         )
         try:
-            result = import_review_result(
-                store,
-                args.task,
+            service = ReviewService(store, ReviewAdapterRegistry(), cwd=Path.cwd())
+            review_result = service.import_result(
                 args.review,
                 body_md=body,
                 reviewer=args.reviewer or request["reviewer"],
                 last_seen_event_id=last_seen,
-                cwd=Path.cwd(),
             )
         except TransitionError as exc:
             raise SystemExit(f"{exc.message}{(': ' + exc.remediation) if exc.remediation else ''}") from exc
-        review_result = store.get("review_results", result.created_ids["review_result"])
         findings = store.list_where("review_findings", "review_result_id=?", (review_result["id"],))
         print(f"review_result: {review_result['id']}")
         print(f"verdict: {review_result['verdict']}")
