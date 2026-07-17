@@ -98,7 +98,7 @@ def tasks(
             status_by_task,
         )
         current_commitment_ids = {commitments[0]["id"]} if commitments else set()
-        completion_filter = status if status in {"current", "accepted", "superseded", "legacy_pending", "inconsistent"} else ""
+        completion_filter = status if status in {"current", "accepted", "cancelled", "superseded", "legacy_pending", "inconsistent"} else ""
         normal_status = "" if completion_filter else status
         all_tasks = _filter_tasks(
             store,

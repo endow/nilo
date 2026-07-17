@@ -125,6 +125,25 @@ class CompletionProjectionTests(TestCase):
         self.assertEqual(projection.stage, CompletionStage.SUPERSEDED)
         self.assertTrue(projection.is_terminal)
 
+    def test_explicit_cancel_is_terminal_and_preserves_transition_reason(self) -> None:
+        store = self.store()
+        store.list_where.return_value = [
+            {"id": "cancellation", "transition": "cancel_task", "new_state": "cancelled"}
+        ]
+        projection = self.project(store)
+
+        self.assertEqual(projection.stage, CompletionStage.CANCELLED)
+        self.assertTrue(projection.is_terminal)
+        self.assertFalse(projection.is_current_work)
+        self.assertEqual(projection.reasons, ("transition:cancellation",))
+
+    def test_cancelled_status_is_terminal_for_legacy_rows_without_transition(self) -> None:
+        projection = self.project(self.store(), task=self.task(status="cancelled"))
+
+        self.assertEqual(projection.stage, CompletionStage.CANCELLED)
+        self.assertTrue(projection.is_terminal)
+        self.assertEqual(projection.reasons, ("task_status:cancelled",))
+
     def test_completion_with_open_finding_is_inconsistent(self) -> None:
         completion = {"id": "completion", "actor": "human", "human_decision_note": "承認"}
         with (

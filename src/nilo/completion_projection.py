@@ -29,6 +29,7 @@ class CompletionStage(StrEnum):
     NEEDS_HUMAN_ACCEPTANCE = "needs_human_acceptance"
     ACCEPTED = "accepted"
     ACCEPTED_WITH_RESERVATIONS = "accepted_with_reservations"
+    CANCELLED = "cancelled"
     SUPERSEDED = "superseded"
     LEGACY_PENDING = "legacy_pending"
     INCONSISTENT = "inconsistent"
@@ -116,6 +117,15 @@ def project_task_completion(
         ),
         None,
     )
+    cancelled = next(
+        (
+            event
+            for event in events
+            if event.get("transition") == "cancel_task"
+            or event.get("new_state") == "cancelled"
+        ),
+        None,
+    )
     evidence_raw = commit_aware_evidence_status(verification, snapshot, completion, strict=False)
     evidence = {
         "current": EvidenceState.CURRENT,
@@ -155,7 +165,12 @@ def project_task_completion(
             task_id,
             stage,
             current,
-            stage in {CompletionStage.ACCEPTED, CompletionStage.ACCEPTED_WITH_RESERVATIONS, CompletionStage.SUPERSEDED},
+            stage in {
+                CompletionStage.ACCEPTED,
+                CompletionStage.ACCEPTED_WITH_RESERVATIONS,
+                CompletionStage.CANCELLED,
+                CompletionStage.SUPERSEDED,
+            },
             stage is CompletionStage.NEEDS_HUMAN_ACCEPTANCE,
             evidence,
             review,
@@ -173,6 +188,9 @@ def project_task_completion(
     if completion:
         reserved = completion.get("outcome") == "accepted_with_reservations" or bool(completion.get("completed_with_reservations"))
         return build(CompletionStage.ACCEPTED_WITH_RESERVATIONS if reserved else CompletionStage.ACCEPTED, current=False, reasons=("task_completion_recorded",))
+    if cancelled or task.get("status") == "cancelled":
+        reasons = (f"transition:{cancelled['id']}",) if cancelled else ("task_status:cancelled",)
+        return build(CompletionStage.CANCELLED, current=False, reasons=reasons)
     if superseded:
         return build(CompletionStage.SUPERSEDED, current=False, reasons=(f"transition:{superseded['id']}",))
     if findings:

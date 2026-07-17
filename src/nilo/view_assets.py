@@ -626,6 +626,7 @@ const LABELS = {
   superseded: "置き換え済み",
   current: "現在の作業",
   accepted: "完了承認済み",
+  cancelled: "キャンセル済み",
   legacy_pending: "過去の未確認",
   inconsistent: "状態矛盾",
   none: "なし",
@@ -663,7 +664,7 @@ const renderTasks = async (page = state.taskPage) => {
   app.append(el("h2", "", "タスク"));
   const toolbar = el("div", "toolbar");
   const status = filterSelect("status", [
-    "", "open", "completed", "current", "accepted", "superseded", "legacy_pending", "inconsistent",
+    "", "open", "completed", "current", "accepted", "cancelled", "superseded", "legacy_pending", "inconsistent",
     ...unique(state.tasks.map(t => t.status))
   ]);
   const type = filterSelect("task_type", ["", ...unique(state.tasks.map(t => t.task_type))]);
@@ -743,8 +744,8 @@ const applyTaskFilters = tasks => tasks.filter(task => {
   if (statusFilter === "completed" && !task.completion.completed) return false;
   if (statusFilter === "current" && !(task.completion_projection && task.completion_projection.is_current_work)) return false;
   if (statusFilter === "accepted" && !["accepted", "accepted_with_reservations"].includes(completionStage)) return false;
-  if (["superseded", "legacy_pending", "inconsistent"].includes(statusFilter) && completionStage !== statusFilter) return false;
-  if (statusFilter && !["open", "completed", "current", "accepted", "superseded", "legacy_pending", "inconsistent"].includes(statusFilter) && task.status !== statusFilter) return false;
+  if (["cancelled", "superseded", "legacy_pending", "inconsistent"].includes(statusFilter) && completionStage !== statusFilter) return false;
+  if (statusFilter && !["open", "completed", "current", "accepted", "cancelled", "superseded", "legacy_pending", "inconsistent"].includes(statusFilter) && task.status !== statusFilter) return false;
   if (filterValue("task_type") && task.task_type !== filterValue("task_type")) return false;
   if (filterValue("risk_level") && task.risk_level !== filterValue("risk_level")) return false;
   if (filterValue("open_findings") && !task.review.open_blocking_findings) return false;
