@@ -341,20 +341,22 @@ def diff_verification_needs_human_review(task_evidence: dict, verification_comma
 def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[dict], statuses: dict[str, str], *, current_snapshot: dict | None = None) -> dict:
     related_tasks = related_tasks_for_commitment(tasks, commitment)
     current_snapshot = current_snapshot or current_git_snapshot(Path.cwd())
-    task_evidence = [roadmap_task_evidence(store, task, statuses[task["id"]], current_snapshot=current_snapshot) for task in related_tasks]
-    has_task = bool(task_evidence)
-    has_report = all(item["latest_report_id"] for item in task_evidence) if task_evidence else False
+    related_task_evidence = [roadmap_task_evidence(store, task, statuses[task["id"]], current_snapshot=current_snapshot) for task in related_tasks]
+    task_evidence = [item for item in related_task_evidence if item["status"] != "cancelled"]
+    has_task = bool(related_task_evidence)
+    terminal_without_evidence = has_task and not task_evidence
+    has_report = all(item["latest_report_id"] for item in task_evidence) if task_evidence else terminal_without_evidence
     usable_evidence_statuses = {"current", "recorded", "present"}
     has_passed_verification = all(
         item["latest_verification_status"] == "passed" and item["latest_evidence_status"] in usable_evidence_statuses
         for item in task_evidence
-    ) if task_evidence else False
+    ) if task_evidence else terminal_without_evidence
     has_failed_verification = any(item["latest_verification_status"] in ("failed", "timed_out") for item in task_evidence)
     verification_commands = successful_current_verification_commands(task_evidence)
     has_diff_human_review = any(diff_verification_needs_human_review(item, verification_commands) for item in task_evidence)
-    has_current_review = all(item["latest_review_status"] in {"current", "missing"} for item in task_evidence) if task_evidence else False
+    has_current_review = all(item["latest_review_status"] in {"current", "missing"} for item in task_evidence) if task_evidence else terminal_without_evidence
     has_unresolved_findings = any(item["unresolved_review_findings"] for item in task_evidence)
-    all_completions_valid = all(item["completion_valid"] for item in task_evidence) if task_evidence else False
+    all_completions_valid = all(item["completion_valid"] for item in task_evidence) if task_evidence else terminal_without_evidence
     active = [item for item in task_evidence if not is_task_closed_status(item["status"])]
 
     if not has_task:
@@ -442,7 +444,7 @@ def roadmap_commitment_assessment(store: Store, commitment: dict, tasks: list[di
         "status": overall_status,
         "closure_ready": closure_ready,
         "unresolved_reason": unresolved,
-        "related_tasks": task_evidence,
+        "related_tasks": related_task_evidence,
         "success_criteria": criteria,
         "evidence_policy": commitment["evidence_policy"],
     }
@@ -1655,13 +1657,17 @@ def latest_task_status_events_for_project(store: Store, project_id: str) -> dict
           SELECT rfu.task_id, rfu.id AS event_id, 'review_finding_update' AS source, 'review_changes_requested' AS status, rfu.created_at, rfu.rowid AS event_rowid, 66 AS priority FROM review_finding_updates rfu JOIN tasks t ON t.id=rfu.task_id WHERE t.project_id=?
           UNION ALL
           SELECT c.task_id, c.id AS event_id, 'completion' AS source, CASE WHEN c.actor='ai' THEN 'completed_by_ai' ELSE 'completed_by_user' END AS status, c.created_at, c.rowid AS event_rowid, 70 AS priority FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE t.project_id=? AND COALESCE(c.invalidated_at, '')=''
+          UNION ALL
+          SELECT e.entity_id AS task_id, e.id AS event_id, 'outcome' AS source, e.new_state AS status, e.created_at, e.rowid AS event_rowid, 75 AS priority FROM transition_events e JOIN tasks t ON t.id=e.entity_id WHERE t.project_id=? AND e.entity_type='task' AND e.transition='record_outcome_decision' AND e.new_state IN ('rejected', 'partial_accept', 'rework_required')
+          UNION ALL
+          SELECT e.entity_id AS task_id, e.id AS event_id, 'cancellation' AS source, 'cancelled' AS status, e.created_at, e.rowid AS event_rowid, 80 AS priority FROM transition_events e JOIN tasks t ON t.id=e.entity_id WHERE t.project_id=? AND e.entity_type='task' AND e.transition='cancel_task'
         ),
         ranked AS (
-          SELECT task_id, event_id, source, status, created_at, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY CASE WHEN source='completion' THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
+          SELECT task_id, event_id, source, status, created_at, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY CASE WHEN source IN ('completion', 'cancellation') THEN 1 ELSE 0 END DESC, created_at DESC, priority DESC, event_rowid DESC) AS rank FROM events
         )
         SELECT task_id, event_id, source, status, created_at FROM ranked WHERE rank=1
         """,
-        (project_id,) * 9,
+        (project_id,) * 11,
     ).fetchall()
     return {row["task_id"]: store._decode_row(row) for row in rows}
 

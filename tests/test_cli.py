@@ -7317,6 +7317,60 @@ close 済み commitment を表示できるようにした。
             self.assertNotIn("closure_ready", human_body)
             self.assertNotIn("diff_verification", human_body)
 
+    def test_roadmap_assess_treats_cancelled_related_task_as_terminal(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "nilo.db"
+            proposal = root / "roadmap.md"
+            proposal.write_text(
+                """# Cancelled Roadmap Task
+
+## Success Criteria
+- cancelled Taskを終端判断として扱える
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                main(["--db", str(db), "project", "create", "Nilo", "--id", "project_test"])
+                import_output = io.StringIO()
+                with redirect_stdout(import_output):
+                    main(["--db", str(db), "roadmap", "import", "--project", "project_test", "--file", str(proposal)])
+                revision_id = next(
+                    line.split(": ", 1)[1]
+                    for line in import_output.getvalue().splitlines()
+                    if line.startswith("roadmap_revision: ")
+                )
+                store = Store(db)
+                revision = store.get("roadmap_revisions", revision_id)
+                commitment_id = revision["proposed_commitment_id"]
+                store.close()
+                main([
+                    "--db", str(db), "roadmap", "accept", "--revision", revision_id,
+                    "--reason", "cancelled Taskの終端判定を確認するため", "--actor", "human",
+                    "--human-confirm", "--decision-note", "test human decision",
+                ])
+                main([
+                    "--db", str(db), "task", "create", "--project", "project_test",
+                    "--id", "task_cancelled", "--title", "Cancelled task", "--commitment", commitment_id,
+                ])
+                main([
+                    "--db", str(db), "cancel", "--task", "task_cancelled", "--actor", "human",
+                    "--human-confirm", "--decision-note", "実装不要と判断したため",
+                    "実装不要と判断したため",
+                ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--db", str(db), "roadmap", "assess", "--project", "project_test", "--raw"])
+
+            body = output.getvalue()
+            self.assertIn("- status: evidence_present", body)
+            self.assertIn("- closure_ready: true", body)
+            self.assertIn("- task_cancelled [cancelled]", body)
+            self.assertNotIn("passing verification not recorded", body)
+            self.assertNotIn("one or more related tasks have no agent report", body)
+
     def test_roadmap_summary_explains_diff_review_as_human_wait(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
