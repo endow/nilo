@@ -303,6 +303,8 @@ def cmd_doctor_ai_context(args: argparse.Namespace) -> None:
 
 def cmd_doctor_completions(args: argparse.Namespace) -> None:
     import json
+    from ..completion_projection import project_completion_projections
+    from ..project_logic import fast_project_tasks_and_recorded_statuses
     from ..state_audit import audit_project
 
     project_id = args.project or Path.cwd().name
@@ -311,18 +313,78 @@ def cmd_doctor_completions(args: argparse.Namespace) -> None:
         project = store.get("projects", project_id)
         if not project:
             raise SystemExit(f"project not found: {project_id}")
-        audit_findings = audit_project(store, project_id)
-        findings = [item for item in audit_findings if item["code"].startswith("completion_")]
-        result = {"project_id": project_id, "count": len(findings), "findings": findings}
+        tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+        from ..project_logic import accepted_roadmap_commitments, ordered_roadmap_commitments
+
+        commitments = ordered_roadmap_commitments(
+            store,
+            accepted_roadmap_commitments(store, project_id),
+            tasks,
+            statuses,
+        )
+        projections = project_completion_projections(
+            store,
+            project_id,
+            tasks,
+            current_commitment_ids={commitments[0]["id"]} if commitments else set(),
+            statuses=statuses,
+        )
+        audit_findings = [
+            item for item in audit_project(store, project_id)
+            if item["code"].startswith("completion_")
+        ]
+        groups = {
+            "current_acceptance_pending": [],
+            "legacy_pending": [],
+            "superseded": [],
+            "superseded_candidate": [],
+            "inconsistent": [],
+            "insufficient_data": [],
+        }
+        for projection in projections.values():
+            stage = projection.stage.value
+            if stage == "needs_human_acceptance":
+                groups["current_acceptance_pending"].append(projection.to_dict())
+            elif stage == "legacy_pending":
+                groups["legacy_pending"].append(projection.to_dict())
+            elif stage == "superseded":
+                groups["superseded"].append(projection.to_dict())
+            elif stage == "inconsistent":
+                groups["inconsistent"].append(projection.to_dict())
+            elif projection.evidence_state.value == "unknown":
+                groups["insufficient_data"].append(projection.to_dict())
+        successor_parent_ids = {
+            task.get("parent_task_id")
+            for task in tasks
+            if task.get("parent_task_id")
+        }
+        groups["superseded_candidate"] = [
+            projection.to_dict()
+            for task_id, projection in projections.items()
+            if task_id in successor_parent_ids and projection.stage.value == "legacy_pending"
+        ]
+        result = {
+            "project_id": project_id,
+            "counts": {key: len(value) for key, value in groups.items()},
+            "audit_findings": audit_findings,
+            **groups,
+        }
         if getattr(args, "json", False):
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return
         print(f"project: {project_id} ({project['name']})")
-        print(f"completion_audit: {len(findings)} issue(s)")
-        if findings:
-            print("No automatic changes were made. Use `nilo task completion invalidate --completion <id> --reason \"...\"` after human review.")
-        for finding in findings:
-            print(f"- {finding['entity_type']}={finding['entity_id']} [{finding['severity']}] {finding['code']}: {finding['message']}")
+        print("completion_projection:")
+        for key, value in result["counts"].items():
+            print(f"- {key}: {value}")
+        print(f"completion_audit: {len(audit_findings)} issue(s)")
+        for finding in audit_findings[:20]:
+            print(
+                f"- {finding['entity_type']}={finding['entity_id']} "
+                f"[{finding['severity']}] {finding['code']}: {finding['message']}"
+            )
+        if len(audit_findings) > 20:
+            print(f"- ... 残り {len(audit_findings) - 20} 件（--json で確認）")
+        print("自動修復は行っていません。")
     finally:
         store.close()
 

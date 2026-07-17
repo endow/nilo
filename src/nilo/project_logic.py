@@ -814,7 +814,23 @@ def roadmap_prioritized_project_active_tasks(
         statuses,
         current_snapshot=current_snapshot,
     )
-    return roadmap_prioritized_active_tasks(tasks, statuses, commitments), commitments
+    from .completion_projection import project_completion_projections
+
+    projections = project_completion_projections(
+        store,
+        project_id,
+        tasks,
+        current_snapshot=current_snapshot,
+        current_commitment_ids={commitments[0]["id"]} if commitments else set(),
+        explicit_current_task_ids=(
+            {task["id"] for task in related_tasks_for_commitment(tasks, commitments[0])}
+            if commitments
+            else set()
+        ),
+        statuses=statuses,
+    )
+    current_tasks = [task for task in tasks if projections[task["id"]].is_current_work]
+    return roadmap_prioritized_active_tasks(current_tasks, statuses, commitments), commitments
 
 
 def roadmap_agent_state(

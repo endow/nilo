@@ -51,6 +51,12 @@ class ViewModelTests(unittest.TestCase):
             self.assertEqual(failure_tasks["pagination"]["total"], overview_data["summary"]["open_failure_logs"])
             finding_tasks = tasks(db, "project_test", open_findings=True)
             self.assertEqual(finding_tasks["pagination"]["total"], overview_data["summary"]["open_blocking_findings"])
+            current_tasks = tasks(db, "project_test", status="current")
+            self.assertEqual(current_tasks["pagination"]["total"], 1)
+            self.assertTrue(current_tasks["tasks"][0]["completion_projection"]["is_current_work"])
+            accepted_tasks = tasks(db, "project_test", status="accepted")
+            self.assertEqual(accepted_tasks["pagination"]["total"], 1)
+            self.assertEqual(accepted_tasks["tasks"][0]["completion_projection"]["stage"], "accepted")
 
             detail = task_detail(db, "project_test", "task_done")
             self.assertEqual(detail["task"]["title"], "Done task")

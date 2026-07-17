@@ -41,6 +41,7 @@ class WorkProjectionTests(TestCase):
             "agent_reports": report,
             "review_requests": None,
             "review_results": result,
+            "instructions": None,
         }
         store.latest_for_task.side_effect = lambda table, _task_id: rows[table]
         return store
@@ -81,6 +82,35 @@ class WorkProjectionTests(TestCase):
         self.assertEqual(projection.phase, WorkPhase.AWAITING_HUMAN)
         self.assertEqual(projection.next_action.code, NextActionCode.ACCEPT_COMPLETION)
         self.assertEqual(projection.review_state, ReviewState.APPROVED)
+
+    def test_completed_review_request_without_result_still_requires_review(self) -> None:
+        store = self.task_store(report={"id": "report"})
+        store.latest_for_task.side_effect = lambda table, _task_id: {
+            "verification_runs": {
+                "id": "verification",
+                "exit_code": 0,
+                "timed_out": False,
+                "command": "pytest",
+                "metadata": {},
+            },
+            "agent_reports": {"id": "report"},
+            "review_requests": {"id": "request", "status": "completed"},
+            "review_results": None,
+            "instructions": None,
+        }[table]
+        with (
+            patch("nilo.project_logic.projected_task_status", return_value="verification_passed"),
+            patch("nilo.work_projection.active_task_completion", return_value=None),
+            patch("nilo.work_projection.unresolved_review_findings", return_value=[]),
+            patch("nilo.work_projection.commit_aware_evidence_status", return_value="current"),
+            patch("nilo.completion_projection.active_task_completion", return_value=None),
+            patch("nilo.completion_projection.unresolved_review_findings", return_value=[]),
+            patch("nilo.completion_projection.commit_aware_evidence_status", return_value="current"),
+        ):
+            projection = task_work_projection(store, "task_test", current_snapshot=SNAPSHOT)
+
+        self.assertEqual(projection.next_action.code, NextActionCode.REQUEST_REVIEW)
+        self.assertEqual(projection.completion_state, CompletionState.VERIFIED)
 
     def test_roadmap_commitment_precedes_todo_intake(self) -> None:
         store = MagicMock()
@@ -187,6 +217,7 @@ class WorkProjectionTests(TestCase):
             "agent_reports": {"id": "report"},
             "review_requests": {"id": "request", "status": "withdrawn"},
             "review_results": None,
+            "instructions": None,
         }[table]
         with (
             patch("nilo.project_logic.projected_task_status", return_value="agent_reported"),

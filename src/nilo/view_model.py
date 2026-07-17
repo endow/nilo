@@ -89,11 +89,22 @@ def tasks(
         all_tasks = _project_tasks(store, project_id)
         all_task_ids = {task["id"] for task in all_tasks}
         status_by_task = _batch_statuses_for_tasks(store, all_tasks, all_task_ids)
+        from .project_logic import accepted_roadmap_commitments, ordered_roadmap_commitments
+
+        commitments = ordered_roadmap_commitments(
+            store,
+            accepted_roadmap_commitments(store, project_id),
+            all_tasks,
+            status_by_task,
+        )
+        current_commitment_ids = {commitments[0]["id"]} if commitments else set()
+        completion_filter = status if status in {"current", "accepted", "superseded", "legacy_pending", "inconsistent"} else ""
+        normal_status = "" if completion_filter else status
         all_tasks = _filter_tasks(
             store,
             all_tasks,
             status_by_task,
-            status=status,
+            status=normal_status,
             task_type=task_type,
             risk_level=risk_level,
             open_findings=open_findings,
@@ -101,11 +112,32 @@ def tasks(
             reservations=reservations,
             roadmap=roadmap,
         )
+        from .completion_projection import project_completion_projections
+
+        completion_projections = project_completion_projections(
+            store,
+            project_id,
+            all_tasks,
+            current_commitment_ids=current_commitment_ids,
+            statuses=status_by_task,
+        )
+        if completion_filter:
+            def matches_completion_filter(task: dict[str, Any]) -> bool:
+                projection = completion_projections[task["id"]]
+                if completion_filter == "current":
+                    return projection.is_current_work
+                if completion_filter == "accepted":
+                    return projection.stage.value in {"accepted", "accepted_with_reservations"}
+                return projection.stage.value == completion_filter
+            all_tasks = [task for task in all_tasks if matches_completion_filter(task)]
         total = len(all_tasks)
         start = (page - 1) * page_size
         page_tasks = all_tasks[start : start + page_size]
         return {
-            "tasks": _task_list_rows(store, page_tasks, status_by_task=status_by_task),
+            "tasks": [
+                {**row, "completion_projection": completion_projections[row["id"]].to_dict()}
+                for row in _task_list_rows(store, page_tasks, status_by_task=status_by_task)
+            ],
             "pagination": {
                 "page": page,
                 "page_size": page_size,

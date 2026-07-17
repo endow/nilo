@@ -624,6 +624,10 @@ const LABELS = {
   deferred: "延期",
   rejected: "却下",
   superseded: "置き換え済み",
+  current: "現在の作業",
+  accepted: "完了承認済み",
+  legacy_pending: "過去の未確認",
+  inconsistent: "状態矛盾",
   none: "なし",
   passed: "成功",
   failed: "失敗",
@@ -658,7 +662,10 @@ const renderTasks = async (page = state.taskPage) => {
   clear(app);
   app.append(el("h2", "", "タスク"));
   const toolbar = el("div", "toolbar");
-  const status = filterSelect("status", ["", "open", "completed", ...unique(state.tasks.map(t => t.status))]);
+  const status = filterSelect("status", [
+    "", "open", "completed", "current", "accepted", "superseded", "legacy_pending", "inconsistent",
+    ...unique(state.tasks.map(t => t.status))
+  ]);
   const type = filterSelect("task_type", ["", ...unique(state.tasks.map(t => t.task_type))]);
   const risk = filterSelect("risk_level", ["", ...unique(state.tasks.map(t => t.risk_level))]);
   const findings = checkbox("open_findings", "未解決指摘あり");
@@ -730,9 +737,14 @@ const readTaskFilters = () => ({
 });
 
 const applyTaskFilters = tasks => tasks.filter(task => {
-  if (filterValue("status") === "open" && task.completion.completed) return false;
-  if (filterValue("status") === "completed" && !task.completion.completed) return false;
-  if (filterValue("status") && !["open", "completed"].includes(filterValue("status")) && task.status !== filterValue("status")) return false;
+  const statusFilter = filterValue("status");
+  const completionStage = task.completion_projection && task.completion_projection.stage;
+  if (statusFilter === "open" && task.completion.completed) return false;
+  if (statusFilter === "completed" && !task.completion.completed) return false;
+  if (statusFilter === "current" && !(task.completion_projection && task.completion_projection.is_current_work)) return false;
+  if (statusFilter === "accepted" && !["accepted", "accepted_with_reservations"].includes(completionStage)) return false;
+  if (["superseded", "legacy_pending", "inconsistent"].includes(statusFilter) && completionStage !== statusFilter) return false;
+  if (statusFilter && !["open", "completed", "current", "accepted", "superseded", "legacy_pending", "inconsistent"].includes(statusFilter) && task.status !== statusFilter) return false;
   if (filterValue("task_type") && task.task_type !== filterValue("task_type")) return false;
   if (filterValue("risk_level") && task.risk_level !== filterValue("risk_level")) return false;
   if (filterValue("open_findings") && !task.review.open_blocking_findings) return false;

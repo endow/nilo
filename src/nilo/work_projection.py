@@ -151,6 +151,9 @@ def task_work_projection(
     if not task:
         raise WorkProjectionError(f"task not found: {task_id}")
     snapshot = current_snapshot or current_git_snapshot(cwd or Path.cwd(), mode="fast")
+    from .completion_projection import project_task_completion
+
+    completion_projection = project_task_completion(store, task, current_snapshot=snapshot)
     status = p.projected_task_status(store, task, current_snapshot=snapshot)
     completion = active_task_completion(store, task_id)
     findings = unresolved_review_findings(store, task_id)
@@ -180,7 +183,12 @@ def task_work_projection(
     if request and request.get("status") in {"requested", "claimed", "in_progress", "running", "stale", "failed", "reviewer_unavailable"}:
         legacy_action = p.next_action_for_review_request(store, request)
     diagnostics = MappingProxyType(
-        {"task_status": status, "evidence_raw": evidence_raw, "legacy_next_action": legacy_action}
+        {
+            "task_status": status,
+            "evidence_raw": evidence_raw,
+            "legacy_next_action": legacy_action,
+            "completion_projection": completion_projection.to_dict(),
+        }
     )
 
     if is_task_closed_status(status):
@@ -257,8 +265,47 @@ def task_work_projection(
                 ("review_freshness_unknown",),
                 diagnostics=diagnostics,
             )
+        if completion_projection.stage.value == "reviewed":
+            return WorkProjection(
+                task["project_id"],
+                "task",
+                task_id,
+                WorkPhase.REVIEWING,
+                _action(NextActionCode.CONTINUE_WORK, task_id),
+                None,
+                evidence,
+                ReviewState.APPROVED,
+                CompletionState.REVIEWED,
+                diagnostics=diagnostics,
+            )
         return WorkProjection(task["project_id"], "task", task_id, WorkPhase.AWAITING_HUMAN, _action(NextActionCode.ACCEPT_COMPLETION, task_id), None, evidence, ReviewState.APPROVED, CompletionState.NEEDS_HUMAN_ACCEPTANCE, diagnostics=diagnostics)
     if ((report or verification) and evidence is EvidenceState.CURRENT) or status == "verification_passed":
+        if completion_projection.stage.value == "review_required":
+            return WorkProjection(
+                task["project_id"],
+                "task",
+                task_id,
+                WorkPhase.REVIEWING,
+                _action(NextActionCode.REQUEST_REVIEW, task_id),
+                None,
+                evidence,
+                ReviewState.REQUESTED,
+                CompletionState.VERIFIED,
+                diagnostics=diagnostics,
+            )
+        if completion_projection.stage.value == "verified":
+            return WorkProjection(
+                task["project_id"],
+                "task",
+                task_id,
+                WorkPhase.VERIFYING,
+                _action(NextActionCode.CONTINUE_WORK, task_id),
+                None,
+                evidence,
+                ReviewState.NOT_REQUIRED,
+                CompletionState.VERIFIED,
+                diagnostics=diagnostics,
+            )
         return WorkProjection(
             task["project_id"],
             "task",

@@ -823,12 +823,37 @@ def fast_status_data(store: Store, project_id: str, *, cwd: Path | None = None) 
         raise SystemExit(f"project not found: {project_id}")
 
     started = time.perf_counter()
-    active_tasks, statuses = _fast_active_tasks_and_statuses(store, project_id, limit=3)
+    from ..project_logic import fast_project_tasks_and_recorded_statuses, roadmap_prioritized_project_active_tasks
+
+    all_tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
     timings["fast_task_query_ms"] = _elapsed_ms(started)
 
     started = time.perf_counter()
     snapshot = current_git_snapshot_fast(cwd or Path.cwd())
     timings["git_fast_status_ms"] = _elapsed_ms(started)
+
+    active_tasks, commitments = roadmap_prioritized_project_active_tasks(
+        store,
+        project_id,
+        all_tasks,
+        statuses,
+        current_snapshot=snapshot,
+    )
+    active_tasks = active_tasks[:3]
+    from ..completion_projection import project_completion_projections
+
+    completion_projections = project_completion_projections(
+        store,
+        project_id,
+        all_tasks,
+        current_snapshot=snapshot,
+        current_commitment_ids={commitments[0]["id"]} if commitments else set(),
+        statuses=statuses,
+    )
+    legacy_pending_count = sum(
+        projection.stage.value == "legacy_pending"
+        for projection in completion_projections.values()
+    )
 
     started = time.perf_counter()
     task_summaries = []
@@ -877,6 +902,7 @@ def fast_status_data(store: Store, project_id: str, *, cwd: Path | None = None) 
         "project": {"id": project["id"], "name": project["name"]},
         "active_tasks": task_summaries,
         "todo_counts": todo_counts,
+        "completion_counts": {"legacy_pending": legacy_pending_count},
         "git": {
             "head": snapshot.get("git_head"),
             "tracked_dirty": bool(snapshot.get("working_tree_dirty")),
@@ -896,6 +922,9 @@ def print_fast_status(data: dict[str, Any], *, debug_timing: bool = False) -> No
         f"tracked_dirty={bool_label(data['git']['tracked_dirty'])} "
         f"available={bool_label(data['git']['git_available'])}"
     )
+    legacy_pending = int((data.get("completion_counts") or {}).get("legacy_pending", 0))
+    if legacy_pending:
+        print(f"過去の未確認記録: {legacy_pending}件（現在の作業には影響していません）")
     if not active_tasks:
         print(f"{field_label('status')}: {status_label('no_active_task')}")
         todos = data["todo_counts"]
@@ -1227,11 +1256,7 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             for item in attention_items:
                 print(f"- {item['title']}")
         print(f"{field_label('next_action')}:")
-        summary = summary_for_project(store, project_id)
-        if projection.diagnostics.get("legacy_next_action"):
-            action = next_action_text(projection)
-        else:
-            action = (summary.get("human_next_actions") or [next_action_text(projection)])[0]
+        action = next_action_text(projection)
         print(f"- {action}")
     finally:
         store.close()

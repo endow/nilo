@@ -202,6 +202,22 @@ def project_ai_context(
             commitments=commitments,
             current_snapshot=project_snapshot,
         )
+    completion_counts = {"legacy_pending": 0}
+    if tasks:
+        from .completion_projection import project_completion_projections
+
+        completion_projections = project_completion_projections(
+            store,
+            project_id,
+            tasks,
+            current_snapshot=project_snapshot,
+            current_commitment_ids={commitments[0]["id"]} if commitments else set(),
+            statuses=statuses,
+        )
+        completion_counts["legacy_pending"] = sum(
+            projection.stage.value == "legacy_pending"
+            for projection in completion_projections.values()
+        )
     if workflow.get("type") == "recipe_run":
         next_actions = workflow_next_actions(workflow)
     elif current:
@@ -247,6 +263,7 @@ def project_ai_context(
                 else None
             ),
         },
+        "completion_counts": completion_counts,
         "work_projection": project_work_projection(
             store,
             project_id,
@@ -354,6 +371,7 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
         "latest_task_status_event_id": latest_task_status_event_id,
         "working_tree": working_tree,
         "failure_summary": data.get("failure_summary", {}),
+        "completion_counts": data.get("completion_counts", {}),
         "required_commands": required_commands,
         "detail_commands": detail_commands,
     }
@@ -695,6 +713,9 @@ def render_compact_ai_context_text(data: dict[str, Any], *, max_chars: int | Non
         required.append(f"active_task: {active['id']} [{active['status']}] {_shorten(active['title'], 64)}")
     else:
         required.append("active_task: none")
+    legacy_pending = int((data.get("completion_counts") or {}).get("legacy_pending", 0))
+    if legacy_pending:
+        required.append(f"過去の未確認記録: {legacy_pending}件（現在の作業には影響していません）")
     roadmap = data.get("active_roadmap")
     if roadmap:
         title = _shorten(roadmap["commitment_title"], 64)

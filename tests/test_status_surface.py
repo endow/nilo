@@ -106,25 +106,21 @@ class StatusSurfaceRegressionTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
         status_body = status_output.getvalue()
-        self.assertIn("active_task: task_surface [completion_needs_review] Status surface task", status_body)
-        self.assertIn("latest_verification: status=missing", status_body)
-        self.assertIn("latest_review: status=not_run outcome=not_run verdict=none freshness=none orphan_findings=false unresolved=0", status_body)
+        self.assertIn("active_task: none", status_body)
+        self.assertIn("過去の未確認記録: 1件", status_body)
+        self.assertIn("active_roadmap: Status Surface Baseline", status_body)
+        self.assertIn("latest_review: status=none outcome=none verdict=none", status_body)
         self.assertNotIn("detail_commands:", status_body)
         self.assertIn("required_commands:", status_body)
 
         next_body = next_output.getvalue()
-        self.assertIn("タスク: task_surface", next_body)
-        self.assertIn("状態: 完了記録の確認が必要", next_body)
-        self.assertIn("最新のタスク状態を確認してください。", next_body)
+        self.assertNotIn("タスク: task_surface", next_body)
+        self.assertIn("Roadmap", next_body)
 
         summary = json.loads(summary_output.getvalue())
         self.assertEqual(summary["roadmap_position"], "accepted commitment: Status Surface Baseline")
-        self.assertEqual(summary["work_state"], "完了記録の確認が必要です。")
-        self.assertEqual(summary["current_phase"], "implementation")
         self.assertEqual(summary["roadmap_commitments"][0]["id"], commitment_id)
-        self.assertEqual(summary["active_tasks"][0]["id"], "task_surface")
-        self.assertEqual(summary["active_tasks"][0]["status"], "completion_needs_review")
-        self.assertEqual(summary["active_tasks"][0]["latest_verification_run"], "none")
+        self.assertEqual(summary["active_tasks"], [])
         self.assertEqual(summary["unexecuted_verifications"], [])
 
     def test_mcp_status_tools_share_expected_project_state_fields(self) -> None:
@@ -149,30 +145,25 @@ class StatusSurfaceRegressionTests(unittest.TestCase):
 
         self.assertEqual(project_status["roadmap_position"], "accepted commitment: Status Surface Baseline")
         self.assertEqual(project_summary["roadmap_commitments"][0]["id"], commitment_id)
-        self.assertEqual(project_status["active_tasks"][0]["id"], "task_surface")
-        self.assertEqual(project_summary["active_tasks"][0]["status"], "completion_needs_review")
+        self.assertEqual(project_status["active_tasks"], [])
+        self.assertEqual(project_summary["active_tasks"], [])
         self.assertEqual(project_status["next_actions"], project_summary["next_actions"])
         self.assertEqual(agent_context["next_actions"], project_summary["next_actions"])
         self.assertEqual(project_status["work_projection"], project_summary["work_projection"])
         self.assertEqual(agent_context["work_projection"], project_summary["work_projection"])
         self.assertEqual(next_step["roadmap_position"], project_summary["roadmap_position"])
 
-        self.assertEqual(agent_context["active_tasks"][0]["id"], "task_surface")
-        self.assertTrue(agent_context["active_tasks"][0]["write_context_token"].startswith("task:task_surface:"))
-        self.assertEqual(agent_context["next_step"]["action_id"], "continue_work")
+        self.assertEqual(agent_context["active_tasks"], [])
+        self.assertEqual(agent_context["next_step"]["action_id"], "create_task")
         self.assertEqual(
             agent_context["next_step"]["action_id"],
             agent_context["work_projection"]["next_action"]["code"],
         )
-        self.assertEqual(agent_context["next_step"]["task_status"], "completion_needs_review")
-        self.assertFalse(agent_context["next_step"]["requires_explicit_human_intent"])
-        self.assertTrue(agent_context["next_step"]["safe_for_ai"])
         self.assertEqual(next_step["next_step"], agent_context["next_step"])
 
         self.assertTrue(compact_status["compact"])
-        self.assertEqual(compact_status["active_task"]["id"], "task_surface")
-        self.assertEqual(compact_status["active_task"]["status"], "completion_needs_review")
-        self.assertEqual(compact_status["latest_verification"]["status"], "missing")
+        self.assertIsNone(compact_status["active_task"])
+        self.assertEqual(compact_status["latest_verification"]["status"], "none")
         self.assertEqual(compact_status["write_context_token"], agent_context["write_context_token"])
 
 

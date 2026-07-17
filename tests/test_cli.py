@@ -3921,7 +3921,7 @@ variables:
                 next_output = io.StringIO()
                 with redirect_stdout(next_output):
                     main(["--db", str(db), "next", "--project", project_id])
-                self.assertIn("実行できる依頼を具体的な Task にします。", next_output.getvalue())
+                self.assertIn("承認済み Roadmap から次の Task を作成してください。", next_output.getvalue())
 
                 store = Store(db)
                 try:
@@ -3931,7 +3931,7 @@ variables:
                 promote_next_output = io.StringIO()
                 with redirect_stdout(promote_next_output):
                     main(["--db", str(db), "next", "--project", project_id])
-                self.assertIn("この依頼は大きめ", promote_next_output.getvalue())
+                self.assertIn("承認済み Roadmap から次の Task を作成してください。", promote_next_output.getvalue())
 
                 store = Store(db)
                 try:
@@ -3942,7 +3942,7 @@ variables:
                 with redirect_stdout(roadmap_next_output):
                     main(["--db", str(db), "next", "--project", project_id])
                 self.assertIn(
-                    "作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。",
+                    "承認済み Roadmap から次の Task を作成してください。",
                     roadmap_next_output.getvalue(),
                 )
                 self.assertNotIn("todo_open", roadmap_next_output.getvalue())
