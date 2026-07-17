@@ -85,13 +85,13 @@ class FakeGitRunner:
 
 class UpgradeTests(unittest.TestCase):
     def test_cli_exposes_upgrade_command(self) -> None:
-        with patch("nilo.cli_handlers.workflow.run_upgrade", return_value=0) as upgrade:
+        with patch("nilo.cli_handlers.upgrade.run_upgrade", return_value=0) as upgrade:
             main(["upgrade", "--dry-run"])
 
         upgrade.assert_called_once_with(dry_run=True, db_path=None)
 
     def test_cli_upgrade_propagates_nonzero_exit(self) -> None:
-        with patch("nilo.cli_handlers.workflow.run_upgrade", return_value=1):
+        with patch("nilo.cli_handlers.upgrade.run_upgrade", return_value=1):
             with self.assertRaises(SystemExit) as context:
                 main(["upgrade"])
 

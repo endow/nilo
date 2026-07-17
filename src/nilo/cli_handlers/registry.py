@@ -15,6 +15,15 @@ from .facade import (
     cmd_facade_work,
 )
 from .failure import cmd_failure_ignore, cmd_failure_list, cmd_failure_resolve, cmd_failure_shadow_report, cmd_failure_show, cmd_failure_summary
+from .doctor import (
+    cmd_doctor,
+    cmd_doctor_ai_context,
+    cmd_doctor_completions,
+    cmd_doctor_performance,
+    cmd_doctor_state,
+    cmd_doctor_transitions,
+    cmd_doctor_workflow,
+)
 from .mcp import cmd_mcp_doctor, cmd_mcp_ping, cmd_mcp_reviewer_claim, cmd_mcp_reviewer_start, cmd_mcp_reviewer_worker, cmd_mcp_serve
 from .overdrive import cmd_roadmap_execute, cmd_run
 from .project import cmd_project_create, cmd_project_export_handson, cmd_project_export_recipes, cmd_project_import_recipes, cmd_project_status, cmd_project_summary
@@ -57,6 +66,12 @@ from .roadmap import (
     cmd_roadmap_summary,
     cmd_roadmap_task_plan,
 )
+from .runtime import (
+    cmd_agent_install,
+    cmd_help_ai,
+    cmd_init,
+    cmd_migrate,
+)
 from .task import (
     cmd_evidence_show,
     cmd_review_show,
@@ -72,20 +87,10 @@ from .task import (
 )
 from .test import cmd_test_plan, cmd_test_rerun_failed, cmd_test_run
 from .todo import cmd_todo_add, cmd_todo_list, cmd_todo_promote, cmd_todo_show, cmd_todo_start, cmd_todo_triage
+from .upgrade import cmd_upgrade
 from .view import cmd_view
 from .workflow import (
-    cmd_agent_install,
-    cmd_doctor,
-    cmd_doctor_ai_context,
-    cmd_doctor_completions,
-    cmd_doctor_performance,
-    cmd_doctor_state,
-    cmd_doctor_transitions,
-    cmd_doctor_workflow,
-    cmd_help_ai,
-    cmd_init,
     cmd_instruct,
-    cmd_migrate,
     cmd_outcome_record,
     cmd_report_import,
     cmd_report_validate,
@@ -93,7 +98,6 @@ from .workflow import (
     cmd_understanding_import,
     cmd_understanding_prepare,
     cmd_update_check,
-    cmd_upgrade,
     cmd_verification_run,
 )
 from .workspace import cmd_workspace_add, cmd_workspace_list, cmd_workspace_remove, cmd_workspace_show

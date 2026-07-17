@@ -5,10 +5,28 @@ import shlex
 import subprocess
 from pathlib import Path
 from subprocess import TimeoutExpired
+from typing import Callable
 
+from .cli_support import make_id
+from .failure import record_failure_log
+from .project_boundary import (
+    ProjectBoundaryError,
+    record_nilo_issue_for_task,
+    require_write_fence,
+    resolve_project_boundary,
+)
 from .secret import detect_secret_issues, mask_secrets
-from .snapshot import UNCOMPUTED_DIFF_HASH, current_git_snapshot, git_changed_content_hash, git_patch_hash, snapshot_columns
+from .snapshot import (
+    UNCOMPUTED_DIFF_HASH,
+    compact_snapshot,
+    current_git_snapshot,
+    git_changed_content_hash,
+    git_patch_hash,
+    snapshot_columns,
+)
+from .store import Store
 from .timeutil import now_iso
+from .transitions import record_verification_run
 
 
 def _timeout_text(value: str | bytes | None) -> str:
@@ -103,10 +121,14 @@ def verification_snapshot(cwd: Path, snapshot_mode: str) -> dict:
             "snapshot_mode": "none",
             "git_diff_hash_computed": False,
         }
-    return current_git_snapshot(cwd, mode="full" if snapshot_mode == "audit" else snapshot_mode)
+    return current_git_snapshot(
+        cwd, mode="full" if snapshot_mode == "audit" else snapshot_mode
+    )
 
 
-def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, snapshot_mode: str = "fast") -> dict:
+def run_local_verification(
+    command: str, cwd: Path, timeout_seconds: float, *, snapshot_mode: str = "fast"
+) -> dict:
     started_at = now_iso()
     timed_out = False
     exit_code: int | None
@@ -143,8 +165,17 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, s
     raw_log = f"{stdout}\n{stderr}"
     secret_issues = detect_secret_issues(raw_log)
     snapshot = verification_snapshot(cwd, snapshot_mode)
-    snapshot_mode_recorded = snapshot_mode if snapshot_mode == "audit" else snapshot.get("snapshot_mode", snapshot_mode)
-    git_diff_hash_computed = bool(snapshot.get("git_diff_hash_computed", snapshot.get("git_diff_hash") not in {"", UNCOMPUTED_DIFF_HASH}))
+    snapshot_mode_recorded = (
+        snapshot_mode
+        if snapshot_mode == "audit"
+        else snapshot.get("snapshot_mode", snapshot_mode)
+    )
+    git_diff_hash_computed = bool(
+        snapshot.get(
+            "git_diff_hash_computed",
+            snapshot.get("git_diff_hash") not in {"", UNCOMPUTED_DIFF_HASH},
+        )
+    )
     shard_metadata = _shard_summary_metadata(stdout, cwd)
     return {
         "source": "nilo_executed",
@@ -166,8 +197,12 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, s
             "working_tree_available": snapshot.get("git_available", False),
             "working_tree_dirty": snapshot.get("working_tree_dirty", False),
             "working_tree_files": snapshot.get("observed_paths", []),
-            "working_tree_patch_hash": git_patch_hash(cwd) if snapshot.get("working_tree_dirty") else "",
-            "working_tree_content_hash": git_changed_content_hash(cwd) if snapshot.get("working_tree_dirty") else "",
+            "working_tree_patch_hash": git_patch_hash(cwd)
+            if snapshot.get("working_tree_dirty")
+            else "",
+            "working_tree_content_hash": git_changed_content_hash(cwd)
+            if snapshot.get("working_tree_dirty")
+            else "",
             "snapshot_mode": snapshot_mode_recorded,
             "requested_snapshot_mode": snapshot_mode,
             "git_diff_hash_computed": git_diff_hash_computed,
@@ -182,3 +217,63 @@ def run_local_verification(command: str, cwd: Path, timeout_seconds: float, *, s
         "finished_at": finished_at,
         "created_at": finished_at,
     }
+
+
+VerificationRunner = Callable[..., dict]
+
+
+def execute_and_record_verification(
+    store: Store,
+    task: dict,
+    *,
+    command: str,
+    timeout_seconds: float,
+    verification_mode: str,
+    snapshot_mode: str = "fast",
+    cwd: Path | None = None,
+    db_path: Path | None = None,
+    runner: VerificationRunner = run_local_verification,
+) -> dict:
+    root = cwd or Path.cwd()
+    result = runner(command, root, timeout_seconds, snapshot_mode=snapshot_mode)
+    result.setdefault("metadata", {})["verification_mode"] = verification_mode
+    boundary = resolve_project_boundary(db_path=db_path)
+    try:
+        require_write_fence(boundary)
+    except ProjectBoundaryError as exc:
+        record_nilo_issue_for_task(
+            store,
+            task["project_id"],
+            task["id"],
+            command,
+            exc,
+            boundary,
+        )
+        raise
+    row = {
+        "id": make_id("verification"),
+        "task_id": task["id"],
+        "evidence_check_id": None,
+        **result,
+    }
+    record_verification_run(store, task["id"], row=row, actor="nilo")
+    for issue in result["metadata"]["secret_issues"]:
+        record_failure_log(
+            store,
+            task["project_id"],
+            task["id"],
+            "",
+            "secret_detected",
+            issue,
+            "high",
+            source="verification_run",
+            actor="nilo",
+            related_id=row["id"],
+            snapshot=compact_snapshot(current_git_snapshot(root)),
+            operation="secret_scan",
+            error_code="credential_pattern",
+            context={"check": "secret_scan"},
+            preventability="likely",
+            status="open",
+        )
+    return row
