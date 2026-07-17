@@ -80,6 +80,7 @@ UNIT_MODULES: dict[str, tuple[str, ...]] = {
         "tests.test_project_boundary",
         "tests.test_release_workflow",
         "tests.test_review",
+        "tests.test_schema_inventory",
         "tests.test_shard_runner",
         "tests.test_shards",
         "tests.test_state_audit",
