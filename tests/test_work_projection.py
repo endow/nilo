@@ -245,7 +245,7 @@ class WorkProjectionTests(TestCase):
         self.assertIn("stopped: work_projection:resolve_review_findings", output.getvalue())
         self.assertEqual([task["id"] for task in tasks], ["task_active"])
 
-    def test_explicit_work_can_start_when_only_roadmap_evidence_needs_reassessment(self) -> None:
+    def test_explicit_work_stops_when_roadmap_evidence_needs_reassessment(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -272,9 +272,8 @@ class WorkProjectionTests(TestCase):
             finally:
                 store.close()
 
-        self.assertNotIn("stopped: work_projection:reassess_state", output.getvalue())
-        self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["title"], "Explicit follow-up")
+        self.assertIn("stopped: work_projection:reassess_state", output.getvalue())
+        self.assertEqual(len(tasks), 0)
 
     def test_explicit_work_stops_for_non_roadmap_project_state_blocker(self) -> None:
         with TemporaryDirectory() as directory:

@@ -323,6 +323,22 @@ TOOLS = [
         "inputSchema": json_schema({"project_id": {"type": "string"}}, ["project_id"]),
     },
     {
+        "name": "work",
+        "description": "Use the shared WorkProjection entrypoint to start or continue project work safely.",
+        "inputSchema": json_schema(
+            {
+                "project_id": {"type": "string"},
+                "user_request": {"type": "string"},
+                "actor": {"type": "string"},
+                "task_id": {"type": "string"},
+                "allow_task_creation": {"type": "boolean"},
+                "context_token": {"type": "string"},
+                "last_seen_event_id": {"type": "string"},
+            },
+            ["project_id", "actor"],
+        ),
+    },
+    {
         "name": "mcp_doctor",
         "description": "Diagnose the MCP tool surface and project readability without changing state.",
         "inputSchema": json_schema({"project_id": {"type": "string"}}, ["project_id"]),
@@ -1193,6 +1209,31 @@ def get_next_step(store: Store, arguments: dict) -> dict:
         "next_step": classify_next_step(summary),
         "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
     }
+
+
+def mcp_work(store: Store, arguments: dict) -> dict:
+    from .work_service import WorkRequest, run_work_usecase
+
+    project_id = require_string(arguments, "project_id")
+    if not store.get("projects", project_id):
+        raise project_not_found_error(store, project_id)
+    task_id = optional_string(arguments, "task_id", "") or None
+    if task_id:
+        require_fresh_task_context(store, task_id, arguments)
+    result = run_work_usecase(
+        store,
+        WorkRequest(
+            project_id=project_id,
+            user_request=optional_string(arguments, "user_request", "") or None,
+            actor=require_string(arguments, "actor"),
+            cwd=Path.cwd(),
+            task_id=task_id,
+            allow_task_creation=bool(arguments.get("allow_task_creation", True)),
+            allow_task_start=task_id is not None,
+            format="json",
+        ),
+    )
+    return result.to_dict()
 
 
 def mcp_doctor(store: Store, arguments: dict) -> dict:
@@ -2244,6 +2285,7 @@ TOOL_HANDLERS = {
     "record_verification": mcp_record_verification_run,
     "get_agent_work_context": get_agent_work_context,
     "get_next_step": get_next_step,
+    "work": mcp_work,
     "mcp_ping": mcp_ping,
     "mcp_doctor": mcp_doctor,
     "prepare_reviewer": prepare_reviewer,

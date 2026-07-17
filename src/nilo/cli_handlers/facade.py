@@ -459,48 +459,6 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
             payload["project_boundary"] = boundary.to_dict()
             print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
             return
-        from ..work_projection import NextActionCode, project_work_projection
-
-        projection = project_work_projection(
-            store,
-            project_id,
-            current_snapshot=current_git_snapshot_full(Path.cwd()),
-        )
-        requested_task_id = getattr(args, "task", None)
-        blocking_projection_actions = {
-            NextActionCode.REASSESS_STATE,
-            NextActionCode.RESOLVE_BLOCKER,
-            NextActionCode.RESOLVE_REVIEW_FINDINGS,
-            NextActionCode.WAIT_FOR_REVIEW,
-            NextActionCode.RUN_VERIFICATION,
-            NextActionCode.RERUN_VERIFICATION,
-        }
-        projection_blocks_new_work = bool(
-            request
-            and projection.active_task_id
-            and requested_task_id != projection.active_task_id
-            and projection.next_action.code in blocking_projection_actions
-        )
-        explicitly_skippable_roadmap_evidence = bool(
-            request
-            and not projection.active_task_id
-            and projection.blocker
-            and projection.blocker.code in {"roadmap_evidence_attention", "roadmap_evidence_incomplete"}
-        )
-        state_blocker_stops_work = bool(
-            projection.next_action.code in {NextActionCode.REASSESS_STATE, NextActionCode.RESOLVE_BLOCKER}
-            and not explicitly_skippable_roadmap_evidence
-        )
-        if projection_blocks_new_work or state_blocker_stops_work:
-            payload = _work_stop_payload(
-                f"work_projection:{projection.next_action.code.value}",
-                project_id=project_id,
-                next_commands=list(projection.next_action.command_hint),
-            )
-            payload["work_projection"] = projection.to_dict()
-            payload["project_boundary"] = boundary.to_dict()
-            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
-            return
         recipe = infer_work_recipe_candidate(
             request,
             explicit_recipe=getattr(args, "recipe", None),
@@ -515,10 +473,59 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
             payload["project_boundary"] = boundary.to_dict()
             print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
             return
+        from ..work_service import WorkActionTaken, WorkRequest, run_work_usecase
+
+        requested_task = getattr(args, "task", None)
+        if requested_task:
+            requested_task_row = store.get("tasks", requested_task)
+            if requested_task_row and requested_task_row["project_id"] != project_id:
+                payload = _work_stop_payload(
+                    "task_project_mismatch",
+                    project_id=project_id,
+                    next_commands=[
+                        f"nilo work --project {requested_task_row['project_id']} --task {requested_task} "
+                        f"{shlex.quote(request or requested_task_row['title'])}"
+                    ],
+                )
+                payload["task_project_id"] = requested_task_row["project_id"]
+                payload["project_boundary"] = boundary.to_dict()
+                print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+                return
+        work_result = run_work_usecase(
+            store,
+            WorkRequest(
+                project_id=project_id,
+                user_request=request or None,
+                actor="ai",
+                cwd=Path.cwd(),
+                task_id=getattr(args, "task", None),
+                allow_task_creation=not bool(getattr(args, "dry_run", False)),
+                format="json" if getattr(args, "json", False) else "human",
+                acceptance_criteria=tuple(
+                    [f"recipe: {recipe['recipe']}", f"recipe_reason: {recipe['reason']}", *work_acceptance_for_recipe(recipe["recipe"])]
+                    if recipe["recipe"]
+                    else work_acceptance_for_recipe("")
+                ),
+            ),
+        )
+        projection = work_result.before
+        service_stops_work = work_result.action_taken in {WorkActionTaken.WAITING, WorkActionTaken.DIAGNOSTIC}
+        if service_stops_work:
+            payload = _work_stop_payload(
+                f"work_projection:{projection.next_action.code.value}",
+                project_id=project_id,
+                next_commands=list(projection.next_action.command_hint),
+            )
+            payload["work_projection"] = projection.to_dict()
+            payload["project_boundary"] = boundary.to_dict()
+            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
         active_tasks, statuses = active_tasks_for_project(store, project_id)
-        task_id = getattr(args, "task", None)
-        created = False
-        if task_id:
+        task_id = work_result.task_id or getattr(args, "task", None)
+        created = work_result.action_taken is WorkActionTaken.CREATED_TASK
+        if created:
+            task = store.get("tasks", task_id)
+        elif task_id:
             task = store.get("tasks", task_id)
             if not task:
                 raise SystemExit(f"task not found: {task_id}")

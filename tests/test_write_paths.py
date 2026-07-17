@@ -15,7 +15,7 @@ SRC_ROOT = REPO_ROOT / "src" / "nilo"
 ALLOWED_CORE_WRITERS = {
     "agent_reports": {"src/nilo/agent_report_import.py"},
     "failure_logs": {"src/nilo/failure.py", "src/nilo/transitions.py"},
-    "instructions": {"src/nilo/cli_handlers/workflow.py"},
+    "instructions": {"src/nilo/cli_handlers/workflow.py", "src/nilo/work_service.py"},
     "overdrive_events": {"src/nilo/overdrive.py"},
     "overdrive_runs": {"src/nilo/overdrive.py"},
     "review_findings": {"src/nilo/transitions.py"},
@@ -34,6 +34,7 @@ ALLOWED_CORE_WRITERS = {
         "src/nilo/project_logic.py",
         "src/nilo/cli_handlers/workflow.py",
         "src/nilo/cli_handlers/release.py",
+        "src/nilo/work_service.py",
     },
     "todos": {"src/nilo/transitions.py", "src/nilo/cli_handlers/todo.py", "src/nilo/mcp_server.py"},
     "transition_events": {"src/nilo/transitions.py", "src/nilo/workflow_context.py"},

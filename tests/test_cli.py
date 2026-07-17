@@ -1934,7 +1934,7 @@ variables:
             self.assertNotIn("recipe: release", release_word_output.getvalue())
             self.assertNotIn("recipe: release", negated_release_recipe_output.getvalue())
 
-    def test_facade_work_creates_independent_task_with_multiple_active_tasks(self) -> None:
+    def test_facade_work_continues_projected_task_with_multiple_active_tasks(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1956,13 +1956,13 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertIn("status: created", independent.getvalue())
+            self.assertIn("status: ready", independent.getvalue())
             self.assertNotIn("stopped: multiple_active_tasks", independent.getvalue())
-            self.assertNotIn("work_session: task_one", independent.getvalue())
+            self.assertIn("work_session: task_one", independent.getvalue())
             self.assertIn("work_session: task_one", explicit.getvalue())
             self.assertIn("recipe: bugfix", explicit.getvalue())
 
-    def test_facade_work_creates_independent_task_unless_existing_task_is_explicit(self) -> None:
+    def test_facade_work_continues_existing_task_without_explicit_task_id(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / "nilo.db"
@@ -1983,8 +1983,8 @@ variables:
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertIn("status: created", independent.getvalue())
-            self.assertNotIn("work_session: task_release", independent.getvalue())
+            self.assertIn("status: ready", independent.getvalue())
+            self.assertIn("work_session: task_release", independent.getvalue())
             self.assertIn("work_session: task_release", explicit.getvalue())
 
     def test_facade_work_dry_run_json_does_not_write_task(self) -> None:
