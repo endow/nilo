@@ -5285,7 +5285,7 @@ project status からロードマップ現在地を読めるようにする。
                 )
             )
             self.assertIn("ask the user whether to adopt or reject the direction", summary["next_actions"][0])
-            self.assertIn("requires_roadmap todo", summary["next_actions"][1])
+            self.assertEqual(len(summary["next_actions"]), 1)
 
     def test_pending_roadmap_revision_surfaces_human_work_plan_guidance(self) -> None:
         with TemporaryDirectory() as directory:
@@ -5360,7 +5360,7 @@ project status からロードマップ現在地を読めるようにする。
             self.assertIn("確認", human_next)
             self.assertIn("承認", human_next)
             self.assertIn("Task 化", human_next)
-            self.assertIn("requires_roadmap todo", summary["next_actions"][1])
+            self.assertEqual(len(summary["next_actions"]), 1)
 
             store = Store(db)
             try:

@@ -463,8 +463,8 @@ def cmd_roadmap_discuss(args: argparse.Namespace) -> None:
         project = store.get("projects", args.project)
         if not project:
             raise SystemExit(f"project not found: {args.project}")
-        tasks, statuses = c.project_tasks_and_statuses(store, project["id"])
-        summary = c.project_summary_data(store, project, tasks, statuses)
+        tasks, statuses, snapshot = c.project_tasks_statuses_and_snapshot(store, project["id"])
+        summary = c.project_summary_data(store, project, tasks, statuses, current_snapshot=snapshot)
         body = render_roadmap_discuss_markdown(summary)
         if args.file:
             output = Path(args.file)

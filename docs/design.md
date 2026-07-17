@@ -201,3 +201,10 @@ actor 名は監査用ラベルであり、認可情報ではない。Nilo は「
 実装履歴、完了済みフェーズ、個別コマンド一覧、現在の開発予定を本書へ蓄積しない。
 
 設計と実装が食い違った場合は、実装を本書へ合わせるか、設計判断の変更として本書を同じ変更単位で更新する。
+# Work projection
+
+Nilo の「現在地」と「次の行動」は `nilo.work_projection.WorkProjection` を共通の読み取り射影として扱う。射影は Task、Todo、Roadmap、verification、review、completion と Git snapshot の一次事実から都度計算し、DB へ保存しない。
+
+`WorkProjection` は `phase`、`active_task_id`、一件の `next_action`、`blocker`、`evidence_state`、`review_state`、`completion_state` と判定根拠を返す。優先順位は、状態不整合、未解決 finding、進行中 review、verification、review 要否、人間完了判断、進行中 Task、未開始 Task、Roadmap、Todo の順とする。取得不能や矛盾は成功へ丸めず `blocked` / `reassess_state` とする。
+
+CLI、AI context、MCP、View はこの射影を共有する。既存 API の複数形フィールドは互換性のため残せるが、新しい判断や通常の `nilo next` は `work_projection.next_action` のみを利用する。Git snapshot と取得済みの Task/status は呼び出し側から渡して再利用できる。fast snapshot で承認済み review の鮮度を確定できない場合は成功へ丸めず再評価を返す。Todo intake は既存 queue と同じく ready、requires_roadmap、open、deferred の順で選び、各状態内は FIFO とする。Roadmap commitment に未作成 Task がある場合は Todo より先に扱う。

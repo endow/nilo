@@ -210,48 +210,7 @@ def first_next_todo_for_project(store: Store, project_id: str) -> dict | None:
 
 def roadmap_attention_summary_for_project(store: Store, project_id: str) -> dict:
     from .. import project_logic as p
-
-    tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
-    commitments = p.accepted_roadmap_commitments(store, project_id)
-    related_by_commitment = [
-        (commitment, p.related_tasks_for_commitment(tasks, commitment))
-        for commitment in commitments
-    ]
-    task_ids = sorted(
-        {
-            task["id"]
-            for _, related_tasks in related_by_commitment
-            for task in related_tasks
-        }
-    )
-    latest_reports = p.latest_rows_for_tasks(store, "agent_reports", task_ids)
-    latest_verifications = p.latest_rows_for_tasks(store, "verification_runs", task_ids)
-
-    items = []
-    for commitment, related_tasks in related_by_commitment:
-        if not related_tasks:
-            continue
-        if any(not p.is_task_completed_status(statuses[task["id"]]) for task in related_tasks):
-            continue
-        diff_review_tasks = []
-        for task in related_tasks:
-            diff = p.diff_aware_verification_summary(
-                latest_reports.get(task["id"]),
-                latest_verifications.get(task["id"]),
-            )
-            if diff["status"] == "needs_human_review":
-                diff_review_tasks.append(task)
-        if not diff_review_tasks:
-            continue
-        items.append(
-            {
-                "title": commitment["title"],
-                "implementation_task_label": "すべて完了",
-                "work_task_label": "すべて完了",
-                "evidence_attention_items": ["変更ファイルとテストの対応が人間確認待ちです"],
-            }
-        )
-    return {"items": items}
+    return p.roadmap_attention_summary(store, project_id)
 
 
 def print_roadmap_attention_summary(summary: dict) -> None:
@@ -497,6 +456,48 @@ def cmd_facade_work(args: argparse.Namespace) -> None:
                 next_commands=[f"nilo next --project {project_id} --verbose"],
             )
             payload["active_recipe"] = workflow.get("recipe_name", "")
+            payload["project_boundary"] = boundary.to_dict()
+            print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
+            return
+        from ..work_projection import NextActionCode, project_work_projection
+
+        projection = project_work_projection(
+            store,
+            project_id,
+            current_snapshot=current_git_snapshot_full(Path.cwd()),
+        )
+        requested_task_id = getattr(args, "task", None)
+        blocking_projection_actions = {
+            NextActionCode.REASSESS_STATE,
+            NextActionCode.RESOLVE_BLOCKER,
+            NextActionCode.RESOLVE_REVIEW_FINDINGS,
+            NextActionCode.WAIT_FOR_REVIEW,
+            NextActionCode.RUN_VERIFICATION,
+            NextActionCode.RERUN_VERIFICATION,
+        }
+        projection_blocks_new_work = bool(
+            request
+            and projection.active_task_id
+            and requested_task_id != projection.active_task_id
+            and projection.next_action.code in blocking_projection_actions
+        )
+        explicitly_skippable_roadmap_evidence = bool(
+            request
+            and not projection.active_task_id
+            and projection.blocker
+            and projection.blocker.code in {"roadmap_evidence_attention", "roadmap_evidence_incomplete"}
+        )
+        state_blocker_stops_work = bool(
+            projection.next_action.code in {NextActionCode.REASSESS_STATE, NextActionCode.RESOLVE_BLOCKER}
+            and not explicitly_skippable_roadmap_evidence
+        )
+        if projection_blocks_new_work or state_blocker_stops_work:
+            payload = _work_stop_payload(
+                f"work_projection:{projection.next_action.code.value}",
+                project_id=project_id,
+                next_commands=list(projection.next_action.command_hint),
+            )
+            payload["work_projection"] = projection.to_dict()
             payload["project_boundary"] = boundary.to_dict()
             print_work_payload(payload, as_json=bool(getattr(args, "json", False)))
             return
@@ -747,8 +748,8 @@ def summary_for_project(store: Store, project_id: str) -> dict:
     project = store.get("projects", project_id)
     if not project:
         raise SystemExit(f"project not found: {project_id}")
-    tasks, statuses = c.project_tasks_and_statuses(store, project_id)
-    return c.project_summary_data(store, project, tasks, statuses)
+    tasks, statuses, snapshot = c.project_tasks_statuses_and_snapshot(store, project_id)
+    return c.project_summary_data(store, project, tasks, statuses, current_snapshot=snapshot)
 
 
 def _elapsed_ms(started: float) -> float:
@@ -997,24 +998,18 @@ def print_audit_status(data: dict[str, Any]) -> None:
 
 def print_facade_next_for_task(store: Store, task_id: str) -> None:
     from .. import cli as c
-    from .. import project_logic as p
+    from ..work_projection import next_action_text, task_work_projection
 
     task = store.get("tasks", task_id)
     if not task:
         raise SystemExit(f"task not found: {task_id}")
     status = c.projected_task_status(store, task)
-    verification_run = store.latest_for_task("verification_runs", task_id)
-    unexecuted = c.unexecuted_verifications_for_task(status, verification_run)
+    projection = task_work_projection(store, task_id, current_snapshot=current_git_snapshot_full(Path.cwd()))
     print(f"{field_label('task')}: {task['id']}")
     print(f"{field_label('title')}: {task['title']}")
     print(f"{field_label('status')}: {status_label(status)}")
     print(f"{field_label('next_action')}:")
-    pending_review = p.latest_pending_review_request(store, task_id)
-    if pending_review:
-        print(f"- {human_next_action_text(p.next_action_for_review_request(store, pending_review))}")
-        return
-    for action in p.task_next_actions(task, status, verification_run, unexecuted)[:1]:
-        print(f"- {human_next_action_text(action)}")
+    print(f"- {next_action_text(projection)}")
 
 
 def cmd_facade_status(args: argparse.Namespace) -> None:
@@ -1196,13 +1191,17 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
             if not getattr(args, "verbose", False):
                 print(f"details: nilo status --ai --verbose --project {project_id}")
             return
-        active_task = first_active_task_for_project(store, project_id)
-        if active_task:
+        from ..work_projection import next_action_text, project_work_projection
+
+        projection = project_work_projection(
+            store, project_id, current_snapshot=current_git_snapshot_full(Path.cwd())
+        )
+        if projection.active_task_id:
             if getattr(args, "do", False):
                 print("stopped: active_task_requires_agent_work")
-                print(f"next: nilo work --task {active_task['id']} \"{active_task['title']}\"")
+                print(f"next: nilo work --task {projection.active_task_id} \"<current task>\"")
                 return
-            print_facade_next_for_task(store, active_task["id"])
+            print_facade_next_for_task(store, projection.active_task_id)
             return
         if getattr(args, "do", False):
             todo = first_next_todo_for_project(store, project_id)
@@ -1214,22 +1213,19 @@ def cmd_facade_next(args: argparse.Namespace) -> None:
                 print(f"next: nilo work \"<user request>\" --project {project_id}")
             return
         print(f"{field_label('project')}: {project_id} ({project['name']})")
+        attention = roadmap_attention_summary_for_project(store, project_id)
+        attention_items = [item for item in attention.get("items", []) if item.get("evidence_attention_items")]
+        if attention_items:
+            print("warning: 完了済みロードマップに証跡注意があります。")
+            for item in attention_items:
+                print(f"- {item['title']}")
         print(f"{field_label('next_action')}:")
-        todo = first_next_todo_for_project(store, project_id)
-        if todo:
-            if todo["status"] == "requires_roadmap":
-                print(f"- この依頼は大きめなので、作業計画の確認後に Task 化します。{todo['id']}: {todo['title']}")
-            else:
-                print(f"- 実行できる依頼を具体的な Task にします。{todo['id']}: {todo['title']}")
+        summary = summary_for_project(store, project_id)
+        if projection.diagnostics.get("legacy_next_action"):
+            action = next_action_text(projection)
         else:
-            roadmap_summary = roadmap_attention_summary_for_project(store, project_id)
-            attention_items = [item for item in roadmap_summary.get("items", []) if item.get("evidence_attention_items")]
-            if attention_items:
-                print("- 完了済みロードマップに証跡注意があります。証跡を確認して閉じるか、追加検証を実行するか判断してください。")
-                for item in attention_items[:3]:
-                    print(f"  - {item['title']}: {'、'.join(item['evidence_attention_items'])}")
-            else:
-                print("- 作業中のタスクはありません。次に扱う具体的な作業を人間が決めてください。")
+            action = (summary.get("human_next_actions") or [next_action_text(projection)])[0]
+        print(f"- {action}")
     finally:
         store.close()
 

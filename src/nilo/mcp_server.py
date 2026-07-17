@@ -1020,6 +1020,27 @@ def classify_next_step(summary: dict) -> dict:
             "reason": "active recipe run is the current workflow focus",
             "workflow_context": workflow,
         }
+    projection = summary.get("work_projection") or {}
+    projected_action = projection.get("next_action") or {}
+    if projected_action.get("code"):
+        projected_task_id = projected_action.get("task_id") or ""
+        projected_task = next(
+            (task for task in summary.get("active_tasks", []) if task.get("id") == projected_task_id),
+            {},
+        )
+        return {
+            "action_id": projected_action["code"],
+            "task_id": projected_task_id,
+            "task_type": projected_task.get("task_type", ""),
+            "task_status": projected_task.get("status", projection.get("phase", "")),
+            "command_hint": projection.get("human_next_action")
+            or (projected_action.get("command_hint") or [""])[0],
+            "human_next_action": projection.get("human_next_action")
+            or human_next_action_text(projected_action["code"]),
+            "safe_for_ai": projection.get("phase") not in {"awaiting_human", "blocked"},
+            "requires_explicit_human_intent": projection.get("phase") == "awaiting_human",
+            "reason": "work_projection is the common next-action source",
+        }
     active_tasks = summary["active_tasks"]
     if active_tasks:
         task = active_tasks[0]
@@ -1093,6 +1114,7 @@ def agent_work_context_from_summary(store: Store, summary: dict) -> dict:
         "work_state": summary["work_state"],
         "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
+        "work_projection": summary["work_projection"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
         "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],

@@ -424,6 +424,7 @@ from .project_logic import (
     project_roadmap_position,
     project_summary_data,
     project_tasks_and_statuses,
+    project_tasks_statuses_and_snapshot,
     project_work_state,
     recent_project_history,
     recipe_provenance_summary,

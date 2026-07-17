@@ -153,11 +153,17 @@ class StatusSurfaceRegressionTests(unittest.TestCase):
         self.assertEqual(project_summary["active_tasks"][0]["status"], "completion_needs_review")
         self.assertEqual(project_status["next_actions"], project_summary["next_actions"])
         self.assertEqual(agent_context["next_actions"], project_summary["next_actions"])
+        self.assertEqual(project_status["work_projection"], project_summary["work_projection"])
+        self.assertEqual(agent_context["work_projection"], project_summary["work_projection"])
         self.assertEqual(next_step["roadmap_position"], project_summary["roadmap_position"])
 
         self.assertEqual(agent_context["active_tasks"][0]["id"], "task_surface")
         self.assertTrue(agent_context["active_tasks"][0]["write_context_token"].startswith("task:task_surface:"))
-        self.assertEqual(agent_context["next_step"]["action_id"], "continue_active_task")
+        self.assertEqual(agent_context["next_step"]["action_id"], "continue_work")
+        self.assertEqual(
+            agent_context["next_step"]["action_id"],
+            agent_context["work_projection"]["next_action"]["code"],
+        )
         self.assertEqual(agent_context["next_step"]["task_status"], "completion_needs_review")
         self.assertFalse(agent_context["next_step"]["requires_explicit_human_intent"])
         self.assertTrue(agent_context["next_step"]["safe_for_ai"])

@@ -101,8 +101,8 @@ def cmd_project_summary(args: argparse.Namespace) -> None:
         project = store.get("projects", args.project)
         if not project:
             raise SystemExit(f"project not found: {args.project}")
-        tasks, statuses = c.project_tasks_and_statuses(store, args.project)
-        summary = c.project_summary_data(store, project, tasks, statuses)
+        tasks, statuses, snapshot = c.project_tasks_statuses_and_snapshot(store, args.project)
+        summary = c.project_summary_data(store, project, tasks, statuses, current_snapshot=snapshot)
         if args.format == "json":
             print(json.dumps(summary, ensure_ascii=False, indent=2))
         else:

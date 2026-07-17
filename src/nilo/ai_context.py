@@ -174,6 +174,7 @@ def project_ai_context(
     verbose: bool = False,
 ) -> dict[str, Any]:
     from . import project_logic as p
+    from .work_projection import project_work_projection
 
     cwd = cwd or Path.cwd()
     project = store.get("projects", project_id)
@@ -246,6 +247,14 @@ def project_ai_context(
                 else None
             ),
         },
+        "work_projection": project_work_projection(
+            store,
+            project_id,
+            cwd=cwd,
+            current_snapshot=project_snapshot,
+            tasks=tasks if workflow.get("type") != "recipe_run" else None,
+            statuses=statuses if workflow.get("type") != "recipe_run" else None,
+        ).to_dict(),
     }
     if verbose:
         verbose_context["detail_commands"] = _detail_commands(project_id, current["task"]["id"] if current else None)
@@ -312,8 +321,10 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
         latest_task_status_event_id = current.get("latest_task_status_event_id", "")
         working_tree = "dirty" if current.get("git", {}).get("dirty") else "clean"
 
+    projection = data.get("work_projection") or {}
+    projection_action = projection.get("next_action") or {}
     next_actions = data.get("next_required_actions") or []
-    next_action = next_actions[0] if next_actions else ""
+    next_action = next_actions[0] if next_actions else projection_action.get("code", "")
     roadmap_state = data.get("roadmap_agent_state")
     if not current and roadmap_state and not next_action.startswith("roadmap update pending"):
         next_action = f"roadmap: {roadmap_state['recommended_next_action']}"
@@ -330,6 +341,9 @@ def compact_project_ai_context(data: dict[str, Any]) -> dict[str, Any]:
         "project_id": data["project_id"],
         "project_name": data["project_name"],
         "primary_language": data.get("primary_language", ""),
+        "work_projection": data.get("work_projection", {}),
+        "current_phase": projection.get("phase", ""),
+        "next_action_code": projection_action.get("code", ""),
         "active_task": active_task,
         "active_roadmap": roadmap_state,
         "next_action": next_action,

@@ -1575,10 +1575,29 @@ def review_worker_recovery_action(reviewer: str, review_id: str, availability: s
     )
 
 
-def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict], dict[str, str]]:
+def project_tasks_and_statuses(
+    store: Store,
+    project_id: str,
+    *,
+    current_snapshot: dict | None = None,
+) -> tuple[list[dict], dict[str, str]]:
+    tasks, statuses, _snapshot = project_tasks_statuses_and_snapshot(
+        store,
+        project_id,
+        current_snapshot=current_snapshot,
+    )
+    return tasks, statuses
+
+
+def project_tasks_statuses_and_snapshot(
+    store: Store,
+    project_id: str,
+    *,
+    current_snapshot: dict | None = None,
+) -> tuple[list[dict], dict[str, str], dict]:
     refresh_review_dispatch_state(store, project_id)
     tasks = project_tasks_in_work_order(store, project_id)
-    current_snapshot = current_git_snapshot(Path.cwd())
+    current_snapshot = current_snapshot or current_git_snapshot(Path.cwd())
     latest_events = latest_task_status_events_for_project(store, project_id)
     statuses = {
         task["id"]: projected_task_status(
@@ -1589,7 +1608,7 @@ def project_tasks_and_statuses(store: Store, project_id: str) -> tuple[list[dict
         )
         for task in tasks
     }
-    return tasks, statuses
+    return tasks, statuses, current_snapshot
 
 
 def latest_task_status_events_for_project(store: Store, project_id: str) -> dict[str, dict]:
@@ -1907,10 +1926,56 @@ def project_design_residue(cwd: Path | None = None) -> list[dict]:
     return parse_design_residue(root / "docs" / "design.md")
 
 
-def project_summary_data(store: Store, project: dict, tasks: list[dict], statuses: dict[str, str]) -> dict:
+def roadmap_attention_summary(
+    store: Store,
+    project_id: str,
+    *,
+    tasks: list[dict] | None = None,
+    statuses: dict[str, str] | None = None,
+) -> dict:
+    if tasks is None or statuses is None:
+        tasks, statuses = fast_project_tasks_and_recorded_statuses(store, project_id)
+    commitments = accepted_roadmap_commitments(store, project_id)
+    related_by_commitment = [(item, related_tasks_for_commitment(tasks, item)) for item in commitments]
+    task_ids = sorted({task["id"] for _, related in related_by_commitment for task in related})
+    latest_reports = latest_rows_for_tasks(store, "agent_reports", task_ids)
+    latest_verifications = latest_rows_for_tasks(store, "verification_runs", task_ids)
+    items = []
+    for commitment, related in related_by_commitment:
+        if not related or any(not is_task_completed_status(statuses[task["id"]]) for task in related):
+            continue
+        if not any(
+            diff_aware_verification_summary(latest_reports.get(task["id"]), latest_verifications.get(task["id"]))["status"]
+            == "needs_human_review"
+            for task in related
+        ):
+            continue
+        items.append({
+            "title": commitment["title"],
+            "implementation_task_label": "すべて完了",
+            "work_task_label": "すべて完了",
+            "evidence_attention_items": ["変更ファイルとテストの対応が人間確認待ちです"],
+        })
+    return {"items": items}
+
+
+def project_summary_data(
+    store: Store,
+    project: dict,
+    tasks: list[dict],
+    statuses: dict[str, str],
+    *,
+    current_snapshot: dict | None = None,
+) -> dict:
     from .project_status import project_status_from_inputs
 
-    return project_status_from_inputs(store, project, tasks, statuses)
+    return project_status_from_inputs(
+        store,
+        project,
+        tasks,
+        statuses,
+        current_snapshot=current_snapshot,
+    )
 
 
 def handson_language() -> str:
@@ -2145,7 +2210,7 @@ def write_handson_markdown(store: Store, project_id: str, output: Path) -> None:
     project = store.get("projects", project_id)
     if not project:
         raise SystemExit(f"project not found: {project_id}")
-    tasks, statuses = project_tasks_and_statuses(store, project_id)
-    summary = project_summary_data(store, project, tasks, statuses)
+    tasks, statuses, snapshot = project_tasks_statuses_and_snapshot(store, project_id)
+    summary = project_summary_data(store, project, tasks, statuses, current_snapshot=snapshot)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render_handson_markdown(summary), encoding="utf-8")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from .human_status import human_next_action_text, human_task_status
 from .store import Store
 
@@ -10,21 +12,37 @@ class ProjectNotFoundError(ValueError):
 
 def build_project_status(store: Store, project_id: str) -> dict:
     from . import project_logic as p
+    from .snapshot import current_git_snapshot
 
     project = store.get("projects", project_id)
     if not project:
         raise ProjectNotFoundError(f"project not found: {project_id}")
-    tasks, statuses = p.project_tasks_and_statuses(store, project_id)
-    return project_status_from_inputs(store, project, tasks, statuses)
+    snapshot = current_git_snapshot(Path.cwd())
+    tasks, statuses = p.project_tasks_and_statuses(store, project_id, current_snapshot=snapshot)
+    return project_status_from_inputs(store, project, tasks, statuses, current_snapshot=snapshot)
 
 
-def project_status_from_inputs(store: Store, project: dict, tasks: list[dict], statuses: dict[str, str]) -> dict:
+def project_status_from_inputs(
+    store: Store,
+    project: dict,
+    tasks: list[dict],
+    statuses: dict[str, str],
+    *,
+    current_snapshot: dict | None = None,
+) -> dict:
     from . import project_logic as p
     from . import verification_summary as verification_render
     from .workflow_context import workflow_context as build_workflow_context
+    from .work_projection import next_action_text, project_work_projection
 
     project_id = project["id"]
-    active_tasks, commitments = p.roadmap_prioritized_project_active_tasks(store, project_id, tasks, statuses)
+    active_tasks, commitments = p.roadmap_prioritized_project_active_tasks(
+        store,
+        project_id,
+        tasks,
+        statuses,
+        current_snapshot=current_snapshot,
+    )
     active_summaries = []
     unexecuted = []
     design_residue = p.project_design_residue()
@@ -60,7 +78,14 @@ def project_status_from_inputs(store: Store, project: dict, tasks: list[dict], s
         )
         for item in p.unexecuted_verifications_for_task(status, verification_run):
             unexecuted.append({"task_id": task["id"], "issue": item})
-    agent_state = p.roadmap_agent_state(store, project_id, tasks, statuses)
+    agent_state = p.roadmap_agent_state(
+        store,
+        project_id,
+        tasks,
+        statuses,
+        commitments=commitments,
+        current_snapshot=current_snapshot,
+    )
     workflow = build_workflow_context(store, project_id)
     base_next_actions = p.project_level_next_actions(
         store,
@@ -85,6 +110,16 @@ def project_status_from_inputs(store: Store, project: dict, tasks: list[dict], s
             next_actions = [f"continue active {workflow.get('recipe_name')} recipe step: {workflow.get('next_step')}"]
     elif not active_tasks:
         next_actions = p.no_active_task_next_actions(store, project_id, base_next_actions)
+    projection = project_work_projection(
+        store,
+        project_id,
+        current_snapshot=current_snapshot,
+        tasks=tasks,
+        statuses=statuses,
+    )
+    projection_action = [] if projection.next_action.code == "none" else [next_action_text(projection)]
+    if workflow.get("type") != "recipe_run":
+        next_actions = next_actions[:1] if next_actions else projection_action
     return {
         "project_id": project_id,
         "project_name": project["name"],
@@ -98,6 +133,7 @@ def project_status_from_inputs(store: Store, project: dict, tasks: list[dict], s
         "roadmap_agent_next_actions": p.roadmap_agent_next_actions(store, project_id, agent_state),
         "work_state": p.project_work_state(tasks, statuses),
         "current_phase": p.project_current_phase(tasks, statuses),
+        "work_projection": projection.to_dict(),
         "next_actions": next_actions,
         "human_next_actions": [human_next_action_text(action) for action in next_actions],
         "todo_status_counts": p.todo_status_counts(store, project_id),
@@ -119,6 +155,7 @@ def project_status_view(summary: dict, project_boundary: dict) -> dict:
         "work_state": summary["work_state"],
         "human_work_state": summary["work_state"],
         "current_phase": summary["current_phase"],
+        "work_projection": summary["work_projection"],
         "roadmap_agent_state": summary["roadmap_agent_state"],
         "workflow_context": summary.get("workflow_context", {"type": "project", "status": "no_active_recipe"}),
         "roadmap_agent_next_actions": summary["roadmap_agent_next_actions"],

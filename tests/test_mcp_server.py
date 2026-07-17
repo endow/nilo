@@ -15,7 +15,7 @@ from unittest.mock import patch
 from nilo.ai_context import render_ai_context_text
 from nilo.cli import main
 from nilo.mcp_identity import identity_matches_expected, mcp_identity
-from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, handle_request, project_summary
+from nilo.mcp_server import HEADROOM_TOOL_METADATA, McpToolError, call_tool, classify_next_step, handle_request, project_summary
 from nilo.review_dispatcher import find_executable
 from nilo.store import JSON_COLUMNS, Store
 from nilo.timeutil import now_iso
@@ -23,6 +23,27 @@ from nilo.workspace_resolver import resolve_workspace_context
 
 
 class McpServerTests(unittest.TestCase):
+    def test_active_recipe_precedes_work_projection(self) -> None:
+        summary = {
+            "workflow_context": {
+                "type": "recipe_run",
+                "status": "waiting_public_approval",
+                "task_id": "task_release",
+            },
+            "work_projection": {
+                "phase": "working",
+                "next_action": {"code": "continue_work", "task_id": "task_other"},
+            },
+            "next_actions": ["approve public release operation"],
+        }
+
+        step = classify_next_step(summary)
+
+        self.assertEqual(step["action_id"], "await_public_operation_confirmation")
+        self.assertFalse(step["safe_for_ai"])
+        self.assertTrue(step["requires_explicit_human_intent"])
+        self.assertEqual(step["task_id"], "task_release")
+
     def init_git_repo(self, root: Path) -> None:
         root.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init"], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
@@ -956,7 +977,11 @@ class McpServerTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
         self.assertEqual(result["project_id"], "project_test")
-        self.assertEqual(result["next_step"]["action_id"], "continue_active_task")
+        self.assertEqual(result["next_step"]["action_id"], "start_task")
+        self.assertEqual(
+            result["next_step"]["action_id"],
+            result["work_projection"]["next_action"]["code"],
+        )
         self.assertTrue(result["next_step"]["safe_for_ai"])
         self.assertFalse(result["next_step"]["requires_explicit_human_intent"])
         self.assertEqual(len(result["active_tasks"]), 1)

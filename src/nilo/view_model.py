@@ -32,6 +32,12 @@ def overview(db_path: Path | None, project_id: str) -> dict[str, Any]:
         ]
         open_blocking_task_ids = {finding["task_id"] for finding in open_blocking}
         analytics_data = project_task_analytics(store, project_id)
+        from .project_boundary import resolve_project_boundary
+        from .work_projection import next_action_text, project_work_projection
+
+        boundary = resolve_project_boundary(db_path=store.path)
+        projection_root = store.path.parent.parent if store.path.parent.name == ".nilo" else boundary.project_root
+        projection = project_work_projection(store, project_id, cwd=projection_root)
         return {
             "project": _project_payload(project, store.path),
             "summary": {
@@ -42,7 +48,8 @@ def overview(db_path: Path | None, project_id: str) -> dict[str, Any]:
                 "open_blocking_findings": len(open_blocking_task_ids),
             },
             "active_task": _compact_task_row(store, open_tasks[0]) if len(open_tasks) == 1 else None,
-            "next_action": _next_action(open_tasks),
+            "next_action": next_action_text(projection),
+            "work_projection": projection.to_dict(),
             "latest_verification": _latest_for_project(store, "verification_runs", task_ids),
             "latest_review": _latest_for_project(store, "review_results", task_ids),
             "analytics_summary": analytics_data.get("summary", {}),
